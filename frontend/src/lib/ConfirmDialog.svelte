@@ -105,7 +105,7 @@
     align-items: center;
     justify-content: center;
     padding: var(--s-2);
-    background: rgba(6, 7, 15, 0.66);
+    background: rgba(0, 0, 0, 0.4);
     -webkit-backdrop-filter: blur(4px);
     backdrop-filter: blur(4px);
     --wails-draggable: no-drag;
@@ -114,10 +114,10 @@
     width: 100%;
     max-width: 26rem;
     padding: var(--s-3);
-    background: rgba(16, 20, 33, 0.96);
-    border: 1px solid var(--glass-border);
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    box-shadow: var(--shadow-pop);
   }
   .title {
     margin: 0 0 0.5rem;
@@ -130,6 +130,8 @@
     color: var(--muted);
     font-size: 0.95rem;
     line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   .actions {
     display: flex;

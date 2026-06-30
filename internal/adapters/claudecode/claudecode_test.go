@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 func newAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
@@ -52,7 +52,7 @@ func envOf(t *testing.T, m map[string]any) map[string]any {
 
 func TestIDAndName(t *testing.T) {
 	a, _ := newAdapter(t)
-	if a.ID() != "claude-code" || a.Name() != "Claude Code" {
+	if a.ID() != "claude-code" || a.Name() != "Claude Code (CLI + IDE)" {
 		t.Fatalf("unexpected id/name: %q %q", a.ID(), a.Name())
 	}
 	if got := a.ConfigPaths(); len(got) != 1 {
@@ -83,8 +83,8 @@ func TestStatusTransitions(t *testing.T) {
 	if _, err := a.Apply(p); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintConfig {
-		t.Fatalf("want AppliedByMintConfig, got %v", st)
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want AppliedByMintSwitch, got %v", st)
 	}
 	p2 := p
 	p2.Model = "other-model"
@@ -234,8 +234,8 @@ func TestApplyIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if st != core.StatusAppliedByMintConfig {
-		t.Fatalf("want AppliedByMintConfig after re-apply, got %v", st)
+	if st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want AppliedByMintSwitch after re-apply, got %v", st)
 	}
 	env := envOf(t, readSettings(t, a.settingsPath()))
 	if env[envBaseURL] != p.BaseURL || env[envModel] != p.Model {

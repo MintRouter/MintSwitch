@@ -1,4 +1,4 @@
-// Package claudecode implements the MintConfig tool adapter for Claude Code.
+// Package claudecode implements the MintSwitch tool adapter for Claude Code.
 //
 // Claude Code (both the CLI and the VS Code extension, which share config) reads
 // environment overrides from the top-level "env" object of ~/.claude/settings.json.
@@ -17,14 +17,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 const (
 	id   = "claude-code"
-	name = "Claude Code"
+	name = "Claude Code (CLI + IDE)"
 
 	envKey            = "env"
 	envBaseURL        = "ANTHROPIC_BASE_URL"
@@ -33,7 +33,7 @@ const (
 	envSmallFastModel = "ANTHROPIC_SMALL_FAST_MODEL"
 )
 
-// Adapter applies/restores a MintConfig profile for Claude Code via its
+// Adapter applies/restores a MintSwitch profile for Claude Code via its
 // ~/.claude/settings.json file. Construct it with [New].
 type Adapter struct {
 	r *paths.Resolver
@@ -89,26 +89,39 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
-		return core.StatusAppliedByMintConfig, core.StatusAppliedByMintConfig.Detail(), nil
+		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 	}
 	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 }
 
-// Apply backs up settings.json, then idempotently injects the profile's endpoint
-// into the top-level "env" object and writes the MintConfig managed marker,
-// preserving all other keys.
+// Apply backs up settings.json (only when it is not already MintSwitch-managed),
+// then idempotently injects the profile's endpoint into the top-level "env"
+// object and writes the MintSwitch managed marker, preserving all other keys.
+//
+// The backup is created only on the first Apply over a pristine/unmanaged (or
+// absent) file, so the pristine pre-MintSwitch snapshot is what Restore reverts
+// to even after repeated Applies. Backing up an already-managed file would
+// snapshot a managed state (prior profile's token + marker) and hide the
+// pristine original. Limitation: if the file is already managed but no backup
+// exists (e.g. the backups dir was deleted, or a marker was left by an older
+// version), no new backup is taken and Restore is a no-op — we cannot safely
+// snapshot a managed file, and without the original we cannot distinguish our
+// injected keys from the user's own to strip them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
 	}
 	path := a.settingsPath()
-	backupPath, err := a.e.Backup(path)
-	if err != nil {
-		return core.ApplyResult{}, err
-	}
 	m, err := readJSON(path)
 	if err != nil {
 		return core.ApplyResult{}, err
+	}
+	var backupPath string
+	if marker, ok := extractMarker(m); !ok || !marker.Managed {
+		backupPath, err = a.e.Backup(path)
+		if err != nil {
+			return core.ApplyResult{}, err
+		}
 	}
 
 	env := asObject(m[envKey])
@@ -129,7 +142,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	return core.ApplyResult{
 		ChangedPath: path,
 		BackupPath:  backupPath,
-		Message:     "Applied MintConfig endpoint to Claude Code settings.json.",
+		Message:     "Applied MintSwitch endpoint to Claude Code settings.json.",
 	}, nil
 }
 
@@ -194,7 +207,7 @@ func asObject(v any) map[string]any {
 	return map[string]any{}
 }
 
-// extractMarker pulls the MintConfig marker out of a parsed settings object.
+// extractMarker pulls the MintSwitch marker out of a parsed settings object.
 func extractMarker(m map[string]any) (core.Marker, bool) {
 	raw, ok := m[core.MarkerKey]
 	if !ok {
