@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { ProfileView } from "../../bindings/mintconfig/internal/service";
-  import type { Profile } from "../../bindings/mintconfig/internal/core";
+  import type { ProfileView } from "../../bindings/mintswitch/internal/service";
+  import type { Profile } from "../../bindings/mintswitch/internal/core";
   import { isHttpUrl } from "./ui";
 
   interface Props {
@@ -121,7 +121,7 @@
 </form>
 
 <style>
-  .profile { display: flex; flex-direction: column; gap: var(--s-2); }
+  .profile { display: flex; flex-direction: column; gap: var(--s-1); }
   .card-head { margin-bottom: 0.25rem; }
   .opt { color: var(--muted); font-weight: 400; }
   .profile-actions { display: flex; justify-content: flex-end; margin-top: 0.25rem; }
