@@ -6,7 +6,7 @@ export {
     Service
 };
 
-export {
+export type {
     InstallResult,
     ProfileView,
     ToolOpResult,

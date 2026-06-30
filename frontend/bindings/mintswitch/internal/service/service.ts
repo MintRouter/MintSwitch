@@ -8,7 +8,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -27,9 +27,7 @@ import * as $models from "./models.js";
  * logged. It requires a Service built with NewWithDeps (real resolver/engine).
  */
 export function AddCustomTool(name: string, configPath: string, binaryName: string, template: string): $CancellablePromise<$models.ToolView> {
-    return $Call.ByID(1299394314, name, configPath, binaryName, template).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(1299394314, name, configPath, binaryName, template);
 }
 
 /**
@@ -38,10 +36,8 @@ export function AddCustomTool(name: string, configPath: string, binaryName: stri
  * (returning an error, no partial results) when no valid profile is saved.
  * Individual adapter failures are captured per tool and do not abort the run.
  */
-export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[]> {
-    return $Call.ByID(3266725423).then(($result: any) => {
-        return $$createType2($result);
-    });
+export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[] | null> {
+    return $Call.ByID(3266725423);
 }
 
 /**
@@ -50,9 +46,7 @@ export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[]> {
  * or an invalid/missing profile.
  */
 export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult> {
-    return $Call.ByID(1465759944, toolID).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(1465759944, toolID);
 }
 
 /**
@@ -60,9 +54,7 @@ export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult
  * profile is saved it returns a zero ProfileView (HasKey=false) and no error.
  */
 export function GetProfile(): $CancellablePromise<$models.ProfileView> {
-    return $Call.ByID(1851804553).then(($result: any) => {
-        return $$createType4($result);
-    });
+    return $Call.ByID(1851804553);
 }
 
 /**
@@ -72,9 +64,7 @@ export function GetProfile(): $CancellablePromise<$models.ProfileView> {
  * (not an error) with a clear, user-facing message so the UI can show it.
  */
 export function Install(toolID: string): $CancellablePromise<$models.InstallResult> {
-    return $Call.ByID(941254115, toolID).then(($result: any) => {
-        return $$createType5($result);
-    });
+    return $Call.ByID(941254115, toolID);
 }
 
 /**
@@ -83,10 +73,8 @@ export function Install(toolID: string): $CancellablePromise<$models.InstallResu
  * when none is saved). A per-tool Status error is surfaced in Detail rather than
  * failing the whole list.
  */
-export function ListTools(): $CancellablePromise<$models.ToolView[]> {
-    return $Call.ByID(3280393555).then(($result: any) => {
-        return $$createType6($result);
-    });
+export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
+    return $Call.ByID(3280393555);
 }
 
 /**
@@ -102,10 +90,8 @@ export function RemoveCustomTool(id: string): $CancellablePromise<void> {
  * per-tool outcome. It needs no profile; individual adapter failures are
  * captured per tool and do not abort the run.
  */
-export function RestoreAll(): $CancellablePromise<$models.ToolOpResult[]> {
-    return $Call.ByID(748026073).then(($result: any) => {
-        return $$createType2($result);
-    });
+export function RestoreAll(): $CancellablePromise<$models.ToolOpResult[] | null> {
+    return $Call.ByID(748026073);
 }
 
 /**
@@ -114,9 +100,7 @@ export function RestoreAll(): $CancellablePromise<$models.ToolOpResult[]> {
  * is a safe no-op handled by the adapter.
  */
 export function RestoreOne(toolID: string): $CancellablePromise<core$0.RestoreResult> {
-    return $Call.ByID(2514822234, toolID).then(($result: any) => {
-        return $$createType7($result);
-    });
+    return $Call.ByID(2514822234, toolID);
 }
 
 /**
@@ -137,17 +121,5 @@ export function SaveProfile(p: core$0.Profile): $CancellablePromise<void> {
  * non-OK result carrying a clear, user-facing message instead of throwing.
  */
 export function Uninstall(toolID: string): $CancellablePromise<$models.InstallResult> {
-    return $Call.ByID(3584833602, toolID).then(($result: any) => {
-        return $$createType5($result);
-    });
+    return $Call.ByID(3584833602, toolID);
 }
-
-// Private type creation functions
-const $$createType0 = $models.ToolView.createFrom;
-const $$createType1 = $models.ToolOpResult.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = core$0.ApplyResult.createFrom;
-const $$createType4 = $models.ProfileView.createFrom;
-const $$createType5 = $models.InstallResult.createFrom;
-const $$createType6 = $Create.Array($$createType0);
-const $$createType7 = core$0.RestoreResult.createFrom;
