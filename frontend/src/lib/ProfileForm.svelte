@@ -57,7 +57,8 @@
 
   // Remove a saved model. If it was the active one, fall back to the model that
   // took its slot, then the previous, then the first — clearing only when the
-  // list becomes empty. A removed small/fast model resets to "None".
+  // list becomes empty. A small/fast model removed from the list is intentionally
+  // kept selected (it stays a visible option via `smallFastOptions`).
   function removeModel(m: string): void {
     const idx = models.indexOf(m);
     if (idx === -1) return;
@@ -66,10 +67,17 @@
     if (model === m) {
       model = next[idx] ?? next[idx - 1] ?? next[0] ?? "";
     }
-    if (smallFastModel === m) {
-      smallFastModel = "";
-    }
   }
+
+  // Options for the small/fast dropdown. Always include the currently-saved value
+  // even when it isn't in the models list (e.g. a migrated free-text value or a
+  // model that was just removed) so it stays selectable and visible. Order is
+  // preserved: models first, then the orphan value. "None" is rendered separately.
+  const smallFastOptions = $derived(
+    smallFastModel && !models.includes(smallFastModel)
+      ? [...models, smallFastModel]
+      : models,
+  );
 
   function validate(): boolean {
     const next: Record<string, string> = {};
@@ -173,7 +181,7 @@
     <label class="field-label" for="pf-small">Small / fast model <span class="opt">(optional)</span></label>
     <select class="field-input field-select" id="pf-small" bind:value={smallFastModel}>
       <option value="">None</option>
-      {#each models as m (m)}
+      {#each smallFastOptions as m (m)}
         <option value={m}>{m}</option>
       {/each}
     </select>
