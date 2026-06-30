@@ -121,7 +121,7 @@
 </form>
 
 <style>
-  .profile { display: flex; flex-direction: column; gap: var(--s-1); }
+  .profile { display: flex; flex-direction: column; gap: var(--s-2); }
   .card-head { margin-bottom: 0.25rem; }
   .opt { color: var(--muted); font-weight: 400; }
   .profile-actions { display: flex; justify-content: flex-end; margin-top: 0.25rem; }
