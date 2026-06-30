@@ -11,8 +11,9 @@
     onInstall: (id: string) => void;
     onUninstall: (id: string) => void;
     onRemove: (id: string) => void;
+    onModelChange: (toolID: string, model: string) => void;
   }
-  let { tool, hasSavedProfile, busy, onApply, onRestore, onInstall, onUninstall, onRemove }: Props = $props();
+  let { tool, hasSavedProfile, busy, onApply, onRestore, onInstall, onUninstall, onRemove, onModelChange }: Props = $props();
 
   // Provider logos are self-contained app-icon SVGs under /logos/<id>.svg. If a
   // tool has no asset (custom providers) or it fails to load we fall back to a
@@ -41,6 +42,15 @@
     tool.installed && tool.status !== "default" && tool.status !== "not_installed" && !busy,
   );
   const paths = $derived(tool.config_paths ?? []);
+
+  // Per-tool model picker. The list comes from the active profile (via the
+  // backend ToolView). selectedModel is the effective model; if it isn't a
+  // member of the current list (e.g. the profile changed) we fall back to the
+  // empty "Use profile default" option so the control never shows a stale value.
+  const models = $derived(tool.models ?? []);
+  const selectedModel = $derived(
+    tool.selected_model && models.includes(tool.selected_model) ? tool.selected_model : "",
+  );
 </script>
 
 <article class="card tool" class:is-uninstalled={!tool.installed}
@@ -85,6 +95,19 @@
         {/each}
       </ul>
     {/if}
+  {/if}
+
+  {#if tool.installed && models.length >= 1}
+    <div class="tool-model">
+      <label class="tool-model-label" for={`model-${tool.id}`}>Model</label>
+      <select class="tool-model-select" id={`model-${tool.id}`} value={selectedModel}
+        onchange={(e) => onModelChange(tool.id, e.currentTarget.value)}>
+        <option value="">Use profile default</option>
+        {#each models as m (m)}
+          <option value={m}>{m}</option>
+        {/each}
+      </select>
+    </div>
   {/if}
 
   <div class="tool-actions">
@@ -165,6 +188,27 @@
     line-height: 1.3;
     overflow-wrap: anywhere;
   }
+  .tool-model { display: flex; flex-direction: column; gap: 0.25rem; }
+  .tool-model-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .tool-model-select {
+    width: 100%;
+    padding: 0.4rem 0.55rem;
+    font-size: 0.84rem;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    outline: none;
+    cursor: pointer;
+  }
+  .tool-model-select:hover { border-color: var(--muted); }
+  .tool-model-select:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
   .badge.install { flex: 0 0 auto; align-self: flex-start; }
   .status { align-self: flex-start; }
   .paths {

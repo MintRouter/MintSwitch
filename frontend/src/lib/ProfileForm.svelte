@@ -15,6 +15,7 @@
   let apiKey = $state("");
   let models = $state<string[]>([]);
   let model = $state("");
+  let newModel = $state("");
   let errors = $state<Record<string, string>>({});
 
   // Seed the editable fields from the saved (non-secret) profile. Re-runs only
@@ -30,13 +31,43 @@
     apiKey = "";
   });
 
+  // Add the typed model to the list (trimmed, deduped). The first model added
+  // becomes the default automatically so a valid default is always present.
+  function addModel(): void {
+    const m = newModel.trim();
+    if (!m) return;
+    if (!models.includes(m)) {
+      models = [...models, m];
+      if (!model) model = m;
+    }
+    newModel = "";
+  }
+
+  function onModelKeydown(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addModel();
+    }
+  }
+
+  // Remove a model; if it was the default, fall back to the first remaining
+  // model (or clear the default when none are left) so it's never orphaned.
+  function removeModel(m: string): void {
+    models = models.filter((x) => x !== m);
+    if (model === m) {
+      model = models[0] ?? "";
+    }
+  }
+
   function validate(): boolean {
     const next: Record<string, string> = {};
     if (!isHttpUrl(baseUrl)) {
       next.baseUrl = "Enter a valid http(s) URL.";
     }
-    if (!model.trim()) {
-      next.model = "Model is required.";
+    if (models.length === 0) {
+      next.models = "Add at least one model.";
+    } else if (!model.trim() || !models.includes(model)) {
+      next.model = "Choose a default model.";
     }
     if (!profile.has_key && !apiKey.trim()) {
       next.apiKey = "An API key is required to save a new profile.";
@@ -48,16 +79,12 @@
   async function submit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     if (saving || !validate()) return;
-    // Merge the chosen model into the saved list (deduped) so it's suggested
-    // again next time the profile is opened.
-    const m = model.trim();
-    const mergedModels = m && !models.includes(m) ? [...models, m] : models;
     const payload: Profile = {
       label: label.trim(),
       api_key: apiKey,
       base_url: normalizedBase.url,
-      models: mergedModels,
-      model: m,
+      models: models,
+      model: model,
       // The Small / fast model field was removed from the UI; always send "" so
       // the Profile/binding shape stays unchanged (equivalent to the old "None").
       small_fast_model: "",
@@ -117,17 +144,38 @@
   </div>
 
   <div class="field">
-    <label class="field-label" for="pf-model">Model</label>
-    <input class="field-input" id="pf-model" type="text" bind:value={model}
-      placeholder="gpt-5.5" autocomplete="off" spellcheck="false" list="pf-model-options"
-      aria-invalid={!!errors.model}
-      aria-describedby={errors.model ? "err-model" : undefined} />
-    <datalist id="pf-model-options">
-      {#each models as m (m)}
-        <option value={m}></option>
-      {/each}
-    </datalist>
-    {#if errors.model}<p class="field-error" id="err-model">{errors.model}</p>{/if}
+    <label class="field-label" for="pf-model-add">Models</label>
+    <div class="model-add">
+      <input class="field-input" id="pf-model-add" type="text" bind:value={newModel}
+        placeholder="gpt-5.5" autocomplete="off" spellcheck="false"
+        onkeydown={onModelKeydown}
+        aria-invalid={!!errors.models}
+        aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : "hint-model"} />
+      <button class="btn-ghost sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
+    </div>
+    {#if models.length}
+      <ul class="model-list" aria-label="Models">
+        {#each models as m (m)}
+          <li class="model-chip" class:selected={m === model}>
+            <label class="model-default">
+              <input type="radio" name="pf-default-model" value={m}
+                checked={m === model} onchange={() => (model = m)} />
+              <span class="model-name">{m}</span>
+              {#if m === model}<span class="model-tag">default</span>{/if}
+            </label>
+            <button class="model-remove" type="button" onclick={() => removeModel(m)}
+              aria-label={`Remove ${m}`} title={`Remove ${m}`}>×</button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    {#if errors.models}
+      <p class="field-error" id="err-models">{errors.models}</p>
+    {:else if errors.model}
+      <p class="field-error" id="err-model">{errors.model}</p>
+    {:else}
+      <p class="field-hint" id="hint-model">Add the models you use, then pick one as the default.</p>
+    {/if}
   </div>
 
   <div class="profile-actions">
@@ -151,4 +199,62 @@
     border: 1px solid var(--border);
     word-break: break-all;
   }
+
+  .model-add { display: flex; gap: 0.4rem; align-items: stretch; }
+  .model-add .field-input { flex: 1 1 auto; }
+  .model-add .btn-ghost { flex: 0 0 auto; }
+  .model-list {
+    margin: 0.1rem 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .model-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.35rem 0.3rem 0.5rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+  .model-chip.selected { border-color: var(--accent); box-shadow: var(--focus); }
+  .model-default {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    cursor: pointer;
+    font-size: 0.86rem;
+    color: var(--text);
+  }
+  .model-default input { flex: 0 0 auto; accent-color: var(--accent); }
+  .model-name { overflow-wrap: anywhere; }
+  .model-tag {
+    flex: 0 0 auto;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .model-remove {
+    flex: 0 0 auto;
+    width: 1.4rem;
+    height: 1.4rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 1.05rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .model-remove:hover { color: var(--danger); background: var(--surface); }
 </style>

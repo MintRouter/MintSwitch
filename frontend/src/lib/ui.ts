@@ -111,16 +111,23 @@ export function isHttpUrl(v: string): boolean {
  * Mirrors the host classes in the backend core.NormalizeBaseURL.
  */
 function isLocalHostname(h: string): boolean {
-  if (h === "localhost") return true;
-  if (h.endsWith(".local") || h.endsWith(".localhost")) return true;
-  if (h === "[::1]" || h === "::1") return true;
-  if (h.startsWith("127.")) return true;
-  if (h.startsWith("10.") || h.startsWith("192.168.")) return true;
-  if (h.startsWith("169.254.")) return true;
-  if (h.startsWith("172.")) {
-    const second = Number(h.split(".")[1]);
+  // Strip brackets from IPv6 literals ([fe80::1] -> fe80::1) before matching.
+  const host = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (host === "localhost") return true;
+  if (host.endsWith(".local") || host.endsWith(".localhost")) return true;
+  if (host === "::1") return true;
+  if (host.startsWith("127.")) return true;
+  if (host.startsWith("10.") || host.startsWith("192.168.")) return true;
+  if (host.startsWith("169.254.")) return true;
+  if (host.startsWith("172.")) {
+    const second = Number(host.split(".")[1]);
     if (Number.isInteger(second) && second >= 16 && second <= 31) return true;
   }
+  // IPv6 link-local (fe80::/10) and unique-local (fc00::/7 = fc/fd) keep http,
+  // matching the Go backend's net.IP IsLinkLocalUnicast / IsPrivate checks.
+  const lower = host.toLowerCase();
+  if (lower.startsWith("fe80")) return true;
+  if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
   return false;
 }
 

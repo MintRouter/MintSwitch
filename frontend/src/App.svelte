@@ -266,6 +266,19 @@
     });
   }
 
+  // Persist a per-tool model selection then refresh so the tool's badge and
+  // selected_model reflect the change. An empty model clears the override (the
+  // tool falls back to the profile default). Always refresh — on failure it
+  // re-syncs the dropdown to the actually persisted value.
+  async function changeToolModel(id: string, model: string): Promise<void> {
+    try {
+      await Service.SetToolModel(id, model);
+    } catch (e) {
+      flash(errMsg(e), "error");
+    }
+    await refresh();
+  }
+
   function openAddProvider(): void {
     addError = "";
     addOpen = true;
@@ -396,7 +409,8 @@
             {#each tools as t (t.id)}
               <ToolCard tool={t} {hasSavedProfile} busy={busyIds.includes(t.id)}
                 onApply={applyOne} onRestore={restoreOne}
-                onInstall={installOne} onUninstall={uninstallOne} onRemove={removeProvider} />
+                onInstall={installOne} onUninstall={uninstallOne} onRemove={removeProvider}
+                onModelChange={changeToolModel} />
             {/each}
           </div>
         {/if}
