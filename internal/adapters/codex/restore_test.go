@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mintconfig/internal/core"
+	"mintswitch/internal/core"
 )
 
 func TestRestoreRevertsExistingFiles(t *testing.T) {
@@ -94,7 +94,7 @@ func TestApplyIdempotent(t *testing.T) {
 	if cfg["openai_base_url"] != p.BaseURL || cfg["model"] != p.Model {
 		t.Fatalf("re-apply changed managed values: %+v", cfg)
 	}
-	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintConfig {
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
 		t.Fatalf("want Applied after re-apply, got %v", st)
 	}
 	// Marker timestamp may differ; ensure no key duplication/explosion.
