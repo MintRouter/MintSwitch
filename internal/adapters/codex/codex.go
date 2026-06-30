@@ -3,7 +3,7 @@
 //
 // Codex stores user configuration in ~/.codex/config.toml (TOML) and file-based
 // credentials in ~/.codex/auth.json (JSON). To point the built-in "openai"
-// provider at an OpenAI-compatible proxy/router, MintConfig sets the top-level
+// provider at an OpenAI-compatible proxy/router, MintSwitch sets the top-level
 // openai_base_url and model keys in config.toml (leaving model_provider at its
 // default "openai") and writes the API key to auth.json as OPENAI_API_KEY.
 // See https://developers.openai.com/codex/config-advanced and
@@ -13,15 +13,15 @@ package codex
 import (
 	"os"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 // authKeyName is the JSON key Codex reads the API key from in auth.json.
 const authKeyName = "OPENAI_API_KEY"
 
-// Adapter applies/restores a MintConfig profile to the Codex configuration.
+// Adapter applies/restores a MintSwitch profile to the Codex configuration.
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
@@ -76,31 +76,48 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if fp == core.Fingerprint(p) {
-		return core.StatusAppliedByMintConfig, core.StatusAppliedByMintConfig.Detail(), nil
+		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 	}
 	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 }
 
-// Apply backs up both files, then injects openai_base_url + model and the
-// managed marker into config.toml and OPENAI_API_KEY into auth.json, preserving
-// all other existing keys in each file.
+// Apply backs up both files (only when config.toml is not already
+// MintSwitch-managed), then injects openai_base_url + model and the managed
+// marker into config.toml and OPENAI_API_KEY into auth.json, preserving all
+// other existing keys in each file.
+//
+// The backups are created only on the first Apply over a pristine/unmanaged (or
+// absent) config, so the pristine pre-MintSwitch snapshots are what Restore
+// reverts to even after repeated Applies. config.toml's marker is the single
+// source of truth for "managed": auth.json carries no marker but is gated by it
+// so both files snapshot the same pre-MintSwitch point in time. Backing up an
+// already-managed config would snapshot a managed state (prior profile's key +
+// marker) and hide the pristine original. Limitation: if config.toml is already
+// managed but no backup exists (e.g. the backups dir was deleted, or a marker
+// was left by an older version), no new backup is taken and Restore is a no-op —
+// we cannot safely snapshot a managed file, and without the original we cannot
+// distinguish our injected keys from the user's own to strip them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
 	}
 	cfgPath, authPath := a.configPath(), a.authPath()
-	cfgBackup, err := a.e.Backup(cfgPath)
-	if err != nil {
-		return core.ApplyResult{}, err
-	}
-	if _, err := a.e.Backup(authPath); err != nil {
-		return core.ApplyResult{}, err
-	}
 
 	cfg, err := readTOML(cfgPath)
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
+	var cfgBackup string
+	if _, managed := markerFingerprint(cfg); !managed {
+		cfgBackup, err = a.e.Backup(cfgPath)
+		if err != nil {
+			return core.ApplyResult{}, err
+		}
+		if _, err := a.e.Backup(authPath); err != nil {
+			return core.ApplyResult{}, err
+		}
+	}
+
 	cfg["openai_base_url"] = p.BaseURL
 	cfg["model"] = p.Model
 	marker, err := markerMap(p)
@@ -124,7 +141,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	return core.ApplyResult{
 		ChangedPath: cfgPath,
 		BackupPath:  cfgBackup,
-		Message:     "Applied MintConfig profile to Codex config.toml and auth.json.",
+		Message:     "Applied MintSwitch profile to Codex config.toml and auth.json.",
 	}, nil
 }
 

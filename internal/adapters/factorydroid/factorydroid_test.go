@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 func newTestAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
@@ -278,8 +278,8 @@ func TestStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if st != core.StatusAppliedByMintConfig {
-			t.Errorf("status = %v, want AppliedByMintConfig", st)
+		if st != core.StatusAppliedByMintSwitch {
+			t.Errorf("status = %v, want AppliedByMintSwitch", st)
 		}
 	})
 

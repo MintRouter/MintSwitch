@@ -1,13 +1,43 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
 
-	"mintconfig/internal/core"
-	"mintconfig/internal/settings"
+	"mintswitch/internal/core"
+	"mintswitch/internal/installer"
+	"mintswitch/internal/settings"
 )
+
+// fakeRunner is a fake installer.CommandRunner: it records the npm invocation
+// and returns a canned result so service tests never run real npm.
+type fakeRunner struct {
+	out  string
+	err  error
+	runs int
+}
+
+func (f *fakeRunner) Run(_ context.Context, _ string, _ ...string) (string, error) {
+	f.runs++
+	return f.out, f.err
+}
+
+func okLook(string) (string, error)   { return "/usr/bin/npm", nil }
+func missLook(string) (string, error) { return "", errors.New("not found") }
+
+// newInstallService builds a Service whose installer uses the given fake runner
+// and npm-lookup behaviour, over a temp settings store and the given adapters.
+func newInstallService(t *testing.T, runner *fakeRunner, look func(string) (string, error), adapters ...*fakeAdapter) *Service {
+	t.Helper()
+	r := core.NewRegistry()
+	for _, a := range adapters {
+		r.Register(a)
+	}
+	store := settings.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	return NewWithInstaller(r, store, installer.NewWithLookPath(runner, look))
+}
 
 // fakeAdapter is a configurable core.ToolAdapter used to exercise the Service
 // without touching real tool config files. It records the profile last applied
@@ -74,7 +104,7 @@ func validProfile() core.Profile {
 func TestListTools(t *testing.T) {
 	a := &fakeAdapter{
 		id: "alpha", name: "Alpha", installed: true,
-		status: core.StatusAppliedByMintConfig, detail: "applied",
+		status: core.StatusAppliedByMintSwitch, detail: "applied",
 		paths: []string{"/tmp/a.json"},
 	}
 	b := &fakeAdapter{
@@ -94,7 +124,7 @@ func TestListTools(t *testing.T) {
 	if views[0].ID != "alpha" || views[1].ID != "beta" {
 		t.Fatalf("registration order not preserved: %+v", views)
 	}
-	if !views[0].Installed || views[0].Status != "applied_by_mintconfig" ||
+	if !views[0].Installed || views[0].Status != "applied_by_mintswitch" ||
 		views[0].Detail != "applied" || len(views[0].ConfigPaths) != 1 {
 		t.Fatalf("alpha view mapped wrong: %+v", views[0])
 	}
@@ -254,6 +284,81 @@ func TestApplyAllNoProfile(t *testing.T) {
 	svc := newTestService(t, &fakeAdapter{id: "alpha", name: "Alpha"})
 	if results, err := svc.ApplyAll(); err == nil || results != nil {
 		t.Fatalf("ApplyAll without profile = %+v, %v; want nil + error", results, err)
+	}
+}
+
+func TestInstallSuccess(t *testing.T) {
+	fr := &fakeRunner{out: "added 1 package"}
+	svc := newInstallService(t, fr, okLook)
+	res, err := svc.Install("codex")
+	if err != nil {
+		t.Fatalf("Install error: %v", err)
+	}
+	if !res.OK || res.Action != "install" || res.ID != "codex" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if res.Command != "npm install -g @openai/codex" {
+		t.Fatalf("command = %q", res.Command)
+	}
+	if res.Output != "added 1 package" || fr.runs != 1 {
+		t.Fatalf("output/runs wrong: %+v runs=%d", res, fr.runs)
+	}
+}
+
+func TestUninstallSuccess(t *testing.T) {
+	fr := &fakeRunner{out: "removed 1 package"}
+	svc := newInstallService(t, fr, okLook)
+	res, err := svc.Uninstall("pi")
+	if err != nil {
+		t.Fatalf("Uninstall error: %v", err)
+	}
+	if !res.OK || res.Action != "uninstall" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if res.Command != "npm uninstall -g @earendil-works/pi-coding-agent" {
+		t.Fatalf("command = %q", res.Command)
+	}
+}
+
+func TestInstallUnknownTool(t *testing.T) {
+	fr := &fakeRunner{}
+	svc := newInstallService(t, fr, okLook)
+	if _, err := svc.Install("nope"); err == nil {
+		t.Fatal("Install(nope) want error")
+	}
+	if fr.runs != 0 {
+		t.Fatalf("runner should not run for unknown tool: %d", fr.runs)
+	}
+}
+
+func TestInstallNpmMissing(t *testing.T) {
+	fr := &fakeRunner{}
+	svc := newInstallService(t, fr, missLook)
+	res, err := svc.Install("opencode")
+	if err != nil {
+		t.Fatalf("Install should not error on npm-missing: %v", err)
+	}
+	if res.OK || res.Error == "" {
+		t.Fatalf("expected non-OK result with message: %+v", res)
+	}
+	if fr.runs != 0 {
+		t.Fatalf("runner should not run when npm missing: %d", fr.runs)
+	}
+	// The intended command is still shown to the user.
+	if res.Command != "npm install -g opencode-ai" {
+		t.Fatalf("command = %q", res.Command)
+	}
+}
+
+func TestInstallCommandFailureReportsOutput(t *testing.T) {
+	fr := &fakeRunner{out: "npm ERR! boom", err: errors.New("exit status 1")}
+	svc := newInstallService(t, fr, okLook)
+	res, err := svc.Install("claude-code")
+	if err != nil {
+		t.Fatalf("Install should not throw on command failure: %v", err)
+	}
+	if res.OK || res.Output != "npm ERR! boom" || res.Error == "" {
+		t.Fatalf("expected failed result carrying output: %+v", res)
 	}
 }
 

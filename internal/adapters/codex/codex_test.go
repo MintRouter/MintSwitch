@@ -8,9 +8,9 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 func newAdapter(t *testing.T) (*Adapter, string) {
@@ -64,7 +64,7 @@ func TestStatusTransitions(t *testing.T) {
 	if _, err := a.Apply(p); err != nil {
 		t.Fatal(err)
 	}
-	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintConfig {
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
 		t.Fatalf("want Applied, got %v", st)
 	}
 

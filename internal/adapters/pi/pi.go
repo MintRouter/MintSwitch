@@ -1,7 +1,7 @@
-// Package pi implements the MintConfig tool adapter for Pi (earendil-works).
+// Package pi implements the MintSwitch tool adapter for Pi (earendil-works).
 //
 // Pi reads custom providers from ~/.pi/agent/models.json. The adapter registers
-// a MintConfig-managed provider keyed "mintconfig" with the active profile's
+// a MintSwitch-managed provider keyed "mintswitch" with the active profile's
 // OpenAI-compatible endpoint: baseUrl, api "openai-completions", apiKey,
 // authHeader true (so Pi sends "Authorization: Bearer <apiKey>"), and a single
 // models entry for the profile's Model. Every other provider, model and
@@ -18,9 +18,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 const (
@@ -28,7 +28,7 @@ const (
 	name = "Pi (earendil-works)"
 
 	providersKey = "providers"
-	providerKey  = "mintconfig"
+	providerKey  = "mintswitch"
 
 	keyBaseURL    = "baseUrl"
 	keyAPI        = "api"
@@ -40,7 +40,7 @@ const (
 	apiType = "openai-completions"
 )
 
-// Adapter applies/restores a MintConfig profile for Pi via its
+// Adapter applies/restores a MintSwitch profile for Pi via its
 // ~/.pi/agent/models.json file. Construct it with [New].
 type Adapter struct {
 	r *paths.Resolver
@@ -93,26 +93,40 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
-		return core.StatusAppliedByMintConfig, core.StatusAppliedByMintConfig.Detail(), nil
+		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 	}
 	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 }
 
-// Apply backs up models.json, then idempotently registers the MintConfig
-// provider with the profile's endpoint and writes the managed marker,
-// preserving all other providers, models and top-level keys.
+// Apply backs up models.json (only when it is not already MintSwitch-managed),
+// then idempotently registers the MintSwitch provider with the profile's
+// endpoint and writes the managed marker, preserving all other providers, models
+// and top-level keys.
+//
+// The backup is created only on the first Apply over a pristine/unmanaged (or
+// absent) file, so the pristine pre-MintSwitch snapshot is what Restore reverts
+// to even after repeated Applies. Backing up an already-managed file would
+// snapshot a managed state (prior profile's key + marker) and hide the pristine
+// original. Limitation: if the file is already managed but no backup exists
+// (e.g. the backups dir was deleted, or a marker was left by an older version),
+// no new backup is taken and Restore is a no-op — we cannot safely snapshot a
+// managed file, and without the original we cannot distinguish our injected keys
+// from the user's own to strip them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
 	}
 	path := a.modelsPath()
-	backupPath, err := a.e.Backup(path)
-	if err != nil {
-		return core.ApplyResult{}, err
-	}
 	m, err := readJSON(path)
 	if err != nil {
 		return core.ApplyResult{}, err
+	}
+	var backupPath string
+	if marker, ok := extractMarker(m); !ok || !marker.Managed {
+		backupPath, err = a.e.Backup(path)
+		if err != nil {
+			return core.ApplyResult{}, err
+		}
 	}
 
 	providers := asObject(m[providersKey])
@@ -132,7 +146,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	return core.ApplyResult{
 		ChangedPath: path,
 		BackupPath:  backupPath,
-		Message:     "Applied MintConfig endpoint to Pi models.json.",
+		Message:     "Applied MintSwitch endpoint to Pi models.json.",
 	}, nil
 }
 
@@ -209,7 +223,7 @@ func upsertModel(v any, modelID string) []any {
 	return append(models, map[string]any{keyID: modelID})
 }
 
-// extractMarker pulls the MintConfig marker out of a parsed models.json object.
+// extractMarker pulls the MintSwitch marker out of a parsed models.json object.
 func extractMarker(m map[string]any) (core.Marker, bool) {
 	raw, ok := m[core.MarkerKey]
 	if !ok {

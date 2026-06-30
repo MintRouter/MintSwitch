@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "My Company",
+			"FileDescription": "AI Tool API Config Switcher",
+			"LegalCopyright": "© 2026, My Company",
+			"ProductName": "MintSwitch",
+			"Comments": "This is a comment"
+		}
+	}
+}

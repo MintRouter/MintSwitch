@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 func newAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
@@ -49,7 +49,7 @@ func providerOf(t *testing.T, m map[string]any) map[string]any {
 	}
 	prov, ok := providers[providerKey].(map[string]any)
 	if !ok {
-		t.Fatalf("mintconfig provider missing: %+v", providers)
+		t.Fatalf("mintswitch provider missing: %+v", providers)
 	}
 	return prov
 }
@@ -87,8 +87,8 @@ func TestStatusTransitions(t *testing.T) {
 	if _, err := a.Apply(p); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintConfig {
-		t.Fatalf("want AppliedByMintConfig, got %v", st)
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want AppliedByMintSwitch, got %v", st)
 	}
 	p2 := p
 	p2.Model = "other-model"
@@ -226,8 +226,8 @@ func TestApplyIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if st != core.StatusAppliedByMintConfig {
-		t.Fatalf("want AppliedByMintConfig after re-apply, got %v", st)
+	if st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want AppliedByMintSwitch after re-apply, got %v", st)
 	}
 	prov := providerOf(t, readModels(t, a.modelsPath()))
 	models, _ := prov[keyModels].([]any)

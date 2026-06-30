@@ -1,9 +1,9 @@
-// Package factorydroid implements the MintConfig tool adapter for Factory Droid.
+// Package factorydroid implements the MintSwitch tool adapter for Factory Droid.
 //
 // Factory Droid (the "droid" CLI) reads custom OpenAI-compatible endpoints from
 // the top-level "customModels" array of ~/.factory/settings.json. Each entry is a
 // JSON object with model, displayName, baseUrl, apiKey and provider fields. The
-// adapter injects a single MintConfig-owned entry (identified by the stable
+// adapter injects a single MintSwitch-owned entry (identified by the stable
 // displayName) so re-applies update rather than duplicate it, sets the top-level
 // default "model" so the custom model is selected, and preserves every other
 // setting and customModels entry in the file.
@@ -22,9 +22,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 const (
@@ -34,17 +34,17 @@ const (
 	customModelsKey = "customModels"
 	defaultModelKey = "model"
 
-	// managedDisplayName is the stable, MintConfig-owned displayName used to
+	// managedDisplayName is the stable, MintSwitch-owned displayName used to
 	// locate and update our customModels entry on re-Apply instead of appending
 	// a duplicate.
-	managedDisplayName = "MintConfig (MintRouter)"
+	managedDisplayName = "MintSwitch (MintRouter)"
 
 	// providerOpenAI selects Factory's OpenAI Responses API provider for the
 	// MintRouter endpoint, per the task contract.
 	providerOpenAI = "openai"
 )
 
-// Adapter applies/restores a MintConfig profile for Factory Droid via its
+// Adapter applies/restores a MintSwitch profile for Factory Droid via its
 // ~/.factory/settings.json file. Construct it with [New].
 type Adapter struct {
 	r *paths.Resolver
@@ -101,27 +101,41 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
-		return core.StatusAppliedByMintConfig, core.StatusAppliedByMintConfig.Detail(), nil
+		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 	}
 	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 }
 
-// Apply backs up settings.json, then idempotently injects the profile's endpoint
-// as the MintConfig-owned entry in the top-level "customModels" array, sets the
-// top-level default "model", and writes the MintConfig managed marker. All other
-// keys and customModels entries are preserved.
+// Apply backs up settings.json (only when it is not already MintSwitch-managed),
+// then idempotently injects the profile's endpoint as the MintSwitch-owned entry
+// in the top-level "customModels" array, sets the top-level default "model", and
+// writes the MintSwitch managed marker. All other keys and customModels entries
+// are preserved.
+//
+// The backup is created only on the first Apply over a pristine/unmanaged (or
+// absent) file, so the pristine pre-MintSwitch snapshot is what Restore reverts
+// to even after repeated Applies. Backing up an already-managed file would
+// snapshot a managed state (prior profile's key + marker) and hide the pristine
+// original. Limitation: if the file is already managed but no backup exists
+// (e.g. the backups dir was deleted, or a marker was left by an older version),
+// no new backup is taken and Restore is a no-op — we cannot safely snapshot a
+// managed file, and without the original we cannot distinguish our injected keys
+// from the user's own to strip them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
 	}
 	path := a.settingsPath()
-	backupPath, err := a.e.Backup(path)
-	if err != nil {
-		return core.ApplyResult{}, err
-	}
 	m, err := readJSON(path)
 	if err != nil {
 		return core.ApplyResult{}, err
+	}
+	var backupPath string
+	if marker, ok := extractMarker(m); !ok || !marker.Managed {
+		backupPath, err = a.e.Backup(path)
+		if err != nil {
+			return core.ApplyResult{}, err
+		}
 	}
 
 	entry := map[string]any{
@@ -158,7 +172,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	return core.ApplyResult{
 		ChangedPath: path,
 		BackupPath:  backupPath,
-		Message:     "Applied MintConfig endpoint to Factory Droid settings.json.",
+		Message:     "Applied MintSwitch endpoint to Factory Droid settings.json.",
 	}, nil
 }
 
@@ -223,7 +237,7 @@ func asArray(v any) []any {
 	return []any{}
 }
 
-// extractMarker pulls the MintConfig marker out of a parsed settings object.
+// extractMarker pulls the MintSwitch marker out of a parsed settings object.
 func extractMarker(m map[string]any) (core.Marker, bool) {
 	raw, ok := m[core.MarkerKey]
 	if !ok {

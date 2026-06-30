@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
 func newAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
@@ -96,8 +96,8 @@ func TestApplyNewFileAndStatus(t *testing.T) {
 	if _, ok := models[p.Model]; !ok {
 		t.Fatalf("model entry missing: %v", models)
 	}
-	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintConfig {
-		t.Fatalf("expected AppliedByMintConfig, got %v", st)
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("expected AppliedByMintSwitch, got %v", st)
 	}
 	other := sampleProfile()
 	other.Model = "different"
@@ -189,8 +189,8 @@ func TestReApplyIdempotent(t *testing.T) {
 	if len(prov) != 1 {
 		t.Fatalf("expected single provider after re-apply, got %v", prov)
 	}
-	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintConfig {
-		t.Fatalf("expected AppliedByMintConfig after re-apply, got %v", st)
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("expected AppliedByMintSwitch after re-apply, got %v", st)
 	}
 }
 

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=MintSwitch
+Comment=AI Tool API Config Switcher
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/mintswitch %u
+Terminal=false
+Type=Application
+Icon=mintswitch
+Categories=Utility;
+StartupWMClass=mintswitch
+
+ 

@@ -1,5 +1,5 @@
 // Package opencode implements the core.ToolAdapter for OpenCode
-// (https://opencode.ai). It applies and restores a MintConfig-managed
+// (https://opencode.ai). It applies and restores a MintSwitch-managed
 // OpenAI-compatible endpoint in OpenCode's global JSON config at
 // ~/.config/opencode/opencode.json (XDG-aware), injecting a custom provider
 // using the "@ai-sdk/openai-compatible" package and setting it as the default
@@ -14,16 +14,16 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
 )
 
-// providerID is the custom provider key MintConfig writes under "provider".
+// providerID is the custom provider key MintSwitch writes under "provider".
 const providerID = "mintrouter"
 
 // providerName is the human-friendly display name for the provider.
-const providerName = "MintConfig (MintRouter)"
+const providerName = "MintSwitch (MintRouter)"
 
 // npmPackage is the AI SDK package used for OpenAI-compatible endpoints.
 const npmPackage = "@ai-sdk/openai-compatible"
@@ -31,7 +31,7 @@ const npmPackage = "@ai-sdk/openai-compatible"
 // Ensure Adapter satisfies the shared tool adapter contract.
 var _ core.ToolAdapter = (*Adapter)(nil)
 
-// Adapter manages OpenCode's configuration on behalf of MintConfig.
+// Adapter manages OpenCode's configuration on behalf of MintSwitch.
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
@@ -98,28 +98,42 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
-		return core.StatusAppliedByMintConfig, core.StatusAppliedByMintConfig.Detail(), nil
+		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 	}
 	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 }
 
-// Apply backs up the existing config, then idempotently injects the MintConfig
-// provider, default model, and managed marker, preserving all other keys.
+// Apply backs up the existing config (only when it is not already
+// MintSwitch-managed), then idempotently injects the MintSwitch provider,
+// default model, and managed marker, preserving all other keys.
+//
+// The backup is created only on the first Apply over a pristine/unmanaged (or
+// absent) file, so the pristine pre-MintSwitch snapshot is what Restore reverts
+// to even after repeated Applies. Backing up an already-managed file would
+// snapshot a managed state (prior profile's key + marker) and hide the pristine
+// original. Limitation: if the file is already managed but no backup exists
+// (e.g. the backups dir was deleted, or a marker was left by an older version),
+// no new backup is taken and Restore is a no-op — we cannot safely snapshot a
+// managed file, and without the original we cannot distinguish our injected keys
+// from the user's own to strip them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
 	}
 	path := a.configPath()
-	backupPath, err := a.e.Backup(path)
-	if err != nil {
-		return core.ApplyResult{}, err
-	}
 	root, err := readConfig(path)
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
 	if root == nil {
 		root = map[string]any{}
+	}
+	var backupPath string
+	if _, managed := extractMarker(root); !managed {
+		backupPath, err = a.e.Backup(path)
+		if err != nil {
+			return core.ApplyResult{}, err
+		}
 	}
 
 	provider, _ := root["provider"].(map[string]any)
@@ -147,7 +161,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	return core.ApplyResult{
 		ChangedPath: path,
 		BackupPath:  backupPath,
-		Message:     "Applied MintConfig provider to OpenCode config.",
+		Message:     "Applied MintSwitch provider to OpenCode config.",
 	}, nil
 }
 
@@ -203,7 +217,7 @@ func writeConfig(path string, root map[string]any) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// extractMarker decodes the MintConfig marker from the parsed config, if present.
+// extractMarker decodes the MintSwitch marker from the parsed config, if present.
 func extractMarker(root map[string]any) (core.Marker, bool) {
 	raw, ok := root[core.MarkerKey]
 	if !ok {

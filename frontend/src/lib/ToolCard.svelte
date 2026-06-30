@@ -64,7 +64,9 @@
     </span>
   </div>
 
-  <span class={`badge status tone-${meta.tone}`}>{meta.label}</span>
+  {#if tool.status !== "default" && tool.status !== "not_installed"}
+    <span class={`badge status tone-${meta.tone}`}>{meta.label}</span>
+  {/if}
 
   {#if tool.installed}
     {#if paths.length}
@@ -75,7 +77,6 @@
       </ul>
     {/if}
   {:else}
-    <p class="tool-detail">Not detected. Install it, then press Re-detect.</p>
     {#if paths.length}
       <ul class="paths" aria-label="Config path that would be used">
         <li class="paths-label">Would manage:</li>
@@ -161,12 +162,6 @@
   }
   .badge.install { flex: 0 0 auto; align-self: flex-start; }
   .status { align-self: flex-start; }
-  .tool-detail {
-    margin: 0;
-    color: var(--muted);
-    font-size: 0.88rem;
-    line-height: 1.45;
-  }
   .paths {
     margin: 0;
     padding: 0;

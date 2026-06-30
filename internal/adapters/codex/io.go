@@ -9,7 +9,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"mintconfig/internal/core"
+	"mintswitch/internal/core"
 )
 
 // readTOML parses a TOML file into a generic map. A missing file yields an
@@ -80,7 +80,7 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// markerMap builds the MintConfig managed-marker as a generic map keyed by the
+// markerMap builds the MintSwitch managed-marker as a generic map keyed by the
 // marker's JSON field names, so it serializes consistently into TOML.
 func markerMap(p core.Profile) (map[string]any, error) {
 	raw, err := json.Marshal(core.NewMarker(p, p.Label))

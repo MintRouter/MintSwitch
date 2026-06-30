@@ -1,11 +1,19 @@
-# Dependencies
+# Wails / Task
+.task
+bin
+
+# Bare `go build` output binaries at the repo root
+/mintswitch
+/mintswitch-server
+
+# Frontend build + deps (generated)
 node_modules/
 .pnpm-store/
+frontend/dist
 
-# Build outputs
-dist/
-build/
-out/
+# Installer build artifacts (the build/ dir itself IS tracked — it holds Wails config)
+build/linux/appimage/build
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 
 # IDE
 .idea/

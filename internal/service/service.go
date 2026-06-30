@@ -1,5 +1,5 @@
-// Package service exposes MintConfig's backend operations to the frontend as a
-// single Wails v3 service. It wires the tool adapter registry, MintConfig's own
+// Package service exposes MintSwitch's backend operations to the frontend as a
+// single Wails v3 service. It wires the tool adapter registry, MintSwitch's own
 // settings store and the backup engine together behind a small, binding-friendly
 // API: list tools with per-tool status, get/save the active profile, and
 // apply/restore a profile per tool or across all tools.
@@ -18,25 +18,28 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
-	"mintconfig/internal/adapters/claudecode"
-	"mintconfig/internal/adapters/codex"
-	"mintconfig/internal/adapters/factorydroid"
-	"mintconfig/internal/adapters/opencode"
-	"mintconfig/internal/adapters/pi"
-	"mintconfig/internal/backup"
-	"mintconfig/internal/core"
-	"mintconfig/internal/paths"
-	"mintconfig/internal/settings"
+	"mintswitch/internal/adapters/claudecode"
+	"mintswitch/internal/adapters/codex"
+	"mintswitch/internal/adapters/factorydroid"
+	"mintswitch/internal/adapters/opencode"
+	"mintswitch/internal/adapters/pi"
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/installer"
+	"mintswitch/internal/paths"
+	"mintswitch/internal/settings"
 )
 
 // Service is the backend façade bound into the Wails application.
 type Service struct {
 	reg   *core.Registry
 	store *settings.Store
+	inst  *installer.Installer
 }
 
 // ToolView is the per-tool summary returned by [Service.ListTools].
@@ -67,6 +70,18 @@ type ProfileView struct {
 	HasKey         bool   `json:"has_key"`
 }
 
+// InstallResult is the structured outcome of an Install/Uninstall operation,
+// designed to be shown to the user. Command is the exact command line that was
+// (or would be) run; Output is npm's combined stdout+stderr.
+type InstallResult struct {
+	ID      string `json:"id"`
+	Action  string `json:"action"`
+	Command string `json:"command"`
+	Output  string `json:"output"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+}
+
 // New builds a Service backed by the real environment: a default
 // paths.Resolver, a backup.Engine under the user's data dir, and the five
 // built-in tool adapters. It returns an error only if the home/data directories
@@ -91,10 +106,17 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	return NewWithRegistry(reg, settings.NewStore(r.SettingsPath()))
 }
 
-// NewWithRegistry builds a Service from a pre-built registry and settings store.
-// It is the seam used by tests to register a fake adapter and a temp store.
+// NewWithRegistry builds a Service from a pre-built registry and settings store,
+// using the real npm-backed installer. It is the seam used by tests to register
+// a fake adapter and a temp store.
 func NewWithRegistry(reg *core.Registry, store *settings.Store) *Service {
-	return &Service{reg: reg, store: store}
+	return NewWithInstaller(reg, store, installer.New(installer.ExecRunner{}))
+}
+
+// NewWithInstaller is like [NewWithRegistry] but injects the installer, letting
+// tests supply one backed by a fake command runner so no real npm is invoked.
+func NewWithInstaller(reg *core.Registry, store *settings.Store, inst *installer.Installer) *Service {
+	return &Service{reg: reg, store: store, inst: inst}
 }
 
 // ListTools returns one [ToolView] per registered adapter, in registration
@@ -235,6 +257,48 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// Install installs the tool identified by toolID globally via npm and returns a
+// structured [InstallResult] carrying the exact command and npm's output. An
+// unknown toolID returns an error. When npm is missing the result is returned
+// (not an error) with a clear, user-facing message so the UI can show it.
+func (s *Service) Install(toolID string) (InstallResult, error) {
+	args, out, err := s.inst.Install(context.Background(), toolID)
+	return s.installResult(toolID, "install", args, out, err)
+}
+
+// Uninstall uninstalls the tool identified by toolID globally via npm. Its
+// return contract matches [Service.Install].
+func (s *Service) Uninstall(toolID string) (InstallResult, error) {
+	args, out, err := s.inst.Uninstall(context.Background(), toolID)
+	return s.installResult(toolID, "uninstall", args, out, err)
+}
+
+// installResult maps the installer's (args, output, error) into an
+// [InstallResult]. Unknown tools become a hard error; npm-missing and command
+// failures become a non-OK result with a clear message so the UI can show the
+// command and its output instead of throwing.
+func (s *Service) installResult(toolID, action string, args []string, out string, err error) (InstallResult, error) {
+	res := InstallResult{
+		ID:      toolID,
+		Action:  action,
+		Command: strings.Join(args, " "),
+		Output:  out,
+	}
+	switch {
+	case errors.Is(err, installer.ErrUnknownTool):
+		return InstallResult{}, fmt.Errorf("service: unknown tool %q", toolID)
+	case errors.Is(err, installer.ErrNpmMissing):
+		res.Error = "Node.js / npm is required. Install Node.js, then retry."
+		return res, nil
+	case err != nil:
+		res.Error = err.Error()
+		return res, nil
+	default:
+		res.OK = true
+		return res, nil
+	}
 }
 
 // RestoreAll restores every registered tool to its pre-apply state and returns a

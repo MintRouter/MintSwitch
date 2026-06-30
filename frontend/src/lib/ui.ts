@@ -1,4 +1,4 @@
-// Small presentational helpers shared across the MintConfig UI. Pure functions,
+// Small presentational helpers shared across the MintSwitch UI. Pure functions,
 // no Svelte/DOM dependencies, so they are trivially typecheckable and reusable.
 
 /** Visual tone keys map to the status-badge colour classes in the components. */
@@ -17,8 +17,8 @@ export interface StatusMeta {
  */
 export function statusMeta(status: string): StatusMeta {
   switch (status) {
-    case "applied_by_mintconfig":
-      return { label: "Applied by MintConfig", tone: "success" };
+    case "applied_by_mintswitch":
+      return { label: "Applied by MintSwitch", tone: "success" };
     case "modified_externally":
       return { label: "Modified externally", tone: "warning" };
     case "default":
@@ -43,6 +43,32 @@ export function errMsg(e: unknown): string {
     if (typeof m === "string") return m;
   }
   return "Something went wrong. Please try again.";
+}
+
+/**
+ * npmPackages mirrors the backend installer whitelist (internal/installer) for
+ * display only: it lets the confirm dialog preview the exact npm command before
+ * the call is made. The authoritative command is still returned in
+ * InstallResult.command after the operation runs.
+ */
+const npmPackages: Record<string, { pkg: string; installFlags?: string[] }> = {
+  "claude-code": { pkg: "@anthropic-ai/claude-code" },
+  codex: { pkg: "@openai/codex" },
+  opencode: { pkg: "opencode-ai" },
+  "factory-droid": { pkg: "droid" },
+  pi: { pkg: "@earendil-works/pi-coding-agent", installFlags: ["--ignore-scripts"] },
+};
+
+/**
+ * npmCommand returns the exact npm command that Install/Uninstall will run for a
+ * tool, for preview in the confirm dialog. Unknown tools return an empty string.
+ */
+export function npmCommand(action: "install" | "uninstall", toolID: string): string {
+  const spec = npmPackages[toolID];
+  if (!spec) return "";
+  if (action === "uninstall") return `npm uninstall -g ${spec.pkg}`;
+  const flags = spec.installFlags?.length ? `${spec.installFlags.join(" ")} ` : "";
+  return `npm install -g ${flags}${spec.pkg}`;
 }
 
 /** isHttpUrl reports whether v is a non-empty http(s) URL. */
