@@ -373,7 +373,10 @@
     flex: 1 1 auto;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(360px, 400px) 1fr;
+    /* Left profile column is a compact inspector — kept noticeably narrower than
+       the tools area so the form fields/dropdowns sit at a natural width rather
+       than stretching full-bleed. The right column keeps a comfortable 2+ cols. */
+    grid-template-columns: minmax(280px, 320px) 1fr;
     gap: var(--s-4);
     align-items: stretch;
   }
