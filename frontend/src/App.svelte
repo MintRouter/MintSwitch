@@ -380,8 +380,20 @@
     gap: var(--s-4);
     align-items: stretch;
   }
-  /* Left column stays put at default size (does not scroll). */
-  .col-form { min-height: 0; }
+  /* Left column: the brand title stays pinned while the profile form scrolls
+     internally when its content (e.g. many models) is taller than the column,
+     so the shell itself never scrolls. */
+  .col-form {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .col-form :global(.profile) {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+  }
   .col-tools { display: flex; flex-direction: column; min-height: 0; }
   /* Only this region scrolls if the cards overflow; at 5 tools it fits. */
   .tool-grid {
@@ -398,6 +410,8 @@
     .layout { grid-template-columns: 1fr; min-height: 0; }
     .col-tools { min-height: 0; }
     .tool-grid { overflow: visible; flex: none; min-height: 0; }
+    /* Stacked: let the whole page scroll instead of the form scrolling on its own. */
+    .col-form :global(.profile) { overflow: visible; flex: none; }
   }
 
   .theme-toggle { flex: 0 0 auto; }

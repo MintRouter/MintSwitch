@@ -15,7 +15,6 @@
   let apiKey = $state("");
   let models = $state<string[]>([]);
   let model = $state("");
-  let smallFastModel = $state("");
   let newModel = $state("");
   let errors = $state<Record<string, string>>({});
 
@@ -29,7 +28,6 @@
     baseUrl = profile.base_url ?? "";
     models = profile.models ? [...profile.models] : [];
     model = profile.model ?? "";
-    smallFastModel = profile.small_fast_model ?? "";
     apiKey = "";
     newModel = "";
   });
@@ -57,8 +55,7 @@
 
   // Remove a saved model. If it was the active one, fall back to the model that
   // took its slot, then the previous, then the first — clearing only when the
-  // list becomes empty. A small/fast model removed from the list is intentionally
-  // kept selected (it stays a visible option via `smallFastOptions`).
+  // list becomes empty.
   function removeModel(m: string): void {
     const idx = models.indexOf(m);
     if (idx === -1) return;
@@ -68,16 +65,6 @@
       model = next[idx] ?? next[idx - 1] ?? next[0] ?? "";
     }
   }
-
-  // Options for the small/fast dropdown. Always include the currently-saved value
-  // even when it isn't in the models list (e.g. a migrated free-text value or a
-  // model that was just removed) so it stays selectable and visible. Order is
-  // preserved: models first, then the orphan value. "None" is rendered separately.
-  const smallFastOptions = $derived(
-    smallFastModel && !models.includes(smallFastModel)
-      ? [...models, smallFastModel]
-      : models,
-  );
 
   function validate(): boolean {
     const next: Record<string, string> = {};
@@ -103,7 +90,9 @@
       base_url: baseUrl.trim(),
       models: models,
       model: model.trim(),
-      small_fast_model: smallFastModel.trim(),
+      // The Small / fast model field was removed from the UI; always send "" so
+      // the Profile/binding shape stays unchanged (equivalent to the old "None").
+      small_fast_model: "",
     };
     const ok = await onSave(payload);
     if (ok) apiKey = "";
@@ -175,16 +164,6 @@
       <button class="btn-ghost sm" type="button" onclick={addModel} disabled={!canAdd}>Add</button>
     </div>
     {#if errors.model}<p class="field-error" id="err-model">{errors.model}</p>{/if}
-  </div>
-
-  <div class="field">
-    <label class="field-label" for="pf-small">Small / fast model <span class="opt">(optional)</span></label>
-    <select class="field-input field-select" id="pf-small" bind:value={smallFastModel}>
-      <option value="">None</option>
-      {#each smallFastOptions as m (m)}
-        <option value={m}>{m}</option>
-      {/each}
-    </select>
   </div>
 
   <div class="profile-actions">

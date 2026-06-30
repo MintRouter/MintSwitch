@@ -77,6 +77,10 @@ func main() {
 		// Window sized to the golden ratio (1000 / 618 ≈ 1.618).
 		Width:  1000,
 		Height: 618,
+		// Lock the minimum size to the launch size so the window can't be
+		// dragged smaller than the comfortable 2-column layout.
+		MinWidth:  1000,
+		MinHeight: 618,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTranslucent,
