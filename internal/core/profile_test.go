@@ -34,6 +34,48 @@ func TestProfileValidate(t *testing.T) {
 	}
 }
 
+func TestNormalizeBaseURL(t *testing.T) {
+	tests := []struct {
+		name         string
+		in           string
+		want         string
+		wantUpgraded bool
+	}{
+		{"public http upgrades", "http://api.example.com/v1", "https://api.example.com/v1", true},
+		{"public http with port upgrades", "http://api.example.com:8443/v1", "https://api.example.com:8443/v1", true},
+		{"https untouched", "https://api.example.com/v1", "https://api.example.com/v1", false},
+		{"trailing slash trimmed", "http://api.example.com/v1/", "https://api.example.com/v1", true},
+		{"multiple trailing slashes trimmed", "https://api.example.com/v1///", "https://api.example.com/v1", false},
+		{"root slash trimmed to empty", "https://api.example.com/", "https://api.example.com", false},
+		{"whitespace trimmed", "  http://api.example.com/v1  ", "https://api.example.com/v1", true},
+		{"localhost stays http", "http://localhost:1234/v1", "http://localhost:1234/v1", false},
+		{"loopback 127 stays http", "http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1", false},
+		{"loopback 127 other stays http", "http://127.1.2.3/v1", "http://127.1.2.3/v1", false},
+		{"ipv6 loopback stays http", "http://[::1]:8080/v1", "http://[::1]:8080/v1", false},
+		{"private 192.168 stays http", "http://192.168.1.10:1234/v1", "http://192.168.1.10:1234/v1", false},
+		{"private 10 stays http", "http://10.0.0.5/v1", "http://10.0.0.5/v1", false},
+		{"private 172.16 stays http", "http://172.16.5.4/v1", "http://172.16.5.4/v1", false},
+		{"private 172.31 stays http", "http://172.31.255.1/v1", "http://172.31.255.1/v1", false},
+		{"link-local 169.254 stays http", "http://169.254.1.1/v1", "http://169.254.1.1/v1", false},
+		{"link-local fe80 stays http", "http://[fe80::1]:8080/v1", "http://[fe80::1]:8080/v1", false},
+		{"dot local stays http", "http://foo.local/v1", "http://foo.local/v1", false},
+		{"dot localhost stays http", "http://foo.localhost/v1", "http://foo.localhost/v1", false},
+		{"public ip 172.32 upgrades", "http://172.32.0.1/v1", "https://172.32.0.1/v1", true},
+		{"public ip 8.8.8.8 upgrades", "http://8.8.8.8/v1", "https://8.8.8.8/v1", true},
+		{"empty unchanged", "", "", false},
+		{"bare host unchanged", "api.example.com/v1", "api.example.com/v1", false},
+		{"invalid unchanged", "http://%zz", "http://%zz", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, upgraded := NormalizeBaseURL(tt.in)
+			if got != tt.want || upgraded != tt.wantUpgraded {
+				t.Fatalf("NormalizeBaseURL(%q) = (%q, %v), want (%q, %v)", tt.in, got, upgraded, tt.want, tt.wantUpgraded)
+			}
+		})
+	}
+}
+
 func TestFingerprintStableAndSensitive(t *testing.T) {
 	base := Profile{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s"}
 	if Fingerprint(base) != Fingerprint(base) {

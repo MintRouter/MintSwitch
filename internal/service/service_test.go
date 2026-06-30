@@ -157,6 +157,37 @@ func TestSaveProfileValidation(t *testing.T) {
 	}
 }
 
+// TestSaveProfileNormalizesBaseURL: a remote http base URL with a trailing
+// slash is stored as https without the slash, while a localhost http base URL
+// is preserved on http so local model servers keep working.
+func TestSaveProfileNormalizesBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"remote http upgraded and trimmed", "http://api.example.com/v1/", "https://api.example.com/v1"},
+		{"localhost kept http", "http://localhost:1234/v1", "http://localhost:1234/v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestService(t)
+			p := validProfile()
+			p.BaseURL = tt.in
+			if err := svc.SaveProfile(p); err != nil {
+				t.Fatalf("SaveProfile: %v", err)
+			}
+			view, err := svc.GetProfile()
+			if err != nil {
+				t.Fatalf("GetProfile: %v", err)
+			}
+			if view.BaseURL != tt.want {
+				t.Fatalf("stored BaseURL = %q, want %q", view.BaseURL, tt.want)
+			}
+		})
+	}
+}
+
 func TestSaveProfilePreservesKeyAndGetProfileHidesIt(t *testing.T) {
 	svc := newTestService(t)
 	if err := svc.SaveProfile(validProfile()); err != nil {

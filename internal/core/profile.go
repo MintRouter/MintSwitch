@@ -9,9 +9,54 @@ package core
 
 import (
 	"errors"
+	"net"
 	"net/url"
 	"strings"
 )
+
+// NormalizeBaseURL canonicalizes a profile base URL so tools never receive an
+// http endpoint that a remote host silently 301-redirects to https — a redirect
+// that makes many HTTP clients drop the Authorization header and fail with a
+// spurious "missing API key" error. It trims surrounding whitespace, strips
+// trailing slashes from the path (/v1/ -> /v1, root / -> empty), and upgrades an
+// http scheme to https for remote hosts, reporting upgraded=true when it does.
+// Local and private hosts (localhost, *.local, *.localhost, loopback,
+// RFC1918/link-local addresses) are left on http so local model servers keep
+// working. The trimmed input is returned unchanged (upgraded=false) when it is
+// empty, fails to parse, or has no host, leaving Validate to report errors. It
+// never inspects or logs secrets.
+func NormalizeBaseURL(raw string) (normalized string, upgraded bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return trimmed, false
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" {
+		return trimmed, false
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	if u.Scheme == "http" && !isLocalOrPrivateHost(u.Hostname()) {
+		u.Scheme = "https"
+		upgraded = true
+	}
+	return u.String(), upgraded
+}
+
+// isLocalOrPrivateHost reports whether host refers to the local machine or a
+// private/link-local network, in which case an http base URL must be preserved
+// (no https upgrade). host is the URL hostname with any port already stripped.
+func isLocalOrPrivateHost(host string) bool {
+	host = strings.ToLower(host)
+	if host == "localhost" ||
+		strings.HasSuffix(host, ".local") ||
+		strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	return false
+}
 
 // Profile is a single OpenAI-compatible endpoint configuration that the user
 // wants to apply to one or more AI coding tools.

@@ -231,6 +231,7 @@ func (s *Service) SaveProfile(p core.Profile) error {
 	if err != nil {
 		return err
 	}
+	p.BaseURL, _ = core.NormalizeBaseURL(p.BaseURL)
 	p.Model = strings.TrimSpace(p.Model)
 	p.SmallFastModel = strings.TrimSpace(p.SmallFastModel)
 	p.Models = normalizeModels(p.Models, p.Model)
@@ -277,6 +278,9 @@ func (s *Service) activeProfile() (core.Profile, error) {
 		return core.Profile{}, errors.New("service: no profile saved; save a valid profile before applying")
 	}
 	p := *st.ActiveProfile
+	// Auto-upgrade legacy http base URLs stored before normalization existed so
+	// remote endpoints behind an https redirect keep their Authorization header.
+	p.BaseURL, _ = core.NormalizeBaseURL(p.BaseURL)
 	if err := p.Validate(); err != nil {
 		return core.Profile{}, fmt.Errorf("service: saved profile is invalid: %w", err)
 	}
