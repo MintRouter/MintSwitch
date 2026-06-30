@@ -19,6 +19,9 @@ import (
 type State struct {
 	// ActiveProfile is the profile the user has saved as active, if any.
 	ActiveProfile *core.Profile `json:"active_profile,omitempty"`
+	// CustomTools are the user-defined tool/provider definitions managed by the
+	// generic JSON-template adapter, in user-defined order.
+	CustomTools []core.CustomToolDef `json:"custom_tools,omitempty"`
 }
 
 // Store loads and saves a [State] from a single JSON file.

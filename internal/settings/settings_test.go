@@ -74,6 +74,42 @@ func TestSaveAtomicAndPerms(t *testing.T) {
 	}
 }
 
+// TestSaveLoadCustomToolsRoundTrip proves user-defined custom tools persist in
+// order alongside the active profile and survive a save+reload unchanged.
+func TestSaveLoadCustomToolsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "settings.json")
+	s := NewStore(path)
+
+	in := &State{
+		ActiveProfile: &core.Profile{
+			Label: "work", APIKey: "sk-secret", BaseURL: "https://h", Model: "m",
+		},
+		CustomTools: []core.CustomToolDef{
+			{
+				ID: "acme-cli", Name: "Acme CLI",
+				ConfigPath: "~/.config/acme/config.json", BinaryName: "acme",
+				Template: `{"env":{"KEY":"${API_KEY}"}}`,
+			},
+			{
+				ID: "beta", Name: "Beta",
+				ConfigPath: "/tmp/beta.json",
+				Template:   `{"url":"${BASE_URL}"}`,
+			},
+		},
+	}
+
+	if err := s.Save(in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !reflect.DeepEqual(out.CustomTools, in.CustomTools) {
+		t.Fatalf("custom tools round-trip mismatch:\n got %+v\nwant %+v", out.CustomTools, in.CustomTools)
+	}
+}
+
 func TestSaveNilState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	s := NewStore(path)

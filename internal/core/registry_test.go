@@ -59,6 +59,38 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
+func TestRegistryUnregister(t *testing.T) {
+	r := NewRegistry()
+	r.Register(fakeAdapter{id: "a", name: "A"})
+	r.Register(fakeAdapter{id: "b", name: "B"})
+	r.Register(fakeAdapter{id: "c", name: "C"})
+
+	r.Unregister("b")
+	all := r.All()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 after unregister, got %d", len(all))
+	}
+	if all[0].ID() != "a" || all[1].ID() != "c" {
+		t.Fatalf("order of remaining not preserved: %q %q", all[0].ID(), all[1].ID())
+	}
+	if _, ok := r.Get("b"); ok {
+		t.Fatal("Get(b) still ok after Unregister")
+	}
+
+	// Unregistering a missing id is a no-op.
+	r.Unregister("missing")
+	if len(r.All()) != 2 {
+		t.Fatalf("unregister missing changed count: %d", len(r.All()))
+	}
+
+	// A re-registered id appends at the end (order semantics preserved).
+	r.Register(fakeAdapter{id: "b", name: "B2"})
+	all = r.All()
+	if all[len(all)-1].ID() != "b" {
+		t.Fatalf("re-registered id not appended at end: %v", all)
+	}
+}
+
 func TestToolStatusStrings(t *testing.T) {
 	cases := map[ToolStatus]string{
 		StatusNotInstalled:        "not_installed",

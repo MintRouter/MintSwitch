@@ -19,12 +19,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"mintswitch/internal/adapters/claudecode"
 	"mintswitch/internal/adapters/codex"
+	"mintswitch/internal/adapters/custom"
 	"mintswitch/internal/adapters/factorydroid"
 	"mintswitch/internal/adapters/opencode"
 	"mintswitch/internal/adapters/pi"
@@ -35,11 +37,26 @@ import (
 	"mintswitch/internal/settings"
 )
 
+// builtinIDs is the set of reserved built-in tool IDs. A custom tool may not
+// claim any of these.
+var builtinIDs = map[string]bool{
+	"claude-code":   true,
+	"codex":         true,
+	"opencode":      true,
+	"factory-droid": true,
+	"pi":            true,
+}
+
 // Service is the backend façade bound into the Wails application.
 type Service struct {
 	reg   *core.Registry
 	store *settings.Store
 	inst  *installer.Installer
+	// r and e are retained so custom tools added at runtime can construct a
+	// generic adapter. They are nil for the test seams that inject a pre-built
+	// registry; AddCustomTool requires them.
+	r *paths.Resolver
+	e *backup.Engine
 }
 
 // ToolView is the per-tool summary returned by [Service.ListTools].
@@ -50,6 +67,10 @@ type ToolView struct {
 	Status      string   `json:"status"`
 	Detail      string   `json:"detail"`
 	ConfigPaths []string `json:"config_paths"`
+	// Custom is true for user-defined tools managed by the generic JSON-template
+	// adapter, false for the built-ins. The UI hides Install/Uninstall for these
+	// and offers a Remove action instead.
+	Custom bool `json:"custom"`
 }
 
 // ToolOpResult is the per-tool outcome of a bulk apply/restore operation.
@@ -105,7 +126,19 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg.Register(factorydroid.New(r, e))
 	reg.Register(pi.New(r, e))
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
-	return NewWithInstaller(reg, settings.NewStore(r.SettingsPath()), inst)
+	store := settings.NewStore(r.SettingsPath())
+	s := NewWithInstaller(reg, store, inst)
+	s.r = r
+	s.e = e
+	// Register user-defined custom tools after the built-ins, in saved order.
+	// A load failure here is non-fatal: the built-ins still work and the user
+	// can re-add custom tools; it must not prevent the app from starting.
+	if st, err := store.Load(); err == nil {
+		for _, def := range st.CustomTools {
+			reg.Register(custom.New(def, r, e))
+		}
+	}
+	return s
 }
 
 // NewWithRegistry builds a Service from a pre-built registry and settings store,
@@ -137,21 +170,29 @@ func (s *Service) ListTools() ([]ToolView, error) {
 	adapters := s.reg.All()
 	out := make([]ToolView, 0, len(adapters))
 	for _, a := range adapters {
-		installed, _ := a.Detect()
-		status, detail, serr := a.Status(p)
-		if serr != nil {
-			detail = serr.Error()
-		}
-		out = append(out, ToolView{
-			ID:          a.ID(),
-			Name:        a.Name(),
-			Installed:   installed,
-			Status:      status.String(),
-			Detail:      detail,
-			ConfigPaths: a.ConfigPaths(),
-		})
+		out = append(out, s.viewFor(a, p))
 	}
 	return out, nil
+}
+
+// viewFor builds a [ToolView] for a single adapter evaluated against profile p.
+// A per-tool Status error is surfaced in Detail rather than failing the caller.
+func (s *Service) viewFor(a core.ToolAdapter, p core.Profile) ToolView {
+	installed, _ := a.Detect()
+	status, detail, serr := a.Status(p)
+	if serr != nil {
+		detail = serr.Error()
+	}
+	_, isCustom := a.(*custom.Adapter)
+	return ToolView{
+		ID:          a.ID(),
+		Name:        a.Name(),
+		Installed:   installed,
+		Status:      status.String(),
+		Detail:      detail,
+		ConfigPaths: a.ConfigPaths(),
+		Custom:      isCustom,
+	}
 }
 
 // GetProfile returns the non-secret view of the saved active profile. When no
@@ -364,4 +405,124 @@ func (s *Service) RestoreAll() ([]ToolOpResult, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// AddCustomTool validates, persists and registers a new user-defined tool. The
+// ID is derived as a slug from name and must be unique and not collide with a
+// built-in. The template must parse as a JSON object; name and configPath must
+// be non-empty. binaryName is optional. On success the new tool is registered
+// and its [ToolView] (Custom=true) is returned. The template/api key are never
+// logged. It requires a Service built with NewWithDeps (real resolver/engine).
+func (s *Service) AddCustomTool(name, configPath, binaryName, template string) (ToolView, error) {
+	if s.r == nil || s.e == nil {
+		return ToolView{}, errors.New("service: custom tools are unavailable in this configuration")
+	}
+	name = strings.TrimSpace(name)
+	configPath = strings.TrimSpace(configPath)
+	binaryName = strings.TrimSpace(binaryName)
+	if name == "" {
+		return ToolView{}, errors.New("service: custom tool name is required")
+	}
+	if configPath == "" {
+		return ToolView{}, errors.New("service: custom tool config path is required")
+	}
+	if err := validateTemplate(template); err != nil {
+		return ToolView{}, err
+	}
+	id := slugID(name)
+	if id == "" {
+		return ToolView{}, errors.New("service: custom tool name must contain at least one letter or digit")
+	}
+	if builtinIDs[id] {
+		return ToolView{}, fmt.Errorf("service: %q collides with a built-in tool id; choose a different name", id)
+	}
+	st, err := s.store.Load()
+	if err != nil {
+		return ToolView{}, err
+	}
+	for _, def := range st.CustomTools {
+		if def.ID == id {
+			return ToolView{}, fmt.Errorf("service: a custom tool named %q already exists", name)
+		}
+	}
+	def := core.CustomToolDef{
+		ID:         id,
+		Name:       name,
+		ConfigPath: configPath,
+		BinaryName: binaryName,
+		Template:   template,
+	}
+	st.CustomTools = append(st.CustomTools, def)
+	if err := s.store.Save(st); err != nil {
+		return ToolView{}, err
+	}
+	a := custom.New(def, s.r, s.e)
+	s.reg.Register(a)
+	var p core.Profile
+	if st.ActiveProfile != nil {
+		p = *st.ActiveProfile
+	}
+	return s.viewFor(a, p), nil
+}
+
+// RemoveCustomTool detaches and forgets a previously added custom tool. Built-in
+// tools cannot be removed. An unknown id is an error.
+func (s *Service) RemoveCustomTool(id string) error {
+	if builtinIDs[id] {
+		return fmt.Errorf("service: %q is a built-in tool and cannot be removed", id)
+	}
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	idx := -1
+	for i, def := range st.CustomTools {
+		if def.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("service: unknown custom tool %q", id)
+	}
+	st.CustomTools = append(st.CustomTools[:idx], st.CustomTools[idx+1:]...)
+	if err := s.store.Save(st); err != nil {
+		return err
+	}
+	s.reg.Unregister(id)
+	return nil
+}
+
+// validateTemplate reports whether t parses as a JSON object (the only valid
+// custom-tool template root).
+func validateTemplate(t string) error {
+	var root any
+	if err := json.Unmarshal([]byte(t), &root); err != nil {
+		return fmt.Errorf("service: custom tool template is not valid JSON: %w", err)
+	}
+	if _, ok := root.(map[string]any); !ok {
+		return errors.New("service: custom tool template must be a JSON object")
+	}
+	return nil
+}
+
+// slugID derives a stable, lower-case, hyphen-separated identifier from name.
+// Runs of non-alphanumeric characters collapse to a single hyphen and leading/
+// trailing hyphens are trimmed.
+func slugID(name string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
