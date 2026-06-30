@@ -110,6 +110,35 @@ func TestSaveLoadCustomToolsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSaveLoadToolModelsRoundTrip proves the per-tool model selections persist
+// alongside the active profile and survive a save+reload unchanged.
+func TestSaveLoadToolModelsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "settings.json")
+	s := NewStore(path)
+
+	in := &State{
+		ActiveProfile: &core.Profile{
+			Label: "work", APIKey: "sk-secret", BaseURL: "https://h", Model: "m",
+			Models: []string{"m", "m2"},
+		},
+		ToolModels: map[string]string{
+			"claude-code": "m2",
+			"codex":       "m",
+		},
+	}
+
+	if err := s.Save(in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !reflect.DeepEqual(out.ToolModels, in.ToolModels) {
+		t.Fatalf("tool models round-trip mismatch:\n got %+v\nwant %+v", out.ToolModels, in.ToolModels)
+	}
+}
+
 func TestSaveNilState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	s := NewStore(path)

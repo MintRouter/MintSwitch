@@ -58,6 +58,11 @@ type fakeAdapter struct {
 	lastApplied *core.Profile
 	applyCalls  int
 	restCalls   int
+	// statusModel, when non-empty, makes Status simulate a Model-bearing
+	// fingerprint: it reports applied_by_mintswitch only when the profile it is
+	// evaluated against carries this Model, else modified_externally. This proves
+	// viewFor evaluates status with the EFFECTIVE per-tool model.
+	statusModel string
 }
 
 func (f *fakeAdapter) ID() string            { return f.id }
@@ -66,7 +71,13 @@ func (f *fakeAdapter) ConfigPaths() []string { return f.paths }
 func (f *fakeAdapter) Detect() (bool, string) {
 	return f.installed, f.active
 }
-func (f *fakeAdapter) Status(core.Profile) (core.ToolStatus, string, error) {
+func (f *fakeAdapter) Status(p core.Profile) (core.ToolStatus, string, error) {
+	if f.statusModel != "" {
+		if p.Model == f.statusModel {
+			return core.StatusAppliedByMintSwitch, "applied", nil
+		}
+		return core.StatusModifiedExternally, "modified", nil
+	}
 	return f.status, f.detail, f.statusErr
 }
 func (f *fakeAdapter) Apply(p core.Profile) (core.ApplyResult, error) {
@@ -579,6 +590,192 @@ func TestInstallCommandFailureReportsOutput(t *testing.T) {
 	}
 	if res.OK || res.Output != "npm ERR! boom" || res.Error == "" {
 		t.Fatalf("expected failed result carrying output: %+v", res)
+	}
+}
+
+// multiModelProfile is a valid profile carrying a Models list for per-tool
+// model tests. The selected Model is the first entry.
+func multiModelProfile(models ...string) core.Profile {
+	p := validProfile()
+	p.Model = models[0]
+	p.Models = models
+	return p
+}
+
+// TestSetToolModelPersistsAndValidates: a member model persists, a non-member is
+// rejected, "" clears the entry, and an unknown tool errors.
+func TestSetToolModelPersistsAndValidates(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel member: %v", err)
+	}
+	st, err := storeFrom(svc).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if st.ToolModels["alpha"] != "m2" {
+		t.Fatalf("ToolModels = %v, want alpha=m2", st.ToolModels)
+	}
+
+	if err := svc.SetToolModel("alpha", "nope"); err == nil {
+		t.Fatal("SetToolModel non-member want error")
+	}
+	// The rejected selection must not overwrite the previously stored one.
+	if st, _ := storeFrom(svc).Load(); st.ToolModels["alpha"] != "m2" {
+		t.Fatalf("rejected model mutated state: %v", st.ToolModels)
+	}
+
+	if err := svc.SetToolModel("alpha", ""); err != nil {
+		t.Fatalf("SetToolModel clear: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolModels["alpha"] != "" {
+		t.Fatalf("clear did not delete entry: %v", st.ToolModels)
+	}
+
+	if err := svc.SetToolModel("missing", "m2"); err == nil {
+		t.Fatal("SetToolModel unknown tool want error")
+	}
+}
+
+// TestApplyOneUsesPerToolModel: ApplyOne writes the per-tool model when one is
+// selected, and falls back to the profile default otherwise.
+func TestApplyOneUsesPerToolModel(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	// No selection yet: profile default.
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne default: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.Model != "gpt-test" {
+		t.Fatalf("default apply model = %+v, want gpt-test", a.lastApplied)
+	}
+
+	// With a selection: the chosen model is applied.
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne selected: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.Model != "m2" {
+		t.Fatalf("selected apply model = %+v, want m2", a.lastApplied)
+	}
+}
+
+// TestListToolsModelsAndSelectedModel: ListTools surfaces the profile model list
+// and the effective per-tool selected model.
+func TestListToolsModelsAndSelectedModel(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if !equalStrings(views[0].Models, []string{"gpt-test", "m2"}) {
+		t.Fatalf("Models = %v, want [gpt-test m2]", views[0].Models)
+	}
+	if views[0].SelectedModel != "gpt-test" {
+		t.Fatalf("SelectedModel = %q, want default gpt-test", views[0].SelectedModel)
+	}
+
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+	views, err = svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools 2: %v", err)
+	}
+	if views[0].SelectedModel != "m2" {
+		t.Fatalf("SelectedModel = %q, want m2", views[0].SelectedModel)
+	}
+}
+
+// TestListToolsNoProfileEmptyModelFields: with no saved profile, the listing
+// still works and reports empty Models/SelectedModel (zero-profile behavior).
+func TestListToolsNoProfileEmptyModelFields(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", status: core.StatusDefault}
+	svc := newTestService(t, a)
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(views[0].Models) != 0 || views[0].SelectedModel != "" {
+		t.Fatalf("expected empty model fields, got %+v", views[0])
+	}
+}
+
+// TestApplyThenListToolsStaysApplied: after applying a non-default per-tool
+// model, ListTools must recompute status against the SAME effective model so the
+// badge stays applied_by_mintswitch (no false modified_externally). The fake
+// adapter's statusModel simulates a Model-bearing fingerprint.
+func TestApplyThenListToolsStaysApplied(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.Model != "m2" {
+		t.Fatalf("applied model = %+v, want m2", a.lastApplied)
+	}
+	// The adapter persisted a fingerprint over the model it actually wrote.
+	a.statusModel = a.lastApplied.Model
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if views[0].Status != "applied_by_mintswitch" {
+		t.Fatalf("status = %q, want applied_by_mintswitch (effective model mismatch)", views[0].Status)
+	}
+}
+
+// TestSaveProfilePrunesToolModels: shrinking the Models list drops per-tool
+// selections that point to a now-absent model, while valid ones are kept.
+func TestSaveProfilePrunesToolModels(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	b := &fakeAdapter{id: "beta", name: "Beta"}
+	svc := newTestService(t, a, b)
+	if err := svc.SaveProfile(multiModelProfile("a", "b", "c")); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := svc.SetToolModel("alpha", "b"); err != nil {
+		t.Fatalf("SetToolModel alpha: %v", err)
+	}
+	if err := svc.SetToolModel("beta", "c"); err != nil {
+		t.Fatalf("SetToolModel beta: %v", err)
+	}
+
+	// Shrink Models to [a, b]; "c" is gone so beta's selection must be pruned.
+	if err := svc.SaveProfile(multiModelProfile("a", "b")); err != nil {
+		t.Fatalf("SaveProfile shrink: %v", err)
+	}
+	st, err := storeFrom(svc).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if st.ToolModels["alpha"] != "b" {
+		t.Fatalf("alpha selection should survive: %v", st.ToolModels)
+	}
+	if _, ok := st.ToolModels["beta"]; ok {
+		t.Fatalf("beta selection should be pruned: %v", st.ToolModels)
 	}
 }
 

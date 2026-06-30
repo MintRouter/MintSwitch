@@ -22,6 +22,10 @@ type State struct {
 	// CustomTools are the user-defined tool/provider definitions managed by the
 	// generic JSON-template adapter, in user-defined order.
 	CustomTools []core.CustomToolDef `json:"custom_tools,omitempty"`
+	// ToolModels maps a tool ID to the model the user chose for that tool,
+	// overriding the active profile's selected Model when applying. An absent or
+	// stale entry falls back to the profile default.
+	ToolModels map[string]string `json:"tool_models,omitempty"`
 }
 
 // Store loads and saves a [State] from a single JSON file.

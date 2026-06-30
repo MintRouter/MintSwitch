@@ -71,6 +71,14 @@ type ToolView struct {
 	// adapter, false for the built-ins. The UI hides Install/Uninstall for these
 	// and offers a Remove action instead.
 	Custom bool `json:"custom"`
+	// Models is the active profile's selectable model list (with backward-compat
+	// seeding from the selected Model), used to populate the per-tool dropdown.
+	// It is empty when no profile is saved.
+	Models []string `json:"models"`
+	// SelectedModel is the effective model that has been (or would be) applied to
+	// this tool: the per-tool override when set, otherwise the profile default.
+	// It is empty when no profile is saved.
+	SelectedModel string `json:"selected_model"`
 }
 
 // ToolOpResult is the per-tool outcome of a bulk apply/restore operation.
@@ -175,23 +183,41 @@ func (s *Service) ListTools() ([]ToolView, error) {
 	return out, nil
 }
 
-// viewFor builds a [ToolView] for a single adapter evaluated against profile p.
-// A per-tool Status error is surfaced in Detail rather than failing the caller.
-func (s *Service) viewFor(a core.ToolAdapter, p core.Profile) ToolView {
+// viewFor builds a [ToolView] for a single adapter. Status is evaluated against
+// the EFFECTIVE per-tool profile (so the recomputed fingerprint matches what was
+// applied, avoiding a false modified_externally). When no valid profile is saved
+// it falls back to the supplied zero profile and reports an empty SelectedModel,
+// preserving the prior zero-profile listing behaviour. A per-tool Status error
+// is surfaced in Detail rather than failing the caller.
+func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
+	p := fallback
+	selectedModel := ""
+	if eff, err := s.effectiveProfileFor(a.ID()); err == nil {
+		p = eff
+		selectedModel = eff.Model
+	}
 	installed, _ := a.Detect()
 	status, detail, serr := a.Status(p)
 	if serr != nil {
 		detail = serr.Error()
 	}
+	// Backward compat for profiles saved before Models existed: surface the
+	// single selected Model as a one-element list so the UI always has options.
+	models := p.Models
+	if len(models) == 0 && strings.TrimSpace(p.Model) != "" {
+		models = []string{p.Model}
+	}
 	_, isCustom := a.(*custom.Adapter)
 	return ToolView{
-		ID:          a.ID(),
-		Name:        a.Name(),
-		Installed:   installed,
-		Status:      status.String(),
-		Detail:      detail,
-		ConfigPaths: a.ConfigPaths(),
-		Custom:      isCustom,
+		ID:            a.ID(),
+		Name:          a.Name(),
+		Installed:     installed,
+		Status:        status.String(),
+		Detail:        detail,
+		ConfigPaths:   a.ConfigPaths(),
+		Custom:        isCustom,
+		Models:        models,
+		SelectedModel: selectedModel,
 	}
 }
 
@@ -241,7 +267,59 @@ func (s *Service) SaveProfile(p core.Profile) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
+	// Prune stale per-tool model selections: drop any entry whose chosen model is
+	// no longer in the new Models list so it falls back to the profile default.
+	if len(st.ToolModels) > 0 {
+		allowed := make(map[string]bool, len(p.Models))
+		for _, m := range p.Models {
+			allowed[m] = true
+		}
+		for tid, m := range st.ToolModels {
+			if !allowed[m] {
+				delete(st.ToolModels, tid)
+			}
+		}
+	}
 	st.ActiveProfile = &p
+	return s.store.Save(st)
+}
+
+// SetToolModel records (or clears) the per-tool model selection for toolID. An
+// empty model deletes the selection so the tool uses the profile default. A
+// non-empty model must be a member of the active profile's Models, otherwise a
+// clear error is returned. The toolID must be a registered tool. The selection
+// is persisted via the settings store.
+func (s *Service) SetToolModel(toolID, model string) error {
+	if _, ok := s.reg.Get(toolID); !ok {
+		return fmt.Errorf("service: unknown tool %q", toolID)
+	}
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		delete(st.ToolModels, toolID)
+		return s.store.Save(st)
+	}
+	p, err := s.activeProfile()
+	if err != nil {
+		return err
+	}
+	member := false
+	for _, m := range p.Models {
+		if m == model {
+			member = true
+			break
+		}
+	}
+	if !member {
+		return fmt.Errorf("service: model %q is not one of the profile's models", model)
+	}
+	if st.ToolModels == nil {
+		st.ToolModels = make(map[string]string)
+	}
+	st.ToolModels[toolID] = model
 	return s.store.Save(st)
 }
 
@@ -287,17 +365,44 @@ func (s *Service) activeProfile() (core.Profile, error) {
 	return p, nil
 }
 
-// ApplyOne applies the active profile to the single tool identified by toolID.
-// It first validates the saved profile and returns an error for an unknown tool
-// or an invalid/missing profile.
-func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
+// effectiveProfileFor returns the active profile with its selected Model
+// overridden by the per-tool selection for toolID, when one is set and is still
+// a member of the profile's Models. It reuses [Service.activeProfile] (which
+// normalizes the base URL and validates), so it returns that helper's error when
+// no valid profile is saved. A stale or absent selection is never an error: the
+// profile default Model is left in place. This single helper is used by Apply
+// and by status computation so the fingerprint stays consistent across both.
+func (s *Service) effectiveProfileFor(toolID string) (core.Profile, error) {
 	p, err := s.activeProfile()
 	if err != nil {
-		return core.ApplyResult{}, err
+		return core.Profile{}, err
 	}
+	st, err := s.store.Load()
+	if err != nil {
+		return core.Profile{}, err
+	}
+	if sel := st.ToolModels[toolID]; sel != "" {
+		for _, m := range p.Models {
+			if m == sel {
+				p.Model = sel
+				break
+			}
+		}
+	}
+	return p, nil
+}
+
+// ApplyOne applies the active profile to the single tool identified by toolID,
+// honoring the per-tool model selection. It first validates the saved profile
+// and returns an error for an unknown tool or an invalid/missing profile.
+func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 	a, ok := s.reg.Get(toolID)
 	if !ok {
 		return core.ApplyResult{}, fmt.Errorf("service: unknown tool %q", toolID)
+	}
+	p, err := s.effectiveProfileFor(toolID)
+	if err != nil {
+		return core.ApplyResult{}, err
 	}
 	return a.Apply(p)
 }
@@ -318,13 +423,17 @@ func (s *Service) RestoreOne(toolID string) (core.RestoreResult, error) {
 // (returning an error, no partial results) when no valid profile is saved.
 // Individual adapter failures are captured per tool and do not abort the run.
 func (s *Service) ApplyAll() ([]ToolOpResult, error) {
-	p, err := s.activeProfile()
-	if err != nil {
+	if _, err := s.activeProfile(); err != nil {
 		return nil, err
 	}
 	adapters := s.reg.All()
 	out := make([]ToolOpResult, 0, len(adapters))
 	for _, a := range adapters {
+		p, perr := s.effectiveProfileFor(a.ID())
+		if perr != nil {
+			out = append(out, ToolOpResult{ID: a.ID(), OK: false, Error: perr.Error()})
+			continue
+		}
 		res, aerr := a.Apply(p)
 		r := ToolOpResult{ID: a.ID(), OK: aerr == nil}
 		if aerr != nil {
