@@ -12,6 +12,7 @@ package codex
 
 import (
 	"os"
+	"os/exec"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -25,11 +26,14 @@ const authKeyName = "OPENAI_API_KEY"
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
+	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
+	// exec.LookPath.
+	lookPath func(string) (string, error)
 }
 
 // New constructs a Codex adapter using the injected resolver and backup engine.
 func New(r *paths.Resolver, e *backup.Engine) *Adapter {
-	return &Adapter{r: r, e: e}
+	return &Adapter{r: r, e: e, lookPath: exec.LookPath}
 }
 
 // ID returns the stable adapter identifier.
@@ -52,13 +56,22 @@ func (a *Adapter) ConfigPaths() []string {
 	return []string{a.configPath(), a.authPath()}
 }
 
-// Detect reports whether ~/.codex exists. The active path is config.toml.
+// Detect reports whether ~/.codex exists or the "codex" binary is found on PATH.
+// The ~/.codex dir is only created on first run, so the PATH check catches a
+// fresh "npm install -g" before the tool has been run. The active path is
+// config.toml.
 func (a *Adapter) Detect() (bool, string) {
-	info, err := os.Stat(a.dir())
-	if err != nil || !info.IsDir() {
-		return false, ""
+	if info, err := os.Stat(a.dir()); err == nil && info.IsDir() {
+		return true, a.configPath()
 	}
-	return true, a.configPath()
+	look := a.lookPath
+	if look == nil {
+		look = exec.LookPath
+	}
+	if _, err := look("codex"); err == nil {
+		return true, a.configPath()
+	}
+	return false, ""
 }
 
 // Status inspects config.toml relative to the given profile.

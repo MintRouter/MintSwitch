@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,7 +16,26 @@ func newAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
 	t.Helper()
 	home := t.TempDir()
 	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
-	return New(r, backup.NewEngine(r.BackupsDir())), r
+	a := New(r, backup.NewEngine(r.BackupsDir()))
+	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	return a, r
+}
+
+// TestDetectViaPATHBinary proves a fresh "npm install -g" is detected via the
+// "claude" binary on PATH even before ~/.claude or settings.json exist.
+func TestDetectViaPATHBinary(t *testing.T) {
+	a, _ := newAdapter(t)
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("expected not installed with empty home and no binary")
+	}
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	installed, path := a.Detect()
+	if !installed {
+		t.Fatal("expected installed via claude binary on PATH")
+	}
+	if filepath.Base(path) != "settings.json" {
+		t.Fatalf("Detect() path = %q, want settings.json", path)
+	}
 }
 
 func sampleProfile() core.Profile {

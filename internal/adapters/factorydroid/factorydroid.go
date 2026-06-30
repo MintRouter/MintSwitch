@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"mintswitch/internal/backup"
@@ -49,11 +50,14 @@ const (
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
+	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
+	// exec.LookPath.
+	lookPath func(string) (string, error)
 }
 
 // New returns an Adapter that resolves paths via r and backs up via e.
 func New(r *paths.Resolver, e *backup.Engine) *Adapter {
-	return &Adapter{r: r, e: e}
+	return &Adapter{r: r, e: e, lookPath: exec.LookPath}
 }
 
 // ID returns the stable adapter identifier.
@@ -72,14 +76,23 @@ func (a *Adapter) configDir() string { return a.r.Join(".factory") }
 func (a *Adapter) ConfigPaths() []string { return []string{a.settingsPath()} }
 
 // Detect reports whether Factory Droid is installed by checking for the
-// ~/.factory directory or its settings.json file. The active path is always
-// settings.json.
+// ~/.factory directory or its settings.json file, or the "droid" binary on
+// PATH. The ~/.factory dir/settings.json are only created on first run, so the
+// PATH check catches a fresh "npm install -g" before the tool has been run. The
+// active path is always settings.json.
 func (a *Adapter) Detect() (bool, string) {
 	path := a.settingsPath()
 	if fi, err := os.Stat(a.configDir()); err == nil && fi.IsDir() {
 		return true, path
 	}
 	if _, err := os.Stat(path); err == nil {
+		return true, path
+	}
+	look := a.lookPath
+	if look == nil {
+		look = exec.LookPath
+	}
+	if _, err := look("droid"); err == nil {
 		return true, path
 	}
 	return false, path

@@ -2,6 +2,7 @@ package factorydroid
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,26 @@ func newTestAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
 	home := t.TempDir()
 	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
 	e := backup.NewEngine(r.BackupsDir())
-	return New(r, e), r
+	a := New(r, e)
+	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	return a, r
+}
+
+// TestDetectViaPATHBinary proves a fresh "npm install -g" is detected via the
+// "droid" binary on PATH even before ~/.factory or settings.json exist.
+func TestDetectViaPATHBinary(t *testing.T) {
+	a, _ := newTestAdapter(t)
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("expected not installed with empty home and no binary")
+	}
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
+	installed, path := a.Detect()
+	if !installed {
+		t.Fatal("expected installed via droid binary on PATH")
+	}
+	if filepath.Base(path) != "settings.json" {
+		t.Fatalf("Detect() path = %q, want settings.json", path)
+	}
 }
 
 func sampleProfile() core.Profile {

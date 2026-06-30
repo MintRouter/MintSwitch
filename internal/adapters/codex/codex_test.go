@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,26 @@ func newAdapter(t *testing.T) (*Adapter, string) {
 	t.Helper()
 	home := t.TempDir()
 	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
-	return New(r, backup.NewEngine(r.BackupsDir())), home
+	a := New(r, backup.NewEngine(r.BackupsDir()))
+	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	return a, home
+}
+
+// TestDetectViaPATHBinary proves a fresh "npm install -g" is detected via the
+// "codex" binary on PATH even before ~/.codex exists.
+func TestDetectViaPATHBinary(t *testing.T) {
+	a, _ := newAdapter(t)
+	if ok, _ := a.Detect(); ok {
+		t.Fatal("expected not detected with empty home and no binary")
+	}
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	ok, active := a.Detect()
+	if !ok {
+		t.Fatal("expected detected via codex binary on PATH")
+	}
+	if !strings.HasSuffix(active, filepath.Join(".codex", "config.toml")) {
+		t.Fatalf("unexpected active path %q", active)
+	}
 }
 
 func sampleProfile() core.Profile {
