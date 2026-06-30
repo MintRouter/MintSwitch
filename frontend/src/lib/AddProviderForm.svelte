@@ -1,10 +1,15 @@
 <script lang="ts">
   // Modal for adding a user-defined custom provider. Collects Name, Config file
-  // path, an optional Binary name, and a JSON template that uses the placeholders
-  // ${API_KEY}/${BASE_URL}/${MODEL}. Validation is client-side (name + path
-  // required, template must be a JSON object); any backend error from
-  // AddCustomTool is surfaced read-only via `backendError`. Secrets are never
-  // logged — the template only ever holds placeholder tokens, not real values.
+  // path, an optional Binary name, and three optional "key path" inputs that say
+  // WHERE each profile value is written in the config file using dot-notation
+  // (e.g. `apiKey`, `baseURL`, `model`, or `provider.acme.options.apiKey`). On
+  // submit the form builds the JSON `template` itself: each filled path becomes a
+  // nested object whose leaf value is the matching placeholder token
+  // (${API_KEY}/${BASE_URL}/${MODEL}), which the backend (AddCustomTool) leaves
+  // unchanged and substitutes from the saved profile on Apply. Validation is
+  // client-side (name + config path required, at least one key path, no empty
+  // segments, no conflicting paths); any backend error is surfaced read-only via
+  // `backendError`. Secrets are never logged — only placeholder tokens are built.
   interface Props {
     open: boolean;
     busy: boolean;
@@ -14,28 +19,22 @@
   }
   let { open, busy, backendError, onSubmit, onCancel }: Props = $props();
 
-  // A helpful, opencode/claude-style example wiring all three placeholders, so a
-  // user can edit rather than start from a blank textarea.
-  const DEFAULT_TEMPLATE = `{
-  "model": "\${MODEL}",
-  "provider": {
-    "mintswitch": {
-      "name": "MintSwitch",
-      "options": {
-        "baseURL": "\${BASE_URL}",
-        "apiKey": "\${API_KEY}"
-      },
-      "models": {
-        "\${MODEL}": {}
-      }
-    }
-  }
-}`;
+  // Placeholder tokens recognised by the backend (internal/core/customtool.go).
+  // Defined as plain (non-template) strings so the `${…}` stays literal.
+  const PLACEHOLDER_API_KEY = "${API_KEY}";
+  const PLACEHOLDER_BASE_URL = "${BASE_URL}";
+  const PLACEHOLDER_MODEL = "${MODEL}";
+
+  const DEFAULT_API_KEY_PATH = "apiKey";
+  const DEFAULT_BASE_URL_PATH = "baseURL";
+  const DEFAULT_MODEL_PATH = "model";
 
   let name = $state("");
   let configPath = $state("");
   let binaryName = $state("");
-  let template = $state(DEFAULT_TEMPLATE);
+  let apiKeyPath = $state(DEFAULT_API_KEY_PATH);
+  let baseUrlPath = $state(DEFAULT_BASE_URL_PATH);
+  let modelPath = $state(DEFAULT_MODEL_PATH);
   let errors = $state<Record<string, string>>({});
 
   let dialogEl = $state<HTMLDivElement | null>(null);
@@ -48,29 +47,75 @@
       name = "";
       configPath = "";
       binaryName = "";
-      template = DEFAULT_TEMPLATE;
+      apiKeyPath = DEFAULT_API_KEY_PATH;
+      baseUrlPath = DEFAULT_BASE_URL_PATH;
+      modelPath = DEFAULT_MODEL_PATH;
       errors = {};
       queueMicrotask(() => nameEl?.focus());
     }
   });
 
+  // Build the nested template object from the filled key-paths, recording any
+  // per-field path errors (empty segments or conflicts) into `next`. Returns null
+  // when no path is filled (caller records the "at least one path" error).
+  function buildTemplateObject(next: Record<string, string>): Record<string, unknown> | null {
+    const root: Record<string, unknown> = {};
+    const entries: Array<{ raw: string; token: string; field: string }> = [
+      { raw: apiKeyPath.trim(), token: PLACEHOLDER_API_KEY, field: "apiKeyPath" },
+      { raw: baseUrlPath.trim(), token: PLACEHOLDER_BASE_URL, field: "baseUrlPath" },
+      { raw: modelPath.trim(), token: PLACEHOLDER_MODEL, field: "modelPath" },
+    ];
+    let anyFilled = false;
+    for (const { raw, token, field } of entries) {
+      if (!raw) continue;
+      anyFilled = true;
+      const segs = raw.split(".");
+      if (segs.some((s) => s.trim() === "")) {
+        next[field] = "Remove empty path segments (no leading, trailing or doubled dots).";
+        continue;
+      }
+      let node = root;
+      let conflict = false;
+      for (let i = 0; i < segs.length - 1; i++) {
+        const k = segs[i];
+        const existing = node[k];
+        if (existing === undefined) {
+          node[k] = {};
+        } else if (typeof existing !== "object" || existing === null) {
+          conflict = true;
+          break;
+        }
+        node = node[k] as Record<string, unknown>;
+      }
+      if (conflict) {
+        next[field] = "This path conflicts with another field's path.";
+        continue;
+      }
+      const leaf = segs[segs.length - 1];
+      if (leaf in node) {
+        next[field] = "This path conflicts with another field's path.";
+        continue;
+      }
+      node[leaf] = token;
+    }
+    if (!anyFilled) {
+      next.paths = "Fill at least one key path (API key, Base URL or Model).";
+      return null;
+    }
+    return root;
+  }
+
+  let pendingTemplate = "";
+
   function validate(): boolean {
     const next: Record<string, string> = {};
     if (!name.trim()) next.name = "A name is required.";
     if (!configPath.trim()) next.configPath = "A config file path is required.";
-    const t = template.trim();
-    if (!t) {
-      next.template = "A JSON template is required.";
+    const obj = buildTemplateObject(next);
+    if (obj && !next.apiKeyPath && !next.baseUrlPath && !next.modelPath) {
+      pendingTemplate = JSON.stringify(obj, null, 2);
     } else {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(t);
-      } catch {
-        next.template = "Template must be valid JSON.";
-      }
-      if (!("template" in next) && (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))) {
-        next.template = "Template must be a JSON object (e.g. { … }).";
-      }
+      pendingTemplate = "";
     }
     errors = next;
     return Object.keys(next).length === 0;
@@ -83,7 +128,7 @@
       name: name.trim(),
       configPath: configPath.trim(),
       binaryName: binaryName.trim(),
-      template: template,
+      template: pendingTemplate,
     });
   }
 
@@ -96,7 +141,7 @@
     }
     if (e.key !== "Tab" || !dialogEl) return;
     const focusables = dialogEl.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), textarea:not([disabled])',
+      'button:not([disabled]), input:not([disabled])',
     );
     if (focusables.length === 0) return;
     const first = focusables[0];
@@ -145,17 +190,31 @@
         </div>
 
         <div class="field">
-          <label class="field-label" for="ap-template">JSON template</label>
-          <textarea class="field-input field-textarea" id="ap-template" bind:value={template}
-            spellcheck="false" autocapitalize="off" autocomplete="off" rows="10"
-            aria-invalid={!!errors.template} aria-describedby={errors.template ? "ap-err-template" : "ap-hint-template"}
-          ></textarea>
-          {#if errors.template}
-            <p class="field-error" id="ap-err-template">{errors.template}</p>
-          {:else}
-            <p class="field-hint" id="ap-hint-template">Use <code>{"${API_KEY}"}</code>, <code>{"${BASE_URL}"}</code> and <code>{"${MODEL}"}</code> — they're filled from your saved profile on Apply.</p>
-          {/if}
+          <label class="field-label" for="ap-apikey">API key path <span class="opt">(optional)</span></label>
+          <input class="field-input" id="ap-apikey" type="text" bind:value={apiKeyPath}
+            placeholder="apiKey" autocomplete="off" spellcheck="false"
+            aria-invalid={!!errors.apiKeyPath} aria-describedby={errors.apiKeyPath ? "ap-err-apikey" : undefined} />
+          {#if errors.apiKeyPath}<p class="field-error" id="ap-err-apikey">{errors.apiKeyPath}</p>{/if}
         </div>
+
+        <div class="field">
+          <label class="field-label" for="ap-baseurl">Base URL path <span class="opt">(optional)</span></label>
+          <input class="field-input" id="ap-baseurl" type="text" bind:value={baseUrlPath}
+            placeholder="baseURL" autocomplete="off" spellcheck="false"
+            aria-invalid={!!errors.baseUrlPath} aria-describedby={errors.baseUrlPath ? "ap-err-baseurl" : undefined} />
+          {#if errors.baseUrlPath}<p class="field-error" id="ap-err-baseurl">{errors.baseUrlPath}</p>{/if}
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="ap-model">Model path <span class="opt">(optional)</span></label>
+          <input class="field-input" id="ap-model" type="text" bind:value={modelPath}
+            placeholder="model" autocomplete="off" spellcheck="false"
+            aria-invalid={!!errors.modelPath} aria-describedby={errors.modelPath ? "ap-err-model" : undefined} />
+          {#if errors.modelPath}<p class="field-error" id="ap-err-model">{errors.modelPath}</p>{/if}
+        </div>
+
+        <p class="field-hint">Mỗi ô là nơi giá trị từ hồ sơ được ghi vào file cấu hình khi Apply. Dùng dấu chấm để lồng: <code>provider.acme.options.apiKey</code>.</p>
+        {#if errors.paths}<p class="field-error">{errors.paths}</p>{/if}
 
         {#if backendError}
           <p class="field-error backend-error" role="alert">{backendError}</p>
@@ -187,7 +246,7 @@
     --wails-draggable: no-drag;
   }
   /* The dialog is capped to the viewport; the form body scrolls within it so a
-     long template never breaks the no-scroll app shell. */
+     tall form never breaks the no-scroll app shell. */
   .dialog {
     width: 100%;
     max-width: 32rem;
@@ -217,16 +276,6 @@
     padding-right: 0.25rem;
   }
   .opt { color: var(--muted); font-weight: 400; }
-  .field-textarea {
-    min-height: 9rem;
-    max-height: 22rem;
-    resize: vertical;
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.82rem;
-    line-height: 1.5;
-    white-space: pre;
-    overflow: auto;
-  }
   .field-hint code {
     font-size: 0.74rem;
     padding: 0.05rem 0.25rem;
