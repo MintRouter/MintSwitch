@@ -124,10 +124,13 @@ function isLocalHostname(h: string): boolean {
     if (Number.isInteger(second) && second >= 16 && second <= 31) return true;
   }
   // IPv6 link-local (fe80::/10) and unique-local (fc00::/7 = fc/fd) keep http,
-  // matching the Go backend's net.IP IsLinkLocalUnicast / IsPrivate checks.
+  // matching the Go backend's net.IP IsLinkLocalUnicast / IsPrivate checks. Gate
+  // on a ":" so IPv6 literals match while domain names like "fc2.com" do not.
   const lower = host.toLowerCase();
-  if (lower.startsWith("fe80")) return true;
-  if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+  if (lower.includes(":")) {
+    if (lower.startsWith("fe80")) return true;
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+  }
   return false;
 }
 
