@@ -58,33 +58,16 @@ func (a *Adapter) Name() string { return name }
 // settingsPath returns the absolute path to ~/.claude/settings.json.
 func (a *Adapter) settingsPath() string { return a.r.Join(".claude", "settings.json") }
 
-// configDir returns the absolute path to ~/.claude.
-func (a *Adapter) configDir() string { return a.r.Join(".claude") }
-
 // ConfigPaths returns the config files this adapter manages.
 func (a *Adapter) ConfigPaths() []string { return []string{a.settingsPath()} }
 
-// Detect reports whether Claude Code is installed by checking for the ~/.claude
-// directory or its settings.json file, or the "claude" binary on PATH. The
-// ~/.claude dir/settings.json are only created on first run, so the PATH check
-// catches a fresh "npm install -g" before the tool has been run. The active path
-// is always settings.json.
+// Detect reports whether Claude Code is installed, defined solely as the
+// "claude" CLI binary being resolvable (via PATH or a curated set of common
+// bin dirs). A leftover ~/.claude dir/settings.json is not an installed signal,
+// so an uninstall is reflected. The active path is always settings.json and is
+// returned even when not installed, since Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
-	path := a.settingsPath()
-	if _, err := os.Stat(path); err == nil {
-		return true, path
-	}
-	if fi, err := os.Stat(a.configDir()); err == nil && fi.IsDir() {
-		return true, path
-	}
-	look := a.lookPath
-	if look == nil {
-		look = exec.LookPath
-	}
-	if _, err := look("claude"); err == nil {
-		return true, path
-	}
-	return false, path
+	return a.r.BinaryResolvable(a.lookPath, "claude"), a.settingsPath()
 }
 
 // Status inspects settings.json relative to profile p. See the package contract

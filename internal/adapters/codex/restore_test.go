@@ -77,6 +77,7 @@ func TestRestoreNoBackupNoOp(t *testing.T) {
 
 func TestApplyIdempotent(t *testing.T) {
 	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
 	p := sampleProfile()
 	if _, err := a.Apply(p); err != nil {
 		t.Fatal(err)

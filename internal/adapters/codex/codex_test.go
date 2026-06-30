@@ -49,17 +49,23 @@ func sampleProfile() core.Profile {
 	}
 }
 
+// TestDetect proves the binary-based contract: a leftover ~/.codex dir is NOT
+// an installed signal; only a resolvable "codex" binary is.
 func TestDetect(t *testing.T) {
 	a, home := newAdapter(t)
 	if ok, _ := a.Detect(); ok {
-		t.Fatal("expected not detected before ~/.codex exists")
+		t.Fatal("expected not detected before codex binary is resolvable")
 	}
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if ok, _ := a.Detect(); ok {
+		t.Fatal("~/.codex present + binary absent must be NOT detected")
+	}
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
 	ok, active := a.Detect()
 	if !ok {
-		t.Fatal("expected detected after ~/.codex created")
+		t.Fatal("expected detected once codex binary is resolvable")
 	}
 	if !strings.HasSuffix(active, filepath.Join(".codex", "config.toml")) {
 		t.Fatalf("unexpected active path %q", active)
@@ -74,6 +80,8 @@ func TestStatusTransitions(t *testing.T) {
 		t.Fatalf("want NotInstalled, got %v", st)
 	}
 
+	// Binary resolvable from here so Status reaches the config-reading branch.
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
 	}

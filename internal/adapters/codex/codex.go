@@ -11,7 +11,6 @@
 package codex
 
 import (
-	"os"
 	"os/exec"
 
 	"mintswitch/internal/backup"
@@ -48,30 +47,18 @@ func (a *Adapter) configPath() string { return a.r.Join(".codex", "config.toml")
 // authPath returns the absolute path to ~/.codex/auth.json.
 func (a *Adapter) authPath() string { return a.r.Join(".codex", "auth.json") }
 
-// dir returns the ~/.codex directory used for detection.
-func (a *Adapter) dir() string { return a.r.Join(".codex") }
-
 // ConfigPaths returns the config files this adapter manages.
 func (a *Adapter) ConfigPaths() []string {
 	return []string{a.configPath(), a.authPath()}
 }
 
-// Detect reports whether ~/.codex exists or the "codex" binary is found on PATH.
-// The ~/.codex dir is only created on first run, so the PATH check catches a
-// fresh "npm install -g" before the tool has been run. The active path is
-// config.toml.
+// Detect reports whether Codex is installed, defined solely as the "codex" CLI
+// binary being resolvable (via PATH or a curated set of common bin dirs). A
+// leftover ~/.codex dir is not an installed signal, so an uninstall is
+// reflected. The active path is always config.toml and is returned even when not
+// installed, since Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
-	if info, err := os.Stat(a.dir()); err == nil && info.IsDir() {
-		return true, a.configPath()
-	}
-	look := a.lookPath
-	if look == nil {
-		look = exec.LookPath
-	}
-	if _, err := look("codex"); err == nil {
-		return true, a.configPath()
-	}
-	return false, ""
+	return a.r.BinaryResolvable(a.lookPath, "codex"), a.configPath()
 }
 
 // Status inspects config.toml relative to the given profile.

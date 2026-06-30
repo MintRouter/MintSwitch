@@ -62,25 +62,13 @@ func (a *Adapter) ConfigPaths() []string {
 	return []string{a.configPath()}
 }
 
-// Detect reports whether OpenCode appears installed. It is considered installed
-// if its global config file or directory exists, or if the "opencode" binary is
-// found on PATH. The active path is always the global config file.
+// Detect reports whether OpenCode is installed, defined solely as the "opencode"
+// CLI binary being resolvable (via PATH or a curated set of common bin dirs). A
+// leftover global config file/dir is not an installed signal, so an uninstall is
+// reflected. The active path is always the global config file and is returned
+// even when not installed, since Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
-	path := a.configPath()
-	if _, err := os.Stat(path); err == nil {
-		return true, path
-	}
-	if _, err := os.Stat(filepath.Dir(path)); err == nil {
-		return true, path
-	}
-	look := a.lookPath
-	if look == nil {
-		look = exec.LookPath
-	}
-	if _, err := look("opencode"); err == nil {
-		return true, path
-	}
-	return false, path
+	return a.r.BinaryResolvable(a.lookPath, "opencode"), a.configPath()
 }
 
 // Status inspects the current config relative to the given profile.

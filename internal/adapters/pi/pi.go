@@ -65,29 +65,16 @@ func (a *Adapter) Name() string { return name }
 // modelsPath returns the absolute path to ~/.pi/agent/models.json.
 func (a *Adapter) modelsPath() string { return a.r.Join(".pi", "agent", "models.json") }
 
-// configDir returns the absolute path to ~/.pi.
-func (a *Adapter) configDir() string { return a.r.Join(".pi") }
-
 // ConfigPaths returns the config files this adapter manages.
 func (a *Adapter) ConfigPaths() []string { return []string{a.modelsPath()} }
 
-// Detect reports whether Pi is installed by checking for the ~/.pi directory or
-// the "pi" binary on PATH. The ~/.pi dir is only created on first run, so the
-// PATH check catches a fresh "npm install -g" before the tool has been run. The
-// active path is always models.json.
+// Detect reports whether Pi is installed, defined solely as the "pi" CLI binary
+// being resolvable (via PATH or a curated set of common bin dirs). A leftover
+// ~/.pi dir is not an installed signal, so an uninstall is reflected. The active
+// path is always models.json and is returned even when not installed, since
+// Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
-	path := a.modelsPath()
-	if fi, err := os.Stat(a.configDir()); err == nil && fi.IsDir() {
-		return true, path
-	}
-	look := a.lookPath
-	if look == nil {
-		look = exec.LookPath
-	}
-	if _, err := look("pi"); err == nil {
-		return true, path
-	}
-	return false, path
+	return a.r.BinaryResolvable(a.lookPath, "pi"), a.modelsPath()
 }
 
 // Status inspects models.json relative to profile p. See the package contract

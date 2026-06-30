@@ -51,6 +51,8 @@ func TestIDName(t *testing.T) {
 	}
 }
 
+// TestDetect proves the binary-based contract: a leftover global config dir is
+// NOT an installed signal; only a resolvable "opencode" binary is.
 func TestDetect(t *testing.T) {
 	a, r := newAdapter(t)
 	if installed, _ := a.Detect(); installed {
@@ -59,14 +61,13 @@ func TestDetect(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(a.configPath()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if installed, path := a.Detect(); !installed || path != r.ConfigJoin("opencode", "opencode.json") {
-		t.Fatalf("expected installed via config dir, got %v %q", installed, path)
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("config dir present + binary absent must be NOT installed")
 	}
 
-	b, _ := newAdapter(t)
-	b.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
-	if installed, _ := b.Detect(); !installed {
-		t.Fatal("expected installed via PATH binary")
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	if installed, path := a.Detect(); !installed || path != r.ConfigJoin("opencode", "opencode.json") {
+		t.Fatalf("expected installed via PATH binary, got %v %q", installed, path)
 	}
 }
 
@@ -76,6 +77,8 @@ func TestApplyNewFileAndStatus(t *testing.T) {
 	if st, _, _ := a.Status(p); st != core.StatusNotInstalled {
 		t.Fatalf("expected NotInstalled, got %v", st)
 	}
+	// Binary resolvable from here so Status reaches the config-reading branch.
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
 	res, err := a.Apply(p)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -177,6 +180,7 @@ func TestRestoreRevertsExisting(t *testing.T) {
 
 func TestReApplyIdempotent(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
 	p := sampleProfile()
 	if _, err := a.Apply(p); err != nil {
 		t.Fatalf("apply1: %v", err)

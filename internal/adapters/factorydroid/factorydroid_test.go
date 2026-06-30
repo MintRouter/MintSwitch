@@ -93,47 +93,26 @@ func TestIDName(t *testing.T) {
 	}
 }
 
+// TestDetect proves the binary-based contract: a leftover ~/.factory dir or
+// settings.json is NOT an installed signal; only a resolvable "droid" binary is.
 func TestDetect(t *testing.T) {
-	tests := []struct {
-		name  string
-		setup func(t *testing.T, r *paths.Resolver)
-		want  bool
-	}{
-		{name: "absent", setup: func(t *testing.T, r *paths.Resolver) {}, want: false},
-		{
-			name: "dir only",
-			setup: func(t *testing.T, r *paths.Resolver) {
-				if err := os.MkdirAll(r.Join(".factory"), 0o700); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: true,
-		},
-		{
-			name: "file present",
-			setup: func(t *testing.T, r *paths.Resolver) {
-				if err := os.MkdirAll(r.Join(".factory"), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(r.Join(".factory", "settings.json"), []byte("{}"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: true,
-		},
+	a, r := newTestAdapter(t)
+
+	// Config dir + settings.json present but binary absent ⇒ NOT installed.
+	if err := os.MkdirAll(r.Join(".factory"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			a, r := newTestAdapter(t)
-			tc.setup(t, r)
-			got, path := a.Detect()
-			if got != tc.want {
-				t.Errorf("Detect() installed = %v, want %v", got, tc.want)
-			}
-			if filepath.Base(path) != "settings.json" {
-				t.Errorf("Detect() path = %q, want settings.json", path)
-			}
-		})
+	if err := os.WriteFile(r.Join(".factory", "settings.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if installed, path := a.Detect(); installed {
+		t.Fatalf("config present + binary absent must be NOT installed, got installed (path %q)", path)
+	}
+
+	// Binary resolvable ⇒ installed; active path is still settings.json.
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
+	if installed, path := a.Detect(); !installed || filepath.Base(path) != "settings.json" {
+		t.Fatalf("Detect() = %v, %q; want installed + settings.json", installed, path)
 	}
 }
 
@@ -274,6 +253,7 @@ func TestStatus(t *testing.T) {
 
 	t.Run("default (no marker)", func(t *testing.T) {
 		a, r := newTestAdapter(t)
+		a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 		if err := os.MkdirAll(r.Join(".factory"), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -291,6 +271,7 @@ func TestStatus(t *testing.T) {
 
 	t.Run("applied", func(t *testing.T) {
 		a, _ := newTestAdapter(t)
+		a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 		if _, err := a.Apply(p); err != nil {
 			t.Fatal(err)
 		}
@@ -305,6 +286,7 @@ func TestStatus(t *testing.T) {
 
 	t.Run("modified externally", func(t *testing.T) {
 		a, _ := newTestAdapter(t)
+		a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 		if _, err := a.Apply(p); err != nil {
 			t.Fatal(err)
 		}

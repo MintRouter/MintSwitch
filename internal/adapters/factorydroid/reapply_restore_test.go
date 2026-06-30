@@ -25,6 +25,7 @@ func secondProfile() core.Profile {
 // Restore returns the config byte-for-byte to its pristine pre-MintSwitch state.
 func TestReApplyThenRestoreReturnsToPristine(t *testing.T) {
 	a, _ := newTestAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 	path := a.settingsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

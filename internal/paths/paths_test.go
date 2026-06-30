@@ -1,6 +1,8 @@
 package paths
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -63,5 +65,41 @@ func TestNewResolverUsesXDGEnv(t *testing.T) {
 	}
 	if filepath.Base(r.DataDir) != "mintswitch" {
 		t.Errorf("DataDir base = %q, want mintswitch", filepath.Base(r.DataDir))
+	}
+}
+
+// TestBinaryResolvable covers the no-subprocess binary lookup: a lookPath hit,
+// an executable file in a curated HOME-derived dir (the narrow-PATH GUI case),
+// and the negative cases (absent, and a non-executable file).
+func TestBinaryResolvable(t *testing.T) {
+	home := t.TempDir()
+	r := &Resolver{Home: home}
+	miss := func(string) (string, error) { return "", errors.New("not found") }
+
+	if r.BinaryResolvable(miss, "droid") {
+		t.Fatal("expected not resolvable with empty home and missing PATH")
+	}
+
+	hit := func(string) (string, error) { return "/usr/local/bin/droid", nil }
+	if !r.BinaryResolvable(hit, "droid") {
+		t.Fatal("expected resolvable via lookPath hit")
+	}
+
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "droid"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !r.BinaryResolvable(miss, "droid") {
+		t.Fatal("expected resolvable via curated ~/.local/bin even with missing PATH")
+	}
+
+	if err := os.WriteFile(filepath.Join(binDir, "plain"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r.BinaryResolvable(miss, "plain") {
+		t.Fatal("expected a non-executable file to not count as resolvable")
 	}
 }

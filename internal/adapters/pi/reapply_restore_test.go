@@ -25,6 +25,7 @@ func secondProfile() core.Profile {
 // Restore returns the config byte-for-byte to its pristine pre-MintSwitch state.
 func TestReApplyThenRestoreReturnsToPristine(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/pi", nil }
 	path := a.modelsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -68,10 +69,6 @@ func TestReApplyThenRestoreReturnsToPristine(t *testing.T) {
 func TestReApplyThenRestoreAbsentFile(t *testing.T) {
 	a, _ := newAdapter(t)
 	path := a.modelsPath()
-	// Pi only detects via the ~/.pi directory; create it so Status is meaningful.
-	if err := os.MkdirAll(a.configDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	if _, err := a.Apply(sampleProfile()); err != nil {
 		t.Fatal(err)

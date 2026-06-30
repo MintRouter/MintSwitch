@@ -84,6 +84,8 @@ func TestIDAndName(t *testing.T) {
 	}
 }
 
+// TestDetect proves the binary-based contract: a leftover ~/.pi dir is NOT an
+// installed signal; only a resolvable "pi" binary is.
 func TestDetect(t *testing.T) {
 	a, r := newAdapter(t)
 	if installed, _ := a.Detect(); installed {
@@ -92,8 +94,12 @@ func TestDetect(t *testing.T) {
 	if err := os.MkdirAll(r.Join(".pi"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("~/.pi present + binary absent must be NOT installed")
+	}
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/pi", nil }
 	if installed, _ := a.Detect(); !installed {
-		t.Fatal("expected installed once .pi dir exists")
+		t.Fatal("expected installed once pi binary is resolvable")
 	}
 }
 
@@ -104,6 +110,8 @@ func TestStatusTransitions(t *testing.T) {
 	if st, _, _ := a.Status(p); st != core.StatusNotInstalled {
 		t.Fatalf("want NotInstalled, got %v", st)
 	}
+	// Binary resolvable from here so Status reaches the config-reading branch.
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/pi", nil }
 	if _, err := a.Apply(p); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -119,6 +127,7 @@ func TestStatusTransitions(t *testing.T) {
 
 func TestStatusDefaultWhenNoMarker(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/pi", nil }
 	path := a.modelsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -235,6 +244,7 @@ func TestRestoreNoBackupIsNoOp(t *testing.T) {
 
 func TestApplyIdempotent(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/pi", nil }
 	p := sampleProfile()
 	if _, err := a.Apply(p); err != nil {
 		t.Fatalf("apply 1: %v", err)

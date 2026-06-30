@@ -26,6 +26,7 @@ func secondProfile() core.Profile {
 // pre-MintSwitch state.
 func TestReApplyThenRestoreReturnsToPristine(t *testing.T) {
 	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
