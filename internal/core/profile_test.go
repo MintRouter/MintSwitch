@@ -20,6 +20,9 @@ func TestProfileValidate(t *testing.T) {
 		{"missing scheme", Profile{APIKey: "k", BaseURL: "example.com/v1", Model: "m"}, true},
 		{"no host", Profile{APIKey: "k", BaseURL: "https://", Model: "m"}, true},
 		{"unparseable url", Profile{APIKey: "k", BaseURL: "http://%zz", Model: "m"}, true},
+		{"model is one of models", Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: []string{"x", "m"}}, false},
+		{"empty models ok", Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: nil}, false},
+		{"model not in models", Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: []string{"x", "y"}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

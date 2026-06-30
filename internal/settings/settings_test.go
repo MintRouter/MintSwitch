@@ -3,6 +3,7 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
@@ -38,7 +39,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if out.ActiveProfile == nil || *out.ActiveProfile != *in.ActiveProfile {
+	if out.ActiveProfile == nil || !reflect.DeepEqual(*out.ActiveProfile, *in.ActiveProfile) {
 		t.Fatalf("profile round-trip mismatch: %+v vs %+v", out.ActiveProfile, in.ActiveProfile)
 	}
 }

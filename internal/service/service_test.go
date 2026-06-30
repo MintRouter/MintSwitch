@@ -196,8 +196,144 @@ func TestGetProfileEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetProfile: %v", err)
 	}
-	if view.HasKey || view.Model != "" {
+	if view.HasKey || view.Model != "" || len(view.Models) != 0 {
 		t.Fatalf("expected zero ProfileView, got %+v", view)
+	}
+}
+
+// equalStrings reports whether two string slices are element-wise equal.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestSaveProfileBackwardCompatModels: a profile saved with only a Model (no
+// Models) is read back with Models seeded from the selected Model.
+func TestSaveProfileBackwardCompatModels(t *testing.T) {
+	svc := newTestService(t)
+	// Save through the store directly to simulate pre-Models on-disk state.
+	st := &settings.State{ActiveProfile: &core.Profile{
+		APIKey: "sk-test", BaseURL: "https://api.example.com/v1", Model: "gpt-old",
+	}}
+	if err := storeFrom(svc).Save(st); err != nil {
+		t.Fatalf("seed save: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if !equalStrings(view.Models, []string{"gpt-old"}) {
+		t.Fatalf("backward-compat Models = %v, want [gpt-old]", view.Models)
+	}
+	if view.Model != "gpt-old" {
+		t.Fatalf("Model = %q, want gpt-old", view.Model)
+	}
+}
+
+// TestSaveProfileNormalizesModels exercises trim, drop-empty, de-dupe (first
+// seen order) and prepending the selected model when it is missing.
+func TestSaveProfileNormalizesModels(t *testing.T) {
+	svc := newTestService(t)
+	p := validProfile()
+	p.Model = "sel"
+	p.Models = []string{" a ", "b", "a", "", "  ", "b"}
+	if err := svc.SaveProfile(p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if !equalStrings(view.Models, []string{"sel", "a", "b"}) {
+		t.Fatalf("normalized Models = %v, want [sel a b]", view.Models)
+	}
+	if view.Model != "sel" {
+		t.Fatalf("Model = %q, want sel", view.Model)
+	}
+}
+
+// TestSaveProfileModelAlreadyInModels: when the selected model is already a
+// member it is not duplicated and order is preserved.
+func TestSaveProfileModelAlreadyInModels(t *testing.T) {
+	svc := newTestService(t)
+	p := validProfile()
+	p.Model = "b"
+	p.Models = []string{"a", "b", "c"}
+	if err := svc.SaveProfile(p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if !equalStrings(view.Models, []string{"a", "b", "c"}) {
+		t.Fatalf("Models = %v, want [a b c]", view.Models)
+	}
+}
+
+// TestSaveProfileEmptyModelsSeededFromModel: an empty Models list with a
+// selected Model becomes [Model].
+func TestSaveProfileEmptyModelsSeededFromModel(t *testing.T) {
+	svc := newTestService(t)
+	p := validProfile()
+	p.Model = "only"
+	p.Models = []string{"  ", ""}
+	if err := svc.SaveProfile(p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if !equalStrings(view.Models, []string{"only"}) {
+		t.Fatalf("Models = %v, want [only]", view.Models)
+	}
+}
+
+// TestSaveProfileRoundTripModels: a multi-model profile round-trips through
+// save+reload with Models and the selected Model intact.
+func TestSaveProfileRoundTripModels(t *testing.T) {
+	svc := newTestService(t)
+	p := validProfile()
+	p.Model = "m2"
+	p.Models = []string{"m1", "m2", "m3"}
+	p.SmallFastModel = " small "
+	if err := svc.SaveProfile(p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if !equalStrings(view.Models, []string{"m1", "m2", "m3"}) {
+		t.Fatalf("Models = %v, want [m1 m2 m3]", view.Models)
+	}
+	if view.Model != "m2" {
+		t.Fatalf("Model = %q, want m2", view.Model)
+	}
+	if view.SmallFastModel != "small" {
+		t.Fatalf("SmallFastModel = %q, want trimmed 'small'", view.SmallFastModel)
+	}
+}
+
+// TestSaveProfileRejectsModelNotInModels: when normalization cannot make the
+// selected model a member, Validate must reject it. This is reached by saving a
+// profile whose Models has entries but whose (already-present-after-prepend)
+// invariant is deliberately broken via a direct on-disk state, proving Validate
+// guards reads/applies. Here we test the SaveProfile path indirectly: since
+// normalization always prepends the selected model, SaveProfile cannot produce
+// this state, so we assert Validate (the guard) rejects it directly.
+func TestValidateRejectsModelNotInModels(t *testing.T) {
+	p := core.Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: []string{"x", "y"}}
+	if err := p.Validate(); err == nil {
+		t.Fatal("Validate accepted Model not present in non-empty Models")
 	}
 }
 

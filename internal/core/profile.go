@@ -24,10 +24,15 @@ type Profile struct {
 	APIKey string `json:"api_key"`
 	// BaseURL is the OpenAI-compatible base URL (http or https). Required.
 	BaseURL string `json:"base_url"`
-	// Model is the default model identifier. Required.
+	// Models is the user's saved set of selectable model identifiers. The
+	// currently selected one is Model, which must be a member when Models is
+	// non-empty. Adapters never read Models; they consume only Model.
+	Models []string `json:"models,omitempty"`
+	// Model is the currently selected model identifier and the single value
+	// adapters write to tool configs. Required.
 	Model string `json:"model"`
 	// SmallFastModel is an optional secondary model used by some tools for
-	// lightweight/background tasks.
+	// lightweight/background tasks. It need not be a member of Models.
 	SmallFastModel string `json:"small_fast_model,omitempty"`
 }
 
@@ -53,6 +58,18 @@ func (p Profile) Validate() error {
 	}
 	if u.Host == "" {
 		return errors.New("core: profile base_url must include a host")
+	}
+	if len(p.Models) > 0 {
+		found := false
+		for _, m := range p.Models {
+			if m == p.Model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("core: profile model must be one of models")
+		}
 	}
 	return nil
 }

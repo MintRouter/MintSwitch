@@ -63,11 +63,12 @@ type ToolOpResult struct {
 // ProfileView is the non-secret view of the active profile returned to the
 // frontend. It never carries the API key; HasKey reports whether one is stored.
 type ProfileView struct {
-	Label          string `json:"label"`
-	BaseURL        string `json:"base_url"`
-	Model          string `json:"model"`
-	SmallFastModel string `json:"small_fast_model"`
-	HasKey         bool   `json:"has_key"`
+	Label          string   `json:"label"`
+	BaseURL        string   `json:"base_url"`
+	Models         []string `json:"models"`
+	Model          string   `json:"model"`
+	SmallFastModel string   `json:"small_fast_model"`
+	HasKey         bool     `json:"has_key"`
 }
 
 // InstallResult is the structured outcome of an Install/Uninstall operation,
@@ -163,9 +164,16 @@ func (s *Service) GetProfile() (ProfileView, error) {
 		return ProfileView{}, nil
 	}
 	p := st.ActiveProfile
+	// Backward compat for profiles saved before Models existed: surface the
+	// single selected Model as a one-element list so the UI always has options.
+	models := p.Models
+	if len(models) == 0 && strings.TrimSpace(p.Model) != "" {
+		models = []string{p.Model}
+	}
 	return ProfileView{
 		Label:          p.Label,
 		BaseURL:        p.BaseURL,
+		Models:         models,
 		Model:          p.Model,
 		SmallFastModel: p.SmallFastModel,
 		HasKey:         strings.TrimSpace(p.APIKey) != "",
@@ -181,6 +189,9 @@ func (s *Service) SaveProfile(p core.Profile) error {
 	if err != nil {
 		return err
 	}
+	p.Model = strings.TrimSpace(p.Model)
+	p.SmallFastModel = strings.TrimSpace(p.SmallFastModel)
+	p.Models = normalizeModels(p.Models, p.Model)
 	if strings.TrimSpace(p.APIKey) == "" && st.ActiveProfile != nil {
 		p.APIKey = st.ActiveProfile.APIKey
 	}
@@ -189,6 +200,27 @@ func (s *Service) SaveProfile(p core.Profile) error {
 	}
 	st.ActiveProfile = &p
 	return s.store.Save(st)
+}
+
+// normalizeModels trims and de-duplicates the saved model list, preserving
+// first-seen order and dropping empties. It then guarantees the selected model
+// is a member: a non-empty selected model that is absent is prepended (which
+// also turns an otherwise-empty list into [selected]).
+func normalizeModels(models []string, selected string) []string {
+	out := make([]string, 0, len(models))
+	seen := make(map[string]bool, len(models))
+	for _, m := range models {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	if selected != "" && !seen[selected] {
+		out = append([]string{selected}, out...)
+	}
+	return out
 }
 
 // activeProfile loads the saved active profile and validates it. It returns a
