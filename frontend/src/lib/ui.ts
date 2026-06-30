@@ -71,6 +71,28 @@ export function npmCommand(action: "install" | "uninstall", toolID: string): str
   return `npm install -g ${flags}${spec.pkg}`;
 }
 
+/**
+ * builtinLogoIds is the set of tool IDs that ship a bundled app-icon SVG under
+ * /logos/<id>.svg. User-defined custom tools have no preset icon, so they are
+ * intentionally absent here and fall back to the neutral monogram tile.
+ */
+export const builtinLogoIds = new Set<string>([
+  "claude-code",
+  "codex",
+  "opencode",
+  "factory-droid",
+  "pi",
+]);
+
+/**
+ * toolLogoSrc returns the bundled logo path for a built-in tool, or null when
+ * the tool has no preset icon (custom providers) so the card renders a monogram
+ * fallback instead.
+ */
+export function toolLogoSrc(id: string): string | null {
+  return builtinLogoIds.has(id) ? `/logos/${id}.svg` : null;
+}
+
 /** isHttpUrl reports whether v is a non-empty http(s) URL. */
 export function isHttpUrl(v: string): boolean {
   const s = v.trim();

@@ -12,6 +12,7 @@
   import ProfileForm from "./lib/ProfileForm.svelte";
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
+  import AddProviderForm from "./lib/AddProviderForm.svelte";
 
   const emptyProfile: ProfileView = {
     label: "", base_url: "", models: [], model: "", small_fast_model: "", has_key: false,
@@ -33,6 +34,12 @@
     open: boolean; title: string; message: string; confirmLabel: string;
     danger: boolean; busy: boolean; action: () => Promise<void>;
   }>({ open: false, title: "", message: "", confirmLabel: "Confirm", danger: false, busy: false, action: async () => {} });
+
+  // Add-custom-provider modal state. backendError holds the (secret-free) error
+  // returned by AddCustomTool so the form can surface it without closing.
+  let addOpen = $state(false);
+  let addBusy = $state(false);
+  let addError = $state("");
 
   // Theme is applied to <html data-theme> by an inline head script before first
   // paint (no flash). Mirror that into reactive state so the toggle stays in sync.
@@ -258,6 +265,48 @@
       },
     });
   }
+
+  function openAddProvider(): void {
+    addError = "";
+    addOpen = true;
+  }
+
+  // Add a user-defined provider via the backend, then refresh so the new card
+  // appears. On failure the modal stays open and shows the backend error.
+  async function submitAddProvider(data: {
+    name: string; configPath: string; binaryName: string; template: string;
+  }): Promise<void> {
+    addBusy = true;
+    addError = "";
+    try {
+      await Service.AddCustomTool(data.name, data.configPath, data.binaryName, data.template);
+      addOpen = false;
+      await refresh();
+      flash(`Added provider “${data.name}”.`, "success");
+    } catch (e) {
+      addError = errMsg(e);
+    } finally {
+      addBusy = false;
+    }
+  }
+
+  function removeProvider(id: string): void {
+    const name = tools.find((t) => t.id === id)?.name ?? id;
+    ask({
+      title: `Remove provider ${name}?`,
+      message: "This removes the custom provider from MintSwitch. The config file on disk is left as-is — restore it to default first if you applied it.",
+      confirmLabel: "Remove provider", danger: true,
+      action: () => withBusy(id, async () => {
+        try {
+          await Service.RemoveCustomTool(id);
+          flash(`Removed provider ${name}.`, "success");
+        } catch (e) {
+          flash(errMsg(e), "error");
+        }
+        await refresh();
+      }),
+    });
+  }
 </script>
 
 <svelte:window onfocus={onWindowFocus} />
@@ -285,6 +334,7 @@
           </span>
         </div>
         <div class="global-actions">
+          <button class="btn-ghost sm" type="button" onclick={openAddProvider}>+ Add provider</button>
           <button class="btn-primary sm" type="button" onclick={applyAll} disabled={!hasSavedProfile}>
             Apply to all
           </button>
@@ -346,7 +396,7 @@
             {#each tools as t (t.id)}
               <ToolCard tool={t} {hasSavedProfile} busy={busyIds.includes(t.id)}
                 onApply={applyOne} onRestore={restoreOne}
-                onInstall={installOne} onUninstall={uninstallOne} />
+                onInstall={installOne} onUninstall={uninstallOne} onRemove={removeProvider} />
             {/each}
           </div>
         {/if}
@@ -365,6 +415,9 @@
 <ConfirmDialog open={confirm.open} title={confirm.title} message={confirm.message}
   confirmLabel={confirm.confirmLabel} danger={confirm.danger} busy={confirm.busy}
   onConfirm={runConfirm} onCancel={() => (confirm = { ...confirm, open: false })} />
+
+<AddProviderForm open={addOpen} busy={addBusy} backendError={addError}
+  onSubmit={submitAddProvider} onCancel={() => (addOpen = false)} />
 
 <style>
   /* Two columns: Profile (left, inspector) + Tools (right). The shell fills

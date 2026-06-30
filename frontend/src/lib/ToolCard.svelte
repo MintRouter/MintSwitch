@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolView } from "../../bindings/mintswitch/internal/service";
-  import { statusMeta } from "./ui";
+  import { statusMeta, toolLogoSrc } from "./ui";
 
   interface Props {
     tool: ToolView;
@@ -10,15 +10,15 @@
     onRestore: (id: string) => void;
     onInstall: (id: string) => void;
     onUninstall: (id: string) => void;
+    onRemove: (id: string) => void;
   }
-  let { tool, hasSavedProfile, busy, onApply, onRestore, onInstall, onUninstall }: Props = $props();
+  let { tool, hasSavedProfile, busy, onApply, onRestore, onInstall, onUninstall, onRemove }: Props = $props();
 
   // Provider logos are self-contained app-icon SVGs under /logos/<id>.svg. If a
-  // tool has no asset (or it fails to load) we fall back to a neutral monogram
-  // tile so the card layout never breaks.
-  const LOGO_IDS = new Set(["claude-code", "codex", "opencode", "factory-droid", "pi"]);
+  // tool has no asset (custom providers) or it fails to load we fall back to a
+  // neutral monogram tile so the card layout never breaks.
   let logoFailed = $state(false);
-  const logoSrc = $derived(LOGO_IDS.has(tool.id) ? `/logos/${tool.id}.svg` : null);
+  const logoSrc = $derived(toolLogoSrc(tool.id));
   const monogram = $derived((tool.name ?? "?").trim().charAt(0).toUpperCase() || "?");
 
   // Split the display name on its first " (" so the product name stays bold on
@@ -88,7 +88,7 @@
   {/if}
 
   <div class="tool-actions">
-    {#if !tool.installed}
+    {#if !tool.installed && !tool.custom}
       <button class="btn-primary sm install-btn" type="button" onclick={() => onInstall(tool.id)}
         disabled={busy} title="Install this tool with npm">
         {busy ? "Installing…" : "Install"}
@@ -104,7 +104,12 @@
       title={!tool.installed ? "Tool is not installed" : !canRestore ? "Nothing to restore" : undefined}>
       Restore default
     </button>
-    {#if tool.installed}
+    {#if tool.custom}
+      <button class="btn-ghost sm danger" type="button" onclick={() => onRemove(tool.id)}
+        disabled={busy} title="Remove this custom provider from MintSwitch">
+        {busy ? "Working…" : "Remove provider"}
+      </button>
+    {:else if tool.installed}
       <button class="btn-ghost sm danger" type="button" onclick={() => onUninstall(tool.id)}
         disabled={busy} title="Uninstall this tool with npm">
         {busy ? "Working…" : "Uninstall"}
