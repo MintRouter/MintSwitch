@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -441,18 +442,70 @@ func TestInstallSuccess(t *testing.T) {
 	}
 }
 
-func TestUninstallSuccess(t *testing.T) {
-	fr := &fakeRunner{out: "removed 1 package"}
-	svc := newInstallService(t, fr, okLook)
-	res, err := svc.Uninstall("pi")
+// TestUninstallStandaloneSurfacing: a method-aware uninstall of a standalone
+// binary surfaces the delete action as the command plus a message, and routes
+// through the injected remove func (no real fs/brew/npm).
+func TestUninstallStandaloneSurfacing(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(binDir, "droid")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{}
+	var removed []string
+	inst := installer.NewWithResolver(fr, okLook,
+		func(string) (string, bool) { return bin, true },
+		[]string{binDir},
+		func(p string) error { removed = append(removed, p); return nil })
+	store := settings.NewStore(filepath.Join(home, "settings.json"))
+	svc := NewWithInstaller(reg(), store, inst)
+
+	res, err := svc.Uninstall("factory-droid")
 	if err != nil {
 		t.Fatalf("Uninstall error: %v", err)
 	}
-	if !res.OK || res.Action != "uninstall" {
+	if !res.OK || res.Action != "uninstall" || res.ID != "factory-droid" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
-	if res.Command != "npm uninstall -g @earendil-works/pi-coding-agent" {
+	if res.Command != "rm "+bin {
 		t.Fatalf("command = %q", res.Command)
+	}
+	if res.Output == "" {
+		t.Fatal("expected a delete message in Output")
+	}
+	if !equalStrings(removed, []string{bin}) {
+		t.Fatalf("removed = %v, want [%s]", removed, bin)
+	}
+	if fr.runs != 0 {
+		t.Fatalf("standalone delete must not run a command: %d", fr.runs)
+	}
+}
+
+// TestUninstallUnknownMethodMessage: when the install method cannot be
+// determined, Uninstall returns a non-OK result carrying the clear message
+// instead of throwing, and nothing destructive happens.
+func TestUninstallUnknownMethodMessage(t *testing.T) {
+	fr := &fakeRunner{}
+	var removed []string
+	inst := installer.NewWithResolver(fr, okLook,
+		func(string) (string, bool) { return "", false }, nil,
+		func(p string) error { removed = append(removed, p); return nil })
+	store := settings.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	svc := NewWithInstaller(reg(), store, inst)
+
+	res, err := svc.Uninstall("opencode")
+	if err != nil {
+		t.Fatalf("Uninstall should not throw on unknown method: %v", err)
+	}
+	if res.OK || res.Error == "" {
+		t.Fatalf("expected non-OK result with a clear message: %+v", res)
+	}
+	if fr.runs != 0 || len(removed) != 0 {
+		t.Fatalf("unknown method must be a no-op: runs=%d removed=%v", fr.runs, removed)
 	}
 }
 

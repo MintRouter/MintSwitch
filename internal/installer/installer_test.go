@@ -3,12 +3,14 @@ package installer
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
 
 // fakeRunner records the command it was asked to run and returns a canned
-// result, so tests never invoke real npm.
+// result, so tests never invoke real npm/brew.
 type fakeRunner struct {
 	name string
 	args []string
@@ -111,18 +113,177 @@ func TestInstallRunsCommand(t *testing.T) {
 	}
 }
 
-func TestUninstallRunsCommand(t *testing.T) {
-	fr := &fakeRunner{out: "removed 1 package"}
-	inst := NewWithLookPath(fr, okLook)
-	_, out, err := inst.Uninstall(context.Background(), "opencode")
+// resolveTo returns a resolve func that always reports path as the resolved
+// binary, regardless of the requested name.
+func resolveTo(path string) func(string) (string, bool) {
+	return func(string) (string, bool) { return path, true }
+}
+
+// TestUninstallHomebrewSymlink: a binary that is a symlink into a Cellar is
+// classified as Homebrew and removed via `brew uninstall <name>`; no file is
+// deleted.
+func TestUninstallHomebrewSymlink(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "opencode")
+	// Target need not exist; Readlink resolves dangling symlinks.
+	if err := os.Symlink("/opt/homebrew/Cellar/opencode/1.0/bin/opencode", link); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{out: "Uninstalling opencode"}
+	var removed []string
+	inst := NewWithResolver(fr, okLook, resolveTo(link), nil,
+		func(p string) error { removed = append(removed, p); return nil })
+
+	args, out, err := inst.Uninstall(context.Background(), "opencode")
 	if err != nil {
 		t.Fatalf("Uninstall error: %v", err)
 	}
-	if out != "removed 1 package" {
-		t.Fatalf("output = %q", out)
+	if !reflect.DeepEqual(args, []string{"brew", "uninstall", "opencode"}) {
+		t.Fatalf("args = %v", args)
 	}
-	if !reflect.DeepEqual(fr.args, []string{"uninstall", "-g", "opencode-ai"}) {
-		t.Fatalf("runner args = %v", fr.args)
+	if fr.runs != 1 || fr.name != "brew" || !reflect.DeepEqual(fr.args, []string{"uninstall", "opencode"}) {
+		t.Fatalf("runner invoked wrong: runs=%d name=%q args=%v", fr.runs, fr.name, fr.args)
+	}
+	if out == "" {
+		t.Fatal("expected brew output")
+	}
+	if len(removed) != 0 {
+		t.Fatalf("brew uninstall must not delete files: %v", removed)
+	}
+}
+
+// TestUninstallNpmPrefix: a binary under an npm global prefix keeps the
+// `npm uninstall -g <pkg>` behaviour; no file is deleted.
+func TestUninstallNpmPrefix(t *testing.T) {
+	home := t.TempDir()
+	p := filepath.Join(home, ".npm-global", "bin", "codex")
+	fr := &fakeRunner{out: "removed 1 package"}
+	var removed []string
+	inst := NewWithResolver(fr, okLook, resolveTo(p), nil,
+		func(s string) error { removed = append(removed, s); return nil })
+
+	args, _, err := inst.Uninstall(context.Background(), "codex")
+	if err != nil {
+		t.Fatalf("Uninstall error: %v", err)
+	}
+	if !reflect.DeepEqual(args, []string{"npm", "uninstall", "-g", "@openai/codex"}) {
+		t.Fatalf("args = %v", args)
+	}
+	if fr.runs != 1 || fr.name != "npm" || !reflect.DeepEqual(fr.args, []string{"uninstall", "-g", "@openai/codex"}) {
+		t.Fatalf("runner invoked wrong: runs=%d name=%q args=%v", fr.runs, fr.name, fr.args)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("npm uninstall must not delete files: %v", removed)
+	}
+}
+
+// TestUninstallStandaloneDeletesFile: a curl/standalone binary inside a curated
+// dir (~/.local/bin) is removed by deleting that exact file; no command runs.
+func TestUninstallStandaloneDeletesFile(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(binDir, "droid")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{}
+	var removed []string
+	inst := NewWithResolver(fr, okLook, resolveTo(bin), []string{binDir},
+		func(p string) error { removed = append(removed, p); return nil })
+
+	args, out, err := inst.Uninstall(context.Background(), "factory-droid")
+	if err != nil {
+		t.Fatalf("Uninstall error: %v", err)
+	}
+	if !reflect.DeepEqual(args, []string{"rm", bin}) {
+		t.Fatalf("args = %v", args)
+	}
+	if !reflect.DeepEqual(removed, []string{bin}) {
+		t.Fatalf("removed = %v, want [%s]", removed, bin)
+	}
+	if fr.runs != 0 {
+		t.Fatalf("standalone delete must not run a command: runs=%d", fr.runs)
+	}
+	if out == "" {
+		t.Fatal("expected a delete message")
+	}
+}
+
+// TestUninstallUnknownMethod: a binary resolving outside every known location is
+// a safe no-op — no command, no deletion, a clear message, ErrUnknownMethod.
+func TestUninstallUnknownMethod(t *testing.T) {
+	fr := &fakeRunner{}
+	var removed []string
+	inst := NewWithResolver(fr, okLook, resolveTo("/usr/bin/codex"),
+		[]string{"/home/u/.local/bin"},
+		func(p string) error { removed = append(removed, p); return nil })
+
+	args, out, err := inst.Uninstall(context.Background(), "codex")
+	if !errors.Is(err, ErrUnknownMethod) {
+		t.Fatalf("err = %v, want ErrUnknownMethod", err)
+	}
+	if args != nil {
+		t.Fatalf("args = %v, want nil", args)
+	}
+	if out == "" {
+		t.Fatal("expected a clear user-facing message")
+	}
+	if fr.runs != 0 || len(removed) != 0 {
+		t.Fatalf("no-op violated: runs=%d removed=%v", fr.runs, removed)
+	}
+}
+
+// TestUninstallUnresolvable: when the binary cannot be resolved at all, Uninstall
+// is a safe no-op with a clear message and ErrUnknownMethod.
+func TestUninstallUnresolvable(t *testing.T) {
+	fr := &fakeRunner{}
+	inst := NewWithResolver(fr, okLook, func(string) (string, bool) { return "", false }, nil, nil)
+	args, out, err := inst.Uninstall(context.Background(), "pi")
+	if !errors.Is(err, ErrUnknownMethod) {
+		t.Fatalf("err = %v, want ErrUnknownMethod", err)
+	}
+	if args != nil || out == "" {
+		t.Fatalf("args = %v, out = %q", args, out)
+	}
+	if fr.runs != 0 {
+		t.Fatalf("runner should not run: %d", fr.runs)
+	}
+}
+
+// TestUninstallNeverDeletesOutsideCuratedDirs is the safety guarantee: even a
+// real executable file is NEVER deleted when it lives outside the curated dirs.
+func TestUninstallNeverDeletesOutsideCuratedDirs(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(root, "somewhere")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(outside, "droid")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A curated dir that exists but does NOT contain the resolved binary.
+	curated := filepath.Join(root, ".local", "bin")
+	fr := &fakeRunner{}
+	var removed []string
+	inst := NewWithResolver(fr, okLook, resolveTo(bin), []string{curated},
+		func(p string) error { removed = append(removed, p); return nil })
+
+	_, _, err := inst.Uninstall(context.Background(), "factory-droid")
+	if !errors.Is(err, ErrUnknownMethod) {
+		t.Fatalf("err = %v, want ErrUnknownMethod (safe no-op)", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("SAFETY VIOLATION: deleted outside curated dir: %v", removed)
+	}
+	if fr.runs != 0 {
+		t.Fatalf("no command expected: runs=%d", fr.runs)
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("file outside curated dirs must remain on disk: %v", err)
 	}
 }
 

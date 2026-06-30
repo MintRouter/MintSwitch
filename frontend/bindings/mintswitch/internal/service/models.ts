@@ -22,6 +22,7 @@ export interface InstallResult {
 export interface ProfileView {
     "label": string;
     "base_url": string;
+    "models": string[] | null;
     "model": string;
     "small_fast_model": string;
     "has_key": boolean;

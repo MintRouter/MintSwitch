@@ -85,42 +85,59 @@ func (r *Resolver) SettingsPath() string {
 	return r.DataJoin("settings.json")
 }
 
-// binDirs returns the bounded, curated set of directories searched for tool
-// binaries: the HOME-derived user dirs (~/.local/bin, ~/.npm-global/bin, ~/bin)
-// plus the configured SystemBinDirs. It derives everything from Home and never
-// consults os.UserHomeDir, so tests pointing Home at a temp dir stay isolated.
-func (r *Resolver) binDirs() []string {
-	var dirs []string
-	if r.Home != "" {
-		dirs = append(dirs,
-			filepath.Join(r.Home, ".local", "bin"),
-			filepath.Join(r.Home, ".npm-global", "bin"),
-			filepath.Join(r.Home, "bin"),
-		)
+// UserBinDirs returns the HOME-derived curated bin directories (~/.local/bin,
+// ~/.npm-global/bin, ~/bin). These are the only directories MintSwitch will ever
+// delete a standalone tool binary from. It derives everything from Home and
+// never consults os.UserHomeDir, so tests pointing Home at a temp dir stay
+// isolated; an empty Home yields no directories.
+func (r *Resolver) UserBinDirs() []string {
+	if r.Home == "" {
+		return nil
 	}
-	return append(dirs, r.SystemBinDirs...)
+	return []string{
+		filepath.Join(r.Home, ".local", "bin"),
+		filepath.Join(r.Home, ".npm-global", "bin"),
+		filepath.Join(r.Home, "bin"),
+	}
+}
+
+// binDirs returns the bounded, curated set of directories searched for tool
+// binaries: the HOME-derived user dirs (see UserBinDirs) plus the configured
+// SystemBinDirs.
+func (r *Resolver) binDirs() []string {
+	return append(r.UserBinDirs(), r.SystemBinDirs...)
 }
 
 // BinaryResolvable reports whether binName is installed as a resolvable CLI. It
-// first consults lookPath (the process PATH; exec.LookPath in production) and
-// then a bounded, curated set of common global-bin directories (see binDirs), so
-// a Finder-launched app with a narrow PATH still detects CLIs installed via
-// "npm install -g" or a curl installer. It performs only filesystem stats and
-// never spawns a subprocess, so it is safe to call on every Detect/ListTools
-// (e.g. on window focus). A nil lookPath defaults to exec.LookPath.
+// is a thin boolean wrapper over [Resolver.ResolveBinary]; see that method for
+// the lookup order and the no-subprocess guarantee.
 func (r *Resolver) BinaryResolvable(lookPath func(string) (string, error), binName string) bool {
+	_, ok := r.ResolveBinary(lookPath, binName)
+	return ok
+}
+
+// ResolveBinary resolves binName to the absolute path of the executable that
+// [Resolver.BinaryResolvable] would find. It first consults lookPath (the
+// process PATH; exec.LookPath in production) and then a bounded, curated set of
+// common global-bin directories (see binDirs), so a Finder-launched app with a
+// narrow PATH still resolves CLIs installed via "npm install -g" or a curl
+// installer. It performs only filesystem stats and never spawns a subprocess, so
+// it is safe to call on every Detect/ListTools. A nil lookPath defaults to
+// exec.LookPath. ok is false (and path empty) when binName cannot be resolved.
+func (r *Resolver) ResolveBinary(lookPath func(string) (string, error), binName string) (string, bool) {
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
-	if _, err := lookPath(binName); err == nil {
-		return true
+	if p, err := lookPath(binName); err == nil {
+		return p, true
 	}
 	for _, dir := range r.binDirs() {
-		if isExecutableFile(filepath.Join(dir, binName)) {
-			return true
+		p := filepath.Join(dir, binName)
+		if isExecutableFile(p) {
+			return p, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // isExecutableFile reports whether path is a regular file with an executable

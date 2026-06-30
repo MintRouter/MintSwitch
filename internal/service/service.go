@@ -104,7 +104,8 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg.Register(opencode.New(r, e))
 	reg.Register(factorydroid.New(r, e))
 	reg.Register(pi.New(r, e))
-	return NewWithRegistry(reg, settings.NewStore(r.SettingsPath()))
+	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
+	return NewWithInstaller(reg, settings.NewStore(r.SettingsPath()), inst)
 }
 
 // NewWithRegistry builds a Service from a pre-built registry and settings store,
@@ -300,17 +301,21 @@ func (s *Service) Install(toolID string) (InstallResult, error) {
 	return s.installResult(toolID, "install", args, out, err)
 }
 
-// Uninstall uninstalls the tool identified by toolID globally via npm. Its
-// return contract matches [Service.Install].
+// Uninstall removes the tool identified by toolID using the method it was
+// actually installed with (npm, Homebrew, or a standalone binary), surfacing the
+// exact command (or delete action) and its output. Its return contract matches
+// [Service.Install]; when the install method cannot be determined it returns a
+// non-OK result carrying a clear, user-facing message instead of throwing.
 func (s *Service) Uninstall(toolID string) (InstallResult, error) {
 	args, out, err := s.inst.Uninstall(context.Background(), toolID)
 	return s.installResult(toolID, "uninstall", args, out, err)
 }
 
 // installResult maps the installer's (args, output, error) into an
-// [InstallResult]. Unknown tools become a hard error; npm-missing and command
-// failures become a non-OK result with a clear message so the UI can show the
-// command and its output instead of throwing.
+// [InstallResult]. Unknown tools become a hard error; missing tooling
+// (npm/brew), an indeterminate install method, and command failures all become a
+// non-OK result with a clear message so the UI can show the command and its
+// output instead of throwing.
 func (s *Service) installResult(toolID, action string, args []string, out string, err error) (InstallResult, error) {
 	res := InstallResult{
 		ID:      toolID,
@@ -323,6 +328,15 @@ func (s *Service) installResult(toolID, action string, args []string, out string
 		return InstallResult{}, fmt.Errorf("service: unknown tool %q", toolID)
 	case errors.Is(err, installer.ErrNpmMissing):
 		res.Error = "Node.js / npm is required. Install Node.js, then retry."
+		return res, nil
+	case errors.Is(err, installer.ErrBrewMissing):
+		res.Error = "Homebrew (brew) is required to uninstall this tool. Install Homebrew, then retry."
+		return res, nil
+	case errors.Is(err, installer.ErrUnknownMethod):
+		// The installer puts the clear, user-facing message in out; surface it as
+		// the error so the UI shows why nothing was removed.
+		res.Error = out
+		res.Output = ""
 		return res, nil
 	case err != nil:
 		res.Error = err.Error()

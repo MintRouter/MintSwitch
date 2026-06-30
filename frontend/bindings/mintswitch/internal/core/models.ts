@@ -44,13 +44,21 @@ export interface Profile {
     "base_url": string;
 
     /**
-     * Model is the default model identifier. Required.
+     * Models is the user's saved set of selectable model identifiers. The
+     * currently selected one is Model, which must be a member when Models is
+     * non-empty. Adapters never read Models; they consume only Model.
+     */
+    "models"?: string[] | null;
+
+    /**
+     * Model is the currently selected model identifier and the single value
+     * adapters write to tool configs. Required.
      */
     "model": string;
 
     /**
      * SmallFastModel is an optional secondary model used by some tools for
-     * lightweight/background tasks.
+     * lightweight/background tasks. It need not be a member of Models.
      */
     "small_fast_model"?: string;
 }
