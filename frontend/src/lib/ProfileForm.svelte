@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ProfileView } from "../../bindings/mintswitch/internal/service";
   import type { Profile } from "../../bindings/mintswitch/internal/core";
-  import { isHttpUrl } from "./ui";
+  import { isHttpUrl, normalizeBaseUrl } from "./ui";
 
   interface Props {
     profile: ProfileView;
@@ -55,7 +55,7 @@
     const payload: Profile = {
       label: label.trim(),
       api_key: apiKey,
-      base_url: baseUrl.trim(),
+      base_url: normalizedBase.url,
       models: mergedModels,
       model: m,
       // The Small / fast model field was removed from the UI; always send "" so
@@ -69,6 +69,11 @@
   const keyPlaceholder = $derived(
     profile.has_key ? "•••• key saved — leave blank to keep" : "Enter your API key",
   );
+
+  // Live preview of the backend normalization. When a public http endpoint is
+  // upgraded to https we surface a non-blocking notice so the user sees the
+  // saved value up front (http endpoints often drop the API key on redirect).
+  const normalizedBase = $derived(normalizeBaseUrl(baseUrl));
 </script>
 
 <form class="card profile" onsubmit={submit} novalidate aria-labelledby="profile-h">
@@ -88,8 +93,14 @@
     <input class="field-input" id="pf-base" type="url" bind:value={baseUrl}
       placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
       aria-invalid={!!errors.baseUrl}
-      aria-describedby={errors.baseUrl ? "err-base" : undefined} />
-    {#if errors.baseUrl}<p class="field-error" id="err-base">{errors.baseUrl}</p>{/if}
+      aria-describedby={errors.baseUrl ? "err-base" : normalizedBase.upgraded ? "notice-base" : undefined} />
+    {#if errors.baseUrl}
+      <p class="field-error" id="err-base">{errors.baseUrl}</p>
+    {:else if normalizedBase.upgraded}
+      <p class="field-notice" id="notice-base">
+        Will be saved as <code>{normalizedBase.url}</code> — http endpoints can drop the API key on redirect.
+      </p>
+    {/if}
   </div>
 
   <div class="field">
@@ -131,4 +142,13 @@
   .card-head { margin-bottom: 0.25rem; }
   .opt { color: var(--muted); font-weight: 400; }
   .profile-actions { display: flex; justify-content: flex-end; margin-top: 0.25rem; }
+  .field-notice { margin: 0; font-size: 0.78rem; color: var(--warn); }
+  .field-notice code {
+    font-size: 0.74rem;
+    padding: 0.05rem 0.25rem;
+    border-radius: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    word-break: break-all;
+  }
 </style>

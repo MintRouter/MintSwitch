@@ -104,3 +104,53 @@ export function isHttpUrl(v: string): boolean {
     return false;
   }
 }
+
+/**
+ * isLocalHostname reports whether a hostname refers to a local or private
+ * address where plain http is legitimate and must NOT be upgraded to https.
+ * Mirrors the host classes in the backend core.NormalizeBaseURL.
+ */
+function isLocalHostname(h: string): boolean {
+  if (h === "localhost") return true;
+  if (h.endsWith(".local") || h.endsWith(".localhost")) return true;
+  if (h === "[::1]" || h === "::1") return true;
+  if (h.startsWith("127.")) return true;
+  if (h.startsWith("10.") || h.startsWith("192.168.")) return true;
+  if (h.startsWith("169.254.")) return true;
+  if (h.startsWith("172.")) {
+    const second = Number(h.split(".")[1]);
+    if (Number.isInteger(second) && second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+/**
+ * normalizeBaseUrl mirrors the backend core.NormalizeBaseURL exactly: it trims
+ * trailing slashes from the path and upgrades public http endpoints to https
+ * (auth headers are commonly dropped on the http→https redirect). Local and
+ * private hosts keep http. Invalid input is returned trimmed and untouched so
+ * the caller's own validation handles it. `upgraded` is true only when the
+ * scheme was switched, which is the cue to surface a non-blocking notice.
+ */
+export function normalizeBaseUrl(v: string): { url: string; upgraded: boolean } {
+  const trimmed = v.trim();
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return { url: trimmed, upgraded: false };
+  }
+  u.pathname = u.pathname.replace(/\/+$/, "");
+  let upgraded = false;
+  if (u.protocol === "http:" && !isLocalHostname(u.hostname)) {
+    u.protocol = "https:";
+    upgraded = true;
+  }
+  let url = u.toString();
+  // The URL serialiser re-adds a "/" once the path is emptied; drop it when there
+  // is no path/query/hash so the stored value stays bare, matching u.String().
+  if (u.pathname === "/" && !u.search && !u.hash && url.endsWith("/")) {
+    url = url.slice(0, -1);
+  }
+  return { url, upgraded };
+}
