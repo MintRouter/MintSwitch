@@ -128,6 +128,9 @@ func TestApplyNewFiles(t *testing.T) {
 	if auth[authKeyName] != p.APIKey {
 		t.Fatalf("auth key not written: %+v", auth)
 	}
+	if auth[authModeKey] != authModeAPIKey {
+		t.Fatalf("auth_mode not set to apikey: %+v", auth)
+	}
 }
 
 func TestApplyPreservesExistingKeys(t *testing.T) {
@@ -175,5 +178,8 @@ func TestApplyPreservesExistingKeys(t *testing.T) {
 	}
 	if _, ok := auth["tokens"]; !ok {
 		t.Fatalf("auth.json tokens lost: %+v", auth)
+	}
+	if auth[authModeKey] != authModeAPIKey {
+		t.Fatalf("auth_mode not set to apikey: %+v", auth)
 	}
 }

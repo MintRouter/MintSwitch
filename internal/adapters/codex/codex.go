@@ -6,6 +6,9 @@
 // provider at an OpenAI-compatible proxy/router, MintSwitch sets the top-level
 // openai_base_url and model keys in config.toml (leaving model_provider at its
 // default "openai") and writes the API key to auth.json as OPENAI_API_KEY.
+// Apply also sets auth_mode="apikey" in auth.json: when a ChatGPT session also
+// exists (auth_mode="chatgpt" with tokens present), Codex uses the OAuth token
+// and ignores OPENAI_API_KEY, returning 401 against a proxy openai_base_url.
 // See https://developers.openai.com/codex/config-advanced and
 // https://developers.openai.com/codex/config-sample.
 package codex
@@ -20,6 +23,14 @@ import (
 
 // authKeyName is the JSON key Codex reads the API key from in auth.json.
 const authKeyName = "OPENAI_API_KEY"
+
+// authModeKey is the auth.json field selecting Codex's credential source, and
+// authModeAPIKey is the value forcing it to use OPENAI_API_KEY (matching the
+// AuthMode enum's lowercase serialization in OpenAI codex).
+const (
+	authModeKey    = "auth_mode"
+	authModeAPIKey = "apikey"
+)
 
 // Adapter applies/restores a MintSwitch profile to the Codex configuration.
 type Adapter struct {
@@ -83,8 +94,8 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 
 // Apply backs up both files (only when config.toml is not already
 // MintSwitch-managed), then injects openai_base_url + model and the managed
-// marker into config.toml and OPENAI_API_KEY into auth.json, preserving all
-// other existing keys in each file.
+// marker into config.toml and OPENAI_API_KEY plus auth_mode="apikey" into
+// auth.json, preserving all other existing keys in each file.
 //
 // The backups are created only on the first Apply over a pristine/unmanaged (or
 // absent) config, so the pristine pre-MintSwitch snapshots are what Restore
@@ -134,6 +145,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 	auth[authKeyName] = p.APIKey
+	auth[authModeKey] = authModeAPIKey
 	if err := writeJSON(authPath, auth); err != nil {
 		return core.ApplyResult{}, err
 	}
