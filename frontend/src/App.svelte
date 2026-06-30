@@ -14,7 +14,7 @@
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
 
   const emptyProfile: ProfileView = {
-    label: "", base_url: "", model: "", small_fast_model: "", has_key: false,
+    label: "", base_url: "", models: [], model: "", small_fast_model: "", has_key: false,
   };
 
   let tools = $state<ToolView[]>([]);

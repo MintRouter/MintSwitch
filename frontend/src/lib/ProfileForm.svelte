@@ -13,8 +13,10 @@
   let label = $state("");
   let baseUrl = $state("");
   let apiKey = $state("");
+  let models = $state<string[]>([]);
   let model = $state("");
   let smallFastModel = $state("");
+  let newModel = $state("");
   let errors = $state<Record<string, string>>({});
 
   // Seed the editable fields from the saved (non-secret) profile. Re-runs only
@@ -25,10 +27,49 @@
   $effect(() => {
     label = profile.label ?? "";
     baseUrl = profile.base_url ?? "";
+    models = profile.models ? [...profile.models] : [];
     model = profile.model ?? "";
     smallFastModel = profile.small_fast_model ?? "";
     apiKey = "";
+    newModel = "";
   });
+
+  // The Add button (and Enter) only accept a non-empty, not-yet-saved model.
+  const canAdd = $derived(
+    newModel.trim().length > 0 && !models.includes(newModel.trim()),
+  );
+
+  function addModel(): void {
+    const v = newModel.trim();
+    if (!v || models.includes(v)) return;
+    models = [...models, v];
+    model = v;
+    newModel = "";
+    if (errors.model) errors = { ...errors, model: "" };
+  }
+
+  function onAddKey(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addModel();
+    }
+  }
+
+  // Remove a saved model. If it was the active one, fall back to the model that
+  // took its slot, then the previous, then the first — clearing only when the
+  // list becomes empty. A removed small/fast model resets to "None".
+  function removeModel(m: string): void {
+    const idx = models.indexOf(m);
+    if (idx === -1) return;
+    const next = models.filter((x) => x !== m);
+    models = next;
+    if (model === m) {
+      model = next[idx] ?? next[idx - 1] ?? next[0] ?? "";
+    }
+    if (smallFastModel === m) {
+      smallFastModel = "";
+    }
+  }
 
   function validate(): boolean {
     const next: Record<string, string> = {};
@@ -52,6 +93,7 @@
       label: label.trim(),
       api_key: apiKey,
       base_url: baseUrl.trim(),
+      models: models,
       model: model.trim(),
       small_fast_model: smallFastModel.trim(),
     };
@@ -100,17 +142,41 @@
 
   <div class="field">
     <label class="field-label" for="pf-model">Model</label>
-    <input class="field-input" id="pf-model" type="text" bind:value={model}
-      placeholder="gpt-5.5" autocomplete="off" spellcheck="false"
-      aria-invalid={!!errors.model}
-      aria-describedby={errors.model ? "err-model" : undefined} />
+    {#if models.length > 0}
+      <select class="field-input field-select" id="pf-model" bind:value={model}
+        aria-invalid={!!errors.model}
+        aria-describedby={errors.model ? "err-model" : undefined}>
+        {#each models as m (m)}
+          <option value={m}>{m}</option>
+        {/each}
+      </select>
+      <ul class="model-list" aria-label="Saved models">
+        {#each models as m (m)}
+          <li class="model-chip" class:selected={m === model}>
+            <span class="model-chip-name">{m}</span>
+            <button class="model-remove" type="button" onclick={() => removeModel(m)}
+              aria-label={`Remove model ${m}`}>×</button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    <div class="model-add">
+      <input class="field-input" id="pf-model-add" type="text" bind:value={newModel}
+        placeholder="Add a model, e.g. gpt-5.5" autocomplete="off" spellcheck="false"
+        onkeydown={onAddKey} aria-label="New model name" />
+      <button class="btn-ghost sm" type="button" onclick={addModel} disabled={!canAdd}>Add</button>
+    </div>
     {#if errors.model}<p class="field-error" id="err-model">{errors.model}</p>{/if}
   </div>
 
   <div class="field">
     <label class="field-label" for="pf-small">Small / fast model <span class="opt">(optional)</span></label>
-    <input class="field-input" id="pf-small" type="text" bind:value={smallFastModel}
-      placeholder="gpt-5.5-mini" autocomplete="off" spellcheck="false" />
+    <select class="field-input field-select" id="pf-small" bind:value={smallFastModel}>
+      <option value="">None</option>
+      {#each models as m (m)}
+        <option value={m}>{m}</option>
+      {/each}
+    </select>
   </div>
 
   <div class="profile-actions">
