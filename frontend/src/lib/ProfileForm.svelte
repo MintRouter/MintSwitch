@@ -223,11 +223,15 @@
     align-items: stretch;
     min-width: 0;
     max-width: 100%;
+    min-height: 36.5px; /* matches .field-input box height so add-row + chips read level */
+    border: 1px solid transparent; /* reserves ring space; shown only on unselected hover */
     border-radius: 6px;
     background: var(--surface-2);
-    transition: background-color 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
   }
   .seg.selected { background: var(--accent); }
+  /* Subtle affordance on choosable segments only; never touches the accent-filled selected one. */
+  .seg:not(.selected):hover { border-color: var(--muted); }
   .seg-select {
     display: inline-flex;
     align-items: center;
