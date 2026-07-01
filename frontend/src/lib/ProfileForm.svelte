@@ -232,7 +232,7 @@
     display: inline-flex;
     align-items: center;
     min-width: 0;
-    padding: 0.32rem 0.55rem;
+    padding: 0.32rem 0.4rem 0.32rem 0.6rem;
     font-size: 0.84rem;
     font-weight: 600;
     color: var(--text);
@@ -246,11 +246,10 @@
   .seg-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .seg-remove {
     flex: 0 0 auto;
-    width: 1.5rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
+    padding: 0 0.6rem 0 0.4rem;
     border: none;
     border-radius: 0 6px 6px 0;
     background: transparent;
