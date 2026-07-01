@@ -281,9 +281,9 @@
 {/if}
 
 <style>
-  /* Airier, evenly-spaced rhythm between fields — no header/footer divider
-     lines; the spacing scale alone carries the grouping. */
-  .profile { display: flex; flex-direction: column; gap: var(--s-3); }
+  /* Tight, even rhythm between field groups — no header/footer divider lines;
+     a compact local gap (tighter than the token scale) keeps the card short. */
+  .profile { display: flex; flex-direction: column; gap: 12px; }
   .profile-title { margin: 0; }
   /* Label + saved-state badge share a row (e.g. API KEY · Saved). */
   .label-row { display: flex; align-items: center; gap: 0.5rem; }
