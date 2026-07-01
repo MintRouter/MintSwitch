@@ -27,7 +27,7 @@ func TestAddCustomToolSuccessRegistersAndPersists(t *testing.T) {
 		t.Fatalf("unexpected view: %+v", view)
 	}
 
-	// Registered after the five built-ins.
+	// Registered after the four built-ins.
 	views, err := svc.ListTools()
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)

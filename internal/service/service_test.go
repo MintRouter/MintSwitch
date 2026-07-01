@@ -493,7 +493,7 @@ func TestUninstallStandaloneSurfacing(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(binDir, "droid")
+	bin := filepath.Join(binDir, "opencode")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -506,11 +506,11 @@ func TestUninstallStandaloneSurfacing(t *testing.T) {
 	store := settings.NewStore(filepath.Join(home, "settings.json"))
 	svc := NewWithInstaller(reg(), store, inst)
 
-	res, err := svc.Uninstall("factory-droid")
+	res, err := svc.Uninstall("opencode")
 	if err != nil {
 		t.Fatalf("Uninstall error: %v", err)
 	}
-	if !res.OK || res.Action != "uninstall" || res.ID != "factory-droid" {
+	if !res.OK || res.Action != "uninstall" || res.ID != "opencode" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 	if res.Command != "rm "+bin {

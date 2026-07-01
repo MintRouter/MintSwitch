@@ -39,8 +39,6 @@ func TestArgsPerTool(t *testing.T) {
 		{"claude-code", []string{"npm", "install", "-g", "@anthropic-ai/claude-code"}, []string{"npm", "uninstall", "-g", "@anthropic-ai/claude-code"}},
 		{"codex", []string{"npm", "install", "-g", "@openai/codex"}, []string{"npm", "uninstall", "-g", "@openai/codex"}},
 		{"opencode", []string{"npm", "install", "-g", "opencode-ai"}, []string{"npm", "uninstall", "-g", "opencode-ai"}},
-		{"factory-droid", []string{"npm", "install", "-g", "droid"}, []string{"npm", "uninstall", "-g", "droid"}},
-		{"pi", []string{"npm", "install", "-g", "--ignore-scripts", "@earendil-works/pi-coding-agent"}, []string{"npm", "uninstall", "-g", "@earendil-works/pi-coding-agent"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.toolID, func(t *testing.T) {
@@ -59,22 +57,6 @@ func TestArgsPerTool(t *testing.T) {
 				t.Fatalf("UninstallArgs(%q) = %v, want %v", tt.toolID, gotU, tt.wantUninst)
 			}
 		})
-	}
-}
-
-func TestPiGetsIgnoreScripts(t *testing.T) {
-	args, err := InstallArgs("pi")
-	if err != nil {
-		t.Fatalf("InstallArgs(pi): %v", err)
-	}
-	found := false
-	for _, a := range args {
-		if a == "--ignore-scripts" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("pi install args missing --ignore-scripts: %v", args)
 	}
 }
 
@@ -185,7 +167,7 @@ func TestUninstallStandaloneDeletesFile(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(binDir, "droid")
+	bin := filepath.Join(binDir, "opencode")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +176,7 @@ func TestUninstallStandaloneDeletesFile(t *testing.T) {
 	inst := NewWithResolver(fr, okLook, resolveTo(bin), []string{binDir},
 		func(p string) error { removed = append(removed, p); return nil })
 
-	args, out, err := inst.Uninstall(context.Background(), "factory-droid")
+	args, out, err := inst.Uninstall(context.Background(), "opencode")
 	if err != nil {
 		t.Fatalf("Uninstall error: %v", err)
 	}
@@ -241,7 +223,7 @@ func TestUninstallUnknownMethod(t *testing.T) {
 func TestUninstallUnresolvable(t *testing.T) {
 	fr := &fakeRunner{}
 	inst := NewWithResolver(fr, okLook, func(string) (string, bool) { return "", false }, nil, nil)
-	args, out, err := inst.Uninstall(context.Background(), "pi")
+	args, out, err := inst.Uninstall(context.Background(), "opencode")
 	if !errors.Is(err, ErrUnknownMethod) {
 		t.Fatalf("err = %v, want ErrUnknownMethod", err)
 	}
@@ -261,7 +243,7 @@ func TestUninstallNeverDeletesOutsideCuratedDirs(t *testing.T) {
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(outside, "droid")
+	bin := filepath.Join(outside, "opencode")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +254,7 @@ func TestUninstallNeverDeletesOutsideCuratedDirs(t *testing.T) {
 	inst := NewWithResolver(fr, okLook, resolveTo(bin), []string{curated},
 		func(p string) error { removed = append(removed, p); return nil })
 
-	_, _, err := inst.Uninstall(context.Background(), "factory-droid")
+	_, _, err := inst.Uninstall(context.Background(), "opencode")
 	if !errors.Is(err, ErrUnknownMethod) {
 		t.Fatalf("err = %v, want ErrUnknownMethod (safe no-op)", err)
 	}
@@ -290,7 +272,7 @@ func TestUninstallNeverDeletesOutsideCuratedDirs(t *testing.T) {
 func TestNpmMissing(t *testing.T) {
 	fr := &fakeRunner{}
 	inst := NewWithLookPath(fr, missLook)
-	args, _, err := inst.Install(context.Background(), "pi")
+	args, _, err := inst.Install(context.Background(), "opencode")
 	if !errors.Is(err, ErrNpmMissing) {
 		t.Fatalf("Install err = %v, want ErrNpmMissing", err)
 	}

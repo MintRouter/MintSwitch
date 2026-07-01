@@ -25,18 +25,16 @@ import (
 	"net/http"
 	"strings"
 
+	"mintswitch/internal/adapters/antigravity"
 	"mintswitch/internal/adapters/claudecode"
 	"mintswitch/internal/adapters/codex"
 	"mintswitch/internal/adapters/custom"
-	"mintswitch/internal/adapters/factorydroid"
 	"mintswitch/internal/adapters/opencode"
-	"mintswitch/internal/adapters/pi"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
-	mcpauggie "mintswitch/internal/injectors/auggie"
+	mcpantigravity "mintswitch/internal/injectors/antigravity"
 	mcpclaudecode "mintswitch/internal/injectors/claudecode"
-	mcpcursor "mintswitch/internal/injectors/cursor"
-	mcpfactorydroid "mintswitch/internal/injectors/factorydroid"
+	mcpcodex "mintswitch/internal/injectors/codex"
 	mcpopencode "mintswitch/internal/injectors/opencode"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/paths"
@@ -46,11 +44,10 @@ import (
 // builtinIDs is the set of reserved built-in tool IDs. A custom tool may not
 // claim any of these.
 var builtinIDs = map[string]bool{
-	"claude-code":   true,
-	"codex":         true,
-	"opencode":      true,
-	"factory-droid": true,
-	"pi":            true,
+	"claude-code": true,
+	"codex":       true,
+	"opencode":    true,
+	"antigravity": true,
 }
 
 // Service is the backend façade bound into the Wails application.
@@ -92,6 +89,11 @@ type ToolView struct {
 	// this tool: the per-tool override when set, otherwise the profile default.
 	// It is empty when no profile is saved.
 	SelectedModel string `json:"selected_model"`
+	// Installable is true when the tool has a whitelisted npm package the
+	// installer can install/uninstall. It is false for tools distributed only as
+	// a standalone binary (e.g. antigravity) and for custom tools, so the UI can
+	// hide the Install action for those.
+	Installable bool `json:"installable"`
 }
 
 // ToolOpResult is the per-tool outcome of a bulk apply/restore operation.
@@ -126,7 +128,7 @@ type InstallResult struct {
 }
 
 // New builds a Service backed by the real environment: a default
-// paths.Resolver, a backup.Engine under the user's data dir, and the five
+// paths.Resolver, a backup.Engine under the user's data dir, and the four
 // built-in tool adapters. It returns an error only if the home/data directories
 // cannot be resolved.
 func New() (*Service, error) {
@@ -138,14 +140,13 @@ func New() (*Service, error) {
 }
 
 // NewWithDeps builds a Service from an injected Resolver and backup Engine,
-// registering the five built-in adapters. Tests can point r.Home at a temp dir.
+// registering the four built-in adapters. Tests can point r.Home at a temp dir.
 func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg := core.NewRegistry()
 	reg.Register(claudecode.New(r, e))
 	reg.Register(codex.New(r, e))
 	reg.Register(opencode.New(r, e))
-	reg.Register(factorydroid.New(r, e))
-	reg.Register(pi.New(r, e))
+	reg.Register(antigravity.New(r, e))
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
 	store := settings.NewStore(r.SettingsPath())
 	s := NewWithInstaller(reg, store, inst)
@@ -156,9 +157,8 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	s.mcp = []core.MCPInjector{
 		mcpclaudecode.New(r, e),
 		mcpopencode.New(r, e),
-		mcpfactorydroid.New(r, e),
-		mcpcursor.New(r, e),
-		mcpauggie.New(r, e),
+		mcpcodex.New(r, e),
+		mcpantigravity.New(r, e),
 	}
 	// Register user-defined custom tools after the built-ins, in saved order.
 	// A load failure here is non-fatal: the built-ins still work and the user
@@ -230,6 +230,7 @@ func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
 		models = []string{p.Model}
 	}
 	_, isCustom := a.(*custom.Adapter)
+	_, installable := installer.Spec(a.ID())
 	return ToolView{
 		ID:            a.ID(),
 		Name:          a.Name(),
@@ -240,6 +241,7 @@ func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
 		Custom:        isCustom,
 		Models:        models,
 		SelectedModel: selectedModel,
+		Installable:   installable,
 	}
 }
 

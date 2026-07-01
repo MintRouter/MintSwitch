@@ -55,13 +55,11 @@ type binSpec struct {
 
 // binaries maps each supported tool ID to its CLI binary and brew name. The IDs
 // match the adapter ID() values; the bin names match the adapters' Detect()
-// lookups (claude, codex, opencode, droid, pi).
+// lookups (claude, codex, opencode).
 var binaries = map[string]binSpec{
-	"claude-code":   {bin: "claude", brew: "claude"},
-	"codex":         {bin: "codex", brew: "codex"},
-	"opencode":      {bin: "opencode", brew: "opencode"},
-	"factory-droid": {bin: "droid", brew: "droid"},
-	"pi":            {bin: "pi", brew: "pi"},
+	"claude-code": {bin: "claude", brew: "claude"},
+	"codex":       {bin: "codex", brew: "codex"},
+	"opencode":    {bin: "opencode", brew: "opencode"},
 }
 
 // brewPrefixes are the Homebrew install prefixes used as a secondary signal when
@@ -82,11 +80,9 @@ type Package struct {
 // the adapter ID() values in internal/adapters. Values verified from official
 // docs (2026).
 var packages = map[string]Package{
-	"claude-code":   {NpmPackage: "@anthropic-ai/claude-code"},
-	"codex":         {NpmPackage: "@openai/codex"},
-	"opencode":      {NpmPackage: "opencode-ai"},
-	"factory-droid": {NpmPackage: "droid"},
-	"pi":            {NpmPackage: "@earendil-works/pi-coding-agent", ExtraFlags: []string{"--ignore-scripts"}},
+	"claude-code": {NpmPackage: "@anthropic-ai/claude-code"},
+	"codex":       {NpmPackage: "@openai/codex"},
+	"opencode":    {NpmPackage: "opencode-ai"},
 }
 
 // Spec returns the whitelisted package for toolID and whether it is known.
