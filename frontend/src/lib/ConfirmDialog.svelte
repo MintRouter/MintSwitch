@@ -120,22 +120,24 @@
     box-shadow: var(--shadow-pop);
   }
   .title {
-    margin: 0 0 0.5rem;
-    font-size: 1.15rem;
-    font-weight: 700;
+    margin: 0 0 var(--s-1);
+    font-size: var(--fs-title);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--tracking-tight);
     color: var(--text);
   }
   .message {
     margin: 0 0 var(--s-3);
     color: var(--muted);
-    font-size: 0.95rem;
-    line-height: 1.5;
+    font-size: var(--fs-body);
+    line-height: var(--lh);
     white-space: pre-wrap;
     word-break: break-word;
   }
   .actions {
     display: flex;
     justify-content: flex-end;
-    gap: 0.5rem;
+    gap: var(--s-1);
   }
 </style>

@@ -262,8 +262,10 @@
   .title {
     flex: 0 0 auto;
     margin: 0 0 var(--s-2);
-    font-size: 1.15rem;
-    font-weight: 700;
+    font-size: var(--fs-title);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--tracking-tight);
     color: var(--text);
   }
   .add-body {
@@ -277,9 +279,9 @@
   }
   .opt { color: var(--muted); font-weight: 400; }
   .field-hint code {
-    font-size: 0.74rem;
+    font-size: var(--fs-micro);
     padding: 0.05rem 0.25rem;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     background: var(--surface-2);
     border: 1px solid var(--border);
   }
@@ -287,8 +289,8 @@
     margin: 0;
     padding: 0.5rem 0.65rem;
     border: 1px solid var(--danger);
-    border-radius: 8px;
-    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -296,7 +298,7 @@
     flex: 0 0 auto;
     display: flex;
     justify-content: flex-end;
-    gap: 0.5rem;
+    gap: var(--s-1);
     margin-top: 0.25rem;
   }
 </style>
