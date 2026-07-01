@@ -97,20 +97,17 @@
     {/if}
   {/if}
 
-  {#if tool.installed && models.length >= 1}
-    <div class="tool-model">
-      <label class="tool-model-label" for={`model-${tool.id}`}>Model</label>
-      <select class="tool-model-select" id={`model-${tool.id}`} value={selectedModel}
+  <div class="tool-actions">
+    {#if tool.installed && models.length >= 1}
+      <select class="tool-model-select" id={`model-${tool.id}`} aria-label="Model"
+        value={selectedModel}
         onchange={(e) => onModelChange(tool.id, e.currentTarget.value)}>
         <option value="">Use profile default</option>
         {#each models as m (m)}
           <option value={m}>{m}</option>
         {/each}
       </select>
-    </div>
-  {/if}
-
-  <div class="tool-actions">
+    {/if}
     {#if !tool.installed && !tool.custom}
       <button class="btn-primary sm install-btn" type="button" onclick={() => onInstall(tool.id)}
         disabled={busy} title="Install this tool with npm">
@@ -188,20 +185,17 @@
     line-height: 1.3;
     overflow-wrap: anywhere;
   }
-  .tool-model { display: flex; flex-direction: column; gap: 0.25rem; }
-  .tool-model-label {
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
   /* Custom-styled to match .field-input: native chevron removed (appearance:
      none) and replaced with a single inline-SVG chevron whose stroke tracks
      --muted per theme. padding-right clears the chevron so long model names
-     never collide with it. */
+     never collide with it. Content-sized so it sits inline with the action
+     buttons rather than claiming a full-width row; a min-width keeps short
+     names like "opus4.8" from looking empty and it wraps to its own line when
+     the actions row runs out of space. */
   .tool-model-select {
-    width: 100%;
+    width: auto;
+    min-width: 7rem;
+    max-width: 55%;
     padding: 0.5rem 2rem 0.5rem 0.65rem;
     font-size: 16px; /* matches .field-input height; guards iOS focus-zoom */
     color: var(--text);
@@ -258,6 +252,7 @@
   .tool-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 0.4rem;
     margin-top: auto;
     padding-top: 0.4rem;
