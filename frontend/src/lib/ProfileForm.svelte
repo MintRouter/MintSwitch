@@ -109,7 +109,6 @@
 <form class="card profile" onsubmit={submit} novalidate aria-labelledby="profile-h">
   <div class="card-head">
     <h2 class="card-title" id="profile-h">Endpoint profile</h2>
-    <p class="card-sub">Shared by every tool you apply it to.</p>
   </div>
 
   <div class="field">
@@ -138,11 +137,9 @@
     <input class="field-input" id="pf-key" type="password" bind:value={apiKey}
       placeholder={keyPlaceholder} autocomplete="off"
       aria-invalid={!!errors.apiKey}
-      aria-describedby={errors.apiKey ? "err-key" : "hint-key"} />
+      aria-describedby={errors.apiKey ? "err-key" : undefined} />
     {#if errors.apiKey}
       <p class="field-error" id="err-key">{errors.apiKey}</p>
-    {:else}
-      <p class="field-hint" id="hint-key">Stored locally and never shown again after saving.</p>
     {/if}
   </div>
 
@@ -153,7 +150,7 @@
         placeholder="gpt-5.5" autocomplete="off" spellcheck="false"
         onkeydown={onModelKeydown}
         aria-invalid={!!errors.models}
-        aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : "hint-model"} />
+        aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : undefined} />
       <button class="btn-primary sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
     </div>
     {#if models.length}
@@ -175,8 +172,6 @@
       <p class="field-error" id="err-models">{errors.models}</p>
     {:else if errors.model}
       <p class="field-error" id="err-model">{errors.model}</p>
-    {:else}
-      <p class="field-hint" id="hint-model">Add the models you use, then click one to set it as the default.</p>
     {/if}
   </div>
 
@@ -201,10 +196,20 @@
 </form>
 
 <style>
-  .profile { display: flex; flex-direction: column; gap: var(--s-2); }
-  .card-head { margin-bottom: 0.25rem; }
+  /* Airier, evenly-spaced rhythm between fields. The card body is framed by two
+     hairline dividers (header + actions) for a subtle grouped macOS-inspector
+     feel — on-palette borders only, no extra fills or shadows. */
+  .profile { display: flex; flex-direction: column; gap: var(--s-3); }
+  .card-head { padding-bottom: var(--s-2); border-bottom: 1px solid var(--border); }
   .opt { color: var(--muted); font-weight: 400; }
-  .profile-actions { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; margin-top: 0.25rem; }
+  .profile-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.6rem;
+    padding-top: var(--s-2);
+    border-top: 1px solid var(--border);
+  }
 
   /* Master Context Engine ON/OFF switch, shared with the Save row. A native
      checkbox (role="switch") drives an accent track + sliding thumb; the visible
@@ -283,7 +288,7 @@
     word-break: break-all;
   }
 
-  .model-add { display: flex; gap: 0.4rem; align-items: stretch; }
+  .model-add { display: flex; gap: var(--s-1); align-items: stretch; }
   .model-add .field-input { flex: 1 1 auto; }
   .model-add .btn-primary { flex: 0 0 auto; }
 
