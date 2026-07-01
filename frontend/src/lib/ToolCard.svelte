@@ -195,14 +195,18 @@
   .tool-model-select {
     width: auto;
     min-width: 7rem;
-    max-width: 55%;
-    padding: 0.5rem 2rem 0.5rem 0.65rem;
-    font-size: 16px; /* matches .field-input height; guards iOS focus-zoom */
+    max-width: 12rem;
+    padding: 0.36rem 1.8rem 0.36rem 0.7rem; /* matches .btn-*.sm vertical box; right pad clears chevron */
+    font-size: 0.84rem; /* matches .btn-*.sm */
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--text);
     background-color: var(--surface-2);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 0.65rem center;
+    background-position: right 0.6rem center;
     background-size: 12px 8px;
     border: 1px solid var(--border-strong);
     border-radius: 8px;
