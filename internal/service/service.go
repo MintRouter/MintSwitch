@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"mintswitch/internal/adapters/claudecode"
@@ -32,6 +33,7 @@ import (
 	"mintswitch/internal/adapters/pi"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	mcpclaudecode "mintswitch/internal/injectors/claudecode"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/paths"
 	"mintswitch/internal/settings"
@@ -57,6 +59,13 @@ type Service struct {
 	// registry; AddCustomTool requires them.
 	r *paths.Resolver
 	e *backup.Engine
+	// mcp holds the registered MCP injectors (separate from the endpoint tool
+	// registry) in registration order.
+	mcp []core.MCPInjector
+	// mcpClient is the HTTP client used by TestMCPConnection. It is nil for the
+	// production constructors (a 10s-timeout client is built on demand); tests
+	// may set it to an httptest client.
+	mcpClient *http.Client
 }
 
 // ToolView is the per-tool summary returned by [Service.ListTools].
@@ -138,6 +147,9 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	s := NewWithInstaller(reg, store, inst)
 	s.r = r
 	s.e = e
+	// Register the MCP injectors. This is a distinct registry from the endpoint
+	// tool adapters above: MCP injection is independent of the active profile.
+	s.mcp = []core.MCPInjector{mcpclaudecode.New(r, e)}
 	// Register user-defined custom tools after the built-ins, in saved order.
 	// A load failure here is non-fatal: the built-ins still work and the user
 	// can re-add custom tools; it must not prevent the app from starting.

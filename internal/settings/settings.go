@@ -26,6 +26,13 @@ type State struct {
 	// overriding the active profile's selected Model when applying. An absent or
 	// stale entry falls back to the profile default.
 	ToolModels map[string]string `json:"tool_models,omitempty"`
+	// MCPKey is the MintRouter API key used to inject the Remote MCP server into
+	// tools. It is a secret bearer token: it is written at 0600 with the rest of
+	// this file, must never be logged, and is never returned raw over bindings.
+	MCPKey string `json:"mcp_key,omitempty"`
+	// MCPEndpoint optionally overrides the default MintRouter MCP endpoint
+	// (core.DefaultMCPEndpoint). Empty means use the default.
+	MCPEndpoint string `json:"mcp_endpoint,omitempty"`
 }
 
 // Store loads and saves a [State] from a single JSON file.

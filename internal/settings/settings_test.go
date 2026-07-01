@@ -44,6 +44,22 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMCPFieldsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s := NewStore(path)
+	in := &State{MCPKey: "sk-mcp-secret", MCPEndpoint: "https://custom.example/mcp"}
+	if err := s.Save(in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if out.MCPKey != in.MCPKey || out.MCPEndpoint != in.MCPEndpoint {
+		t.Fatalf("mcp fields round-trip mismatch: %+v", out)
+	}
+}
+
 func TestSaveAtomicAndPerms(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
