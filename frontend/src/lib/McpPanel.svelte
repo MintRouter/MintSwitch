@@ -20,8 +20,6 @@
   let mcpState = $state<MCPState | null>(null);
   let loading = $state(true);
   let loadError = $state("");
-  let apiKey = $state("");
-  let savingKey = $state(false);
   let testing = $state(false);
   let testResult = $state<MCPTestResult | null>(null);
   let busyIds = $state<string[]>([]);
@@ -46,42 +44,6 @@
     }
   }
   onMount(load);
-
-  // Persist the key, then clear the input and refresh so HasKey flips. The raw
-  // value is never kept or echoed — the field resets to blank after saving.
-  async function saveKey(): Promise<void> {
-    const k = apiKey.trim();
-    if (!k || savingKey) return;
-    savingKey = true;
-    try {
-      await Service.SetMCPKey(k);
-      apiKey = "";
-      testResult = null;
-      await refresh();
-      flash("MintRouter key saved.", "success");
-    } catch (e) {
-      flash(errMsg(e), "error");
-    } finally {
-      savingKey = false;
-    }
-  }
-
-  // Clear the saved key (SetMCPKey("")), so the user can rotate/remove it.
-  async function clearKey(): Promise<void> {
-    if (savingKey) return;
-    savingKey = true;
-    try {
-      await Service.SetMCPKey("");
-      apiKey = "";
-      testResult = null;
-      await refresh();
-      flash("MintRouter key cleared.", "success");
-    } catch (e) {
-      flash(errMsg(e), "error");
-    } finally {
-      savingKey = false;
-    }
-  }
 
   async function testConnection(): Promise<void> {
     if (testing) return;
@@ -109,7 +71,7 @@
     void withBusy(id, async () => {
       try {
         const r = await Service.InjectMCPOne(id);
-        flash(r.message || `Injected MintRouter MCP into ${name(id)}.`, "success");
+        flash(r.message || `Enabled Context Engine for ${name(id)}.`, "success");
       } catch (e) {
         flash(errMsg(e), "error");
       }
@@ -121,12 +83,25 @@
     void withBusy(id, async () => {
       try {
         const r = await Service.RemoveMCPOne(id);
-        flash(r.message || `Removed MintRouter MCP from ${name(id)}.`, "success");
+        flash(r.message || `Disabled Context Engine for ${name(id)}.`, "success");
       } catch (e) {
         flash(errMsg(e), "error");
       }
       await refresh();
     });
+  }
+
+  // A tool is "on" when MintSwitch itself wrote the Context Engine config. The
+  // right-hand checkbox reflects this; toggling injects (on) or removes (off).
+  function isEnabled(status: string): boolean {
+    return status === "configured_by_mintswitch";
+  }
+
+  // Toggle handler for the per-tool Context Engine checkbox. `checked` is the
+  // control's new desired state; the underlying status is re-synced by refresh().
+  function toggleTool(id: string, checked: boolean): void {
+    if (checked) inject(id);
+    else remove(id);
   }
 
   // Canonical display names for the known MCP injector ids (from GetMCPState).
@@ -181,7 +156,7 @@
     if (r.ok) return "";
     switch (r.status) {
       case 401:
-        return "Check the MintRouter API key you saved above.";
+        return "Check the MintRouter API key saved in your profile above.";
       case 403:
         return "Ask your admin to enable the Context-Engine opt-in for your MintRouter account.";
       case 404:
@@ -197,9 +172,19 @@
 </script>
 
 <section class="card mcp" aria-labelledby="mcp-h">
-  <div class="card-head">
-    <h2 class="card-title" id="mcp-h">MintRouter MCP</h2>
-    <p class="card-sub">Inject the MintRouter Remote MCP server into your tools.</p>
+  <div class="card-head mcp-head">
+    <div class="mcp-head-text">
+      <h2 class="card-title" id="mcp-h">Context Engine</h2>
+      <p class="card-sub">
+        Adds MintRouter's Context Engine — code search and context retrieval — to
+        your AI tools, using the MintRouter API key saved in your profile above.
+      </p>
+    </div>
+    <button class="btn-ghost sm mcp-test-btn" type="button" onclick={testConnection}
+      disabled={testing || !hasKey}
+      title={hasKey ? undefined : "Save your MintRouter API key in the profile first"}>
+      {testing ? "Testing…" : "Test connection"}
+    </button>
   </div>
 
   <p class="mcp-note">
@@ -208,47 +193,27 @@
     <code>augment_code_search</code> appear as-is in your tools.
   </p>
 
-  <div class="field">
-    <label class="field-label" for="mcp-key">MintRouter API key</label>
-    <div class="mcp-key-row">
-      <input class="field-input" id="mcp-key" type="password" bind:value={apiKey}
-        placeholder={hasKey ? "•••• key saved — enter a new key to replace" : "mint_…"}
-        autocomplete="off" spellcheck="false" />
-      <button class="btn-primary sm" type="button" onclick={saveKey}
-        disabled={savingKey || !apiKey.trim()}>
-        {savingKey ? "Saving…" : "Save key"}
-      </button>
+  {#if !loading && !loadError && !hasKey}
+    <p class="mcp-hint" role="note">
+      Save your MintRouter API key in the profile above to enable Context Engine.
+    </p>
+  {/if}
+
+  {#if endpoint}
+    <p class="field-hint mcp-endpoint">Endpoint: <code>{endpoint}</code></p>
+  {/if}
+  {#if testResult}
+    <div class={`mcp-test ${testResult.ok ? "ok" : "err"}`}
+      role={testResult.ok ? "status" : "alert"}>
+      <span class="mcp-test-mark" aria-hidden="true">{testResult.ok ? "✓" : "✕"}</span>
+      <span class="mcp-test-body">
+        <span class="mcp-test-msg">{testResult.meaning}</span>
+        {#if testHint(testResult)}
+          <span class="mcp-test-hint">{testHint(testResult)}</span>
+        {/if}
+      </span>
     </div>
-    <div class="mcp-key-state">
-      {#if hasKey}
-        <span class="badge tone-success">Key saved</span>
-        <button class="btn-ghost sm danger" type="button" onclick={clearKey}
-          disabled={savingKey}>Clear</button>
-      {:else}
-        <span class="field-hint">No key saved yet. Stored locally and never shown again.</span>
-      {/if}
-      <button class="btn-ghost sm" type="button" onclick={testConnection}
-        disabled={testing || !hasKey}
-        title={hasKey ? undefined : "Save a key first"}>
-        {testing ? "Testing…" : "Test connection"}
-      </button>
-    </div>
-    {#if endpoint}
-      <p class="field-hint">Endpoint: <code>{endpoint}</code></p>
-    {/if}
-    {#if testResult}
-      <div class={`mcp-test ${testResult.ok ? "ok" : "err"}`}
-        role={testResult.ok ? "status" : "alert"}>
-        <span class="mcp-test-mark" aria-hidden="true">{testResult.ok ? "✓" : "✕"}</span>
-        <span class="mcp-test-body">
-          <span class="mcp-test-msg">{testResult.meaning}</span>
-          {#if testHint(testResult)}
-            <span class="mcp-test-hint">{testHint(testResult)}</span>
-          {/if}
-        </span>
-      </div>
-    {/if}
-  </div>
+  {/if}
 
   {#if loading}
     <div class="state" role="status" aria-live="polite">Loading MCP state…</div>
@@ -260,27 +225,28 @@
   {:else if tools.length === 0}
     <div class="state">No MCP-capable tools.</div>
   {:else}
-    <ul class="mcp-tools" aria-label="MCP tools">
+    <ul class="mcp-tools" aria-label="Context Engine tools">
       {#each tools as t (t.id)}
         {@const meta = mcpMeta(t.status)}
         {@const busy = busyIds.includes(t.id)}
+        {@const enabled = isEnabled(t.status)}
+        {@const disabled = !hasKey || !t.installed || busy}
         <li class="mcp-tool">
           <div class="mcp-tool-info">
             <span class="mcp-tool-name">{name(t.id)}</span>
             <span class={`badge tone-${meta.tone}`}>{meta.label}</span>
           </div>
-          <div class="mcp-tool-actions">
-            <button class="btn-primary sm" type="button" onclick={() => inject(t.id)}
-              disabled={!hasKey || !t.installed || busy}
-              title={!hasKey ? "Save a key first" : !t.installed ? "Tool is not installed" : undefined}>
-              {busy ? "Working…" : "Inject"}
-            </button>
-            <button class="btn-ghost sm danger" type="button" onclick={() => remove(t.id)}
-              disabled={busy || t.status === "not_installed" || t.status === "not_configured"}
-              title={t.status === "not_configured" ? "Nothing to remove" : undefined}>
-              Remove
-            </button>
-          </div>
+          <label class={`mcp-toggle ${disabled ? "is-disabled" : ""}`}
+            title={!hasKey
+              ? "Save your MintRouter API key in the profile first"
+              : !t.installed
+                ? "Tool is not installed"
+                : undefined}>
+            <input class="mcp-toggle-input" type="checkbox"
+              checked={enabled} {disabled}
+              onchange={(e) => toggleTool(t.id, e.currentTarget.checked)} />
+            <span class="mcp-toggle-label">{busy ? "Working…" : "Context Engine"}</span>
+          </label>
         </li>
       {/each}
     </ul>
@@ -290,6 +256,31 @@
 <style>
   .mcp { display: flex; flex-direction: column; gap: var(--s-2); }
   .card-head { margin-bottom: 0.25rem; }
+
+  /* Header: title/subtitle on the left, Test-connection on the trailing edge. */
+  .mcp-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+  .mcp-head-text { min-width: 0; }
+  .mcp-test-btn { flex: 0 0 auto; margin-top: 0.1rem; }
+
+  /* Inline call-to-action when no profile key is saved yet: accent left rule so
+     it reads as guidance, not an error. */
+  .mcp-hint {
+    margin: 0;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+  }
+  .mcp-endpoint { margin-top: -0.1rem; }
 
   /* Non-blocking explainer. Muted, low-emphasis so it informs without alarming. */
   .mcp-note {
@@ -311,13 +302,6 @@
     word-break: break-all;
   }
 
-  .mcp-key-row { display: flex; gap: 0.4rem; align-items: stretch; }
-  .mcp-key-row .field-input { flex: 1 1 auto; min-width: 0; }
-  .mcp-key-row .btn-primary { flex: 0 0 auto; }
-  .mcp-key-state { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-  .mcp-key-state .field-hint { flex: 1 1 auto; }
-  /* Push the Test button to the trailing edge of the state row. */
-  .mcp-key-state .btn-ghost:last-child { margin-left: auto; }
   .field-hint code {
     font-size: 0.74rem;
     padding: 0.02rem 0.25rem;
@@ -382,5 +366,30 @@
     color: var(--text);
     overflow-wrap: anywhere;
   }
-  .mcp-tool-actions { display: flex; align-items: center; gap: 0.4rem; flex: 0 0 auto; }
+  /* Right-aligned enable control: a native checkbox labelled "Context Engine".
+     Checked = configured_by_mintswitch. accent-color keeps it on-brand in both
+     themes; the shared :focus-visible ring covers keyboard focus. */
+  .mcp-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 0 0 auto;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .mcp-toggle.is-disabled { cursor: not-allowed; color: var(--muted); }
+  .mcp-toggle-input {
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    flex: 0 0 auto;
+    accent-color: var(--accent);
+    cursor: inherit;
+  }
+  .mcp-toggle-input:disabled { cursor: not-allowed; }
+  .mcp-toggle-label { line-height: 1; }
 </style>
