@@ -459,7 +459,6 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
-    padding-right: 0.25rem;
   }
   .col-tools { display: flex; flex-direction: column; min-height: 0; }
   /* Only this region scrolls if the cards overflow; at 5 tools it fits. */
