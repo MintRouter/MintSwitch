@@ -151,30 +151,29 @@
         onkeydown={onModelKeydown}
         aria-invalid={!!errors.models}
         aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : "hint-model"} />
-      <button class="btn-ghost sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
+      <button class="btn-primary sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
     </div>
     {#if models.length}
-      <ul class="model-list" aria-label="Models">
+      <div class="seg-group" role="group" aria-label="Default model">
         {#each models as m (m)}
-          <li class="model-chip" class:selected={m === model}>
-            <label class="model-default">
-              <input type="radio" name="pf-default-model" value={m}
-                checked={m === model} onchange={() => (model = m)} />
-              <span class="model-name">{m}</span>
-              {#if m === model}<span class="model-tag">default</span>{/if}
-            </label>
-            <button class="model-remove" type="button" onclick={() => removeModel(m)}
+          <div class="seg" class:selected={m === model}>
+            <button class="seg-select" type="button" aria-pressed={m === model}
+              onclick={() => (model = m)} title={`Set ${m} as default`}>
+              <span class="seg-name">{m}</span>
+            </button>
+            <button class="seg-remove" type="button"
+              onclick={(e) => { e.preventDefault(); e.stopPropagation(); removeModel(m); }}
               aria-label={`Remove ${m}`} title={`Remove ${m}`}>×</button>
-          </li>
+          </div>
         {/each}
-      </ul>
+      </div>
     {/if}
     {#if errors.models}
       <p class="field-error" id="err-models">{errors.models}</p>
     {:else if errors.model}
       <p class="field-error" id="err-model">{errors.model}</p>
     {:else}
-      <p class="field-hint" id="hint-model">Add the models you use, then pick one as the default.</p>
+      <p class="field-hint" id="hint-model">Add the models you use, then click one to set it as the default.</p>
     {/if}
   </div>
 
@@ -202,59 +201,66 @@
 
   .model-add { display: flex; gap: 0.4rem; align-items: stretch; }
   .model-add .field-input { flex: 1 1 auto; }
-  .model-add .btn-ghost { flex: 0 0 auto; }
-  .model-list {
+  .model-add .btn-primary { flex: 0 0 auto; }
+
+  /* Segmented default picker: models render as connected segments inside a
+     grouped container that wraps to a new row in the narrow profile column.
+     The selected segment is accent-filled; the rest are neutral and clickable
+     to become the default. Each segment carries its own × whose click is
+     isolated (preventDefault + stopPropagation) so removing never re-selects. */
+  .seg-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
     margin: 0.1rem 0 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-  .model-chip {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.3rem 0.35rem 0.3rem 0.5rem;
+    padding: 3px;
+    background: var(--surface);
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    background: var(--surface-2);
+    border-radius: 9px;
   }
-  .model-chip.selected { border-color: var(--accent); box-shadow: var(--focus); }
-  .model-default {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    flex: 1 1 auto;
+  .seg {
+    display: inline-flex;
+    align-items: stretch;
     min-width: 0;
-    cursor: pointer;
-    font-size: 0.86rem;
+    max-width: 100%;
+    border-radius: 6px;
+    background: var(--surface-2);
+    transition: background-color 0.15s ease;
+  }
+  .seg.selected { background: var(--accent); }
+  .seg-select {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    padding: 0.32rem 0.55rem;
+    font-size: 0.84rem;
+    font-weight: 600;
     color: var(--text);
+    background: transparent;
+    border: none;
+    border-radius: 6px 0 0 6px;
+    cursor: pointer;
+    transition: color 0.15s ease;
   }
-  .model-default input { flex: 0 0 auto; accent-color: var(--accent); }
-  .model-name { overflow-wrap: anywhere; }
-  .model-tag {
+  .seg.selected .seg-select { color: var(--accent-text); }
+  .seg-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .seg-remove {
     flex: 0 0 auto;
-    font-size: 0.66rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--accent);
-  }
-  .model-remove {
-    flex: 0 0 auto;
-    width: 1.4rem;
-    height: 1.4rem;
+    width: 1.5rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    padding: 0;
     border: none;
-    border-radius: 6px;
+    border-radius: 0 6px 6px 0;
     background: transparent;
     color: var(--muted);
     font-size: 1.05rem;
     line-height: 1;
     cursor: pointer;
+    transition: color 0.15s ease, opacity 0.15s ease;
   }
-  .model-remove:hover { color: var(--danger); background: var(--surface); }
+  .seg-remove:hover { color: var(--danger); }
+  .seg.selected .seg-remove { color: var(--accent-text); }
+  .seg.selected .seg-remove:hover { color: var(--accent-text); opacity: 0.75; }
 </style>

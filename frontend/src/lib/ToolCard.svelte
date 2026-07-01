@@ -196,16 +196,30 @@
     text-transform: uppercase;
     color: var(--muted);
   }
+  /* Custom-styled to match .field-input: native chevron removed (appearance:
+     none) and replaced with a single inline-SVG chevron whose stroke tracks
+     --muted per theme. padding-right clears the chevron so long model names
+     never collide with it. */
   .tool-model-select {
     width: 100%;
-    padding: 0.4rem 0.55rem;
-    font-size: 0.84rem;
+    padding: 0.5rem 2rem 0.5rem 0.65rem;
+    font-size: 16px; /* matches .field-input height; guards iOS focus-zoom */
     color: var(--text);
-    background: var(--surface-2);
+    background-color: var(--surface-2);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.65rem center;
+    background-size: 12px 8px;
     border: 1px solid var(--border-strong);
     border-radius: 8px;
     outline: none;
     cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  :global([data-theme="dark"]) .tool-model-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%2398989d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
   .tool-model-select:hover { border-color: var(--muted); }
   .tool-model-select:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
