@@ -473,18 +473,34 @@
     background: color-mix(in srgb, var(--muted) 70%, transparent);
   }
   .col-tools { display: flex; flex-direction: column; min-height: 0; }
-  /* Only this region scrolls if the cards overflow; at 5 tools it fits. */
+  /* Only this region scrolls if the cards overflow. The grid is locked to show
+     exactly two rows (a 2×2 default), so a 5th tool never peeks half-visible at
+     the bottom — you scroll down to reveal its whole card. */
   .tool-grid {
+    /* Uniform row height so rows are predictable; sized to comfortably hold the
+       tallest built-in card (paths + action buttons) without clipping. */
+    --tool-row-h: 250px;
     flex: 1 1 auto;
     min-height: 0;
+    /* Cap the scroll viewport to 2 rows + 1 gap: the 3rd row (5th tool) stays
+       fully below the fold rather than peeking. Very tall windows leave empty
+       space below the grid — an accepted trade-off for the clean 2×2 default. */
+    max-height: calc(var(--tool-row-h) * 2 + var(--s-2));
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-auto-rows: var(--tool-row-h);
     gap: var(--s-2);
     align-content: start;
+    /* Snap to row tops so scrolling lands on a whole card, never mid-card. */
+    scroll-snap-type: y proximity;
     scrollbar-gutter: stable both-edges;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+  }
+  .tool-grid :global(.tool) {
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
   }
   .tool-grid::-webkit-scrollbar { width: 8px; height: 8px; }
   .tool-grid::-webkit-scrollbar-track { background: transparent; }
@@ -498,7 +514,16 @@
   @media (max-width: 860px), (max-height: 600px) {
     .layout { grid-template-columns: 1fr; min-height: 0; }
     .col-tools { min-height: 0; }
-    .tool-grid { overflow: visible; flex: none; min-height: 0; }
+    /* Stacked: drop the 2-row cap and fixed row height so the whole page scrolls
+       normally and cards size to their content. */
+    .tool-grid {
+      overflow: visible;
+      flex: none;
+      min-height: 0;
+      max-height: none;
+      grid-auto-rows: auto;
+      scroll-snap-type: none;
+    }
     /* Stacked: let the whole page scroll instead of the form scrolling on its own. */
     .col-form :global(.profile) { overflow: visible; flex: none; }
   }
