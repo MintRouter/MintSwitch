@@ -59,8 +59,8 @@
     --warn: #a85a00;
     --info: #0066cc;
 
-    /* Soft, layered, real depth. */
-    --shadow-card: 0 1px 2px rgba(20, 18, 15, 0.06), 0 4px 12px rgba(20, 18, 15, 0.06),
+    /* Soft, layered, real depth — kept flat/modern (light cards sit nearly flush). */
+    --shadow-card: 0 1px 2px rgba(20, 18, 15, 0.045), 0 3px 9px rgba(20, 18, 15, 0.045),
         0 0 0 0.5px rgba(20, 18, 15, 0.04);
     --shadow-pop: 0 8px 30px rgba(20, 18, 15, 0.16), 0 2px 8px rgba(20, 18, 15, 0.10),
         0 0 0 0.5px rgba(20, 18, 15, 0.06);
@@ -309,7 +309,9 @@ body {
     background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
     filter: none;
 }
-.btn-primary:disabled, .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+/* Disabled stays legible as a button: higher opacity floor + its border kept. */
+.btn-primary:disabled, .btn-ghost:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+.btn-ghost:disabled { border-color: var(--border-strong); }
 
 /* ----- Badges (soft tinted status tones) ----------------------------------- */
 .badge {
@@ -325,6 +327,10 @@ body {
     background: var(--surface-2);
     color: var(--muted);
     white-space: nowrap;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 /* Each tone carries a subtle tint of its own hue for clearer, calmer status. */
 .badge.install.on,

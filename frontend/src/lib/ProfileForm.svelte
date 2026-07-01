@@ -144,7 +144,7 @@
   }
 
   const keyPlaceholder = $derived(
-    profile.has_key ? "Saved — leave blank to keep" : "Enter your API key",
+    profile.has_key ? "••••••••" : "Enter your API key",
   );
 
   // Live preview of the backend normalization. When a public http endpoint is
@@ -186,13 +186,20 @@
   </div>
 
   <div class="field">
-    <label class="micro-label" for="pf-key">API key</label>
+    <div class="label-row">
+      <label class="micro-label" for="pf-key">API key</label>
+      {#if profile.has_key}
+        <span class="badge tone-success">Saved</span>
+      {/if}
+    </div>
     <input class="field-input" id="pf-key" type="password" bind:value={apiKey}
       placeholder={keyPlaceholder} autocomplete="off"
       aria-invalid={!!errors.apiKey}
-      aria-describedby={errors.apiKey ? "err-key" : undefined} />
+      aria-describedby={errors.apiKey ? "err-key" : profile.has_key ? "hint-key" : undefined} />
     {#if errors.apiKey}
       <p class="field-error" id="err-key">{errors.apiKey}</p>
+    {:else if profile.has_key}
+      <p class="field-hint" id="hint-key">Leave blank to keep the saved key.</p>
     {/if}
   </div>
 
@@ -278,6 +285,8 @@
      lines; the spacing scale alone carries the grouping. */
   .profile { display: flex; flex-direction: column; gap: var(--s-3); }
   .profile-title { margin: 0; }
+  /* Label + saved-state badge share a row (e.g. API KEY · Saved). */
+  .label-row { display: flex; align-items: center; gap: 0.5rem; }
   .opt {
     margin-left: 0.3rem;
     text-transform: none;
@@ -291,7 +300,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: var(--s-2);
+    gap: var(--s-1);
     margin-top: var(--s-1);
   }
 
@@ -303,8 +312,9 @@
   .mcp-switch {
     display: inline-flex;
     align-items: center;
-    gap: 0.55rem;
-    padding: 0.35rem 0.7rem 0.35rem 0.6rem;
+    min-width: 0;
+    gap: 0.45rem;
+    padding: 0.3rem 0.55rem 0.3rem 0.45rem;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -357,6 +367,7 @@
     font-weight: var(--fw-semibold);
     color: var(--text);
     line-height: var(--lh-tight);
+    white-space: nowrap;
   }
   .mcp-switch.is-disabled .mcp-switch-label { color: var(--muted); }
   @media (prefers-reduced-motion: reduce) {
@@ -387,12 +398,17 @@
     border-radius: var(--radius-sm);
   }
   .models-summary-text {
+    flex: 1 1 auto;
     min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: var(--fs-sm);
     line-height: var(--lh);
     color: var(--text);
   }
   .models-summary-text.is-empty { color: var(--muted); }
+  .models-summary .btn-ghost { flex: 0 0 auto; }
 
   /* Models management popup — mirrors the Add-provider dialog: a blurred
      backdrop centering a viewport-capped dialog whose body scrolls so the app
