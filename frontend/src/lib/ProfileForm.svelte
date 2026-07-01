@@ -144,7 +144,7 @@
   }
 
   const keyPlaceholder = $derived(
-    profile.has_key ? "•••• key saved — leave blank to keep" : "Enter your API key",
+    profile.has_key ? "Saved — leave blank to keep" : "Enter your API key",
   );
 
   // Live preview of the backend normalization. When a public http endpoint is
@@ -162,18 +162,16 @@
 </script>
 
 <form class="card profile" onsubmit={submit} novalidate aria-labelledby="profile-h">
-  <div class="card-head">
-    <h2 class="card-title" id="profile-h">Endpoint profile</h2>
-  </div>
+  <h2 class="card-title profile-title" id="profile-h">Endpoint profile</h2>
 
   <div class="field">
-    <label class="field-label" for="pf-label">Label <span class="opt">(optional)</span></label>
+    <label class="micro-label" for="pf-label">Label <span class="opt">Optional</span></label>
     <input class="field-input" id="pf-label" type="text" bind:value={label}
       placeholder="MintRouter" autocomplete="off" />
   </div>
 
   <div class="field">
-    <label class="field-label" for="pf-base">Base URL</label>
+    <label class="micro-label" for="pf-base">Base URL</label>
     <input class="field-input" id="pf-base" type="url" bind:value={baseUrl}
       placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
       aria-invalid={!!errors.baseUrl}
@@ -188,7 +186,7 @@
   </div>
 
   <div class="field">
-    <label class="field-label" for="pf-key">API key</label>
+    <label class="micro-label" for="pf-key">API key</label>
     <input class="field-input" id="pf-key" type="password" bind:value={apiKey}
       placeholder={keyPlaceholder} autocomplete="off"
       aria-invalid={!!errors.apiKey}
@@ -199,13 +197,11 @@
   </div>
 
   <div class="field">
-    <span class="field-label" id="pf-models-label">Models</span>
+    <span class="micro-label" id="pf-models-label">Models</span>
     <div class="models-summary">
       <span class="models-summary-text" class:is-empty={models.length === 0}
         aria-describedby="pf-models-label">{modelsSummary}</span>
-      <div class="models-summary-actions">
-        <button class="btn-primary sm" type="button" onclick={openModels}>Manage</button>
-      </div>
+      <button class="btn-ghost sm" type="button" onclick={openModels}>Manage</button>
     </div>
     {#if errors.models}
       <p class="field-error" id="err-models">{errors.models}</p>
@@ -214,7 +210,7 @@
     {/if}
   </div>
 
-  <div class="profile-actions">
+  <div class="profile-footer">
     <label class="mcp-switch" class:is-disabled={!hasMcpKey}
       title={hasMcpKey ? undefined : "Save your MintRouter API key in the profile first"}>
       <input class="mcp-switch-input" type="checkbox" role="switch"
@@ -241,7 +237,7 @@
       <h2 class="title" id="pf-models-title">Models</h2>
       <div class="add-body">
         <div class="field">
-          <label class="field-label" for="pf-model-add">Add a model</label>
+          <label class="micro-label" for="pf-model-add">Add a model</label>
           <div class="model-add">
             <input class="field-input" id="pf-model-add" type="text" bind:value={newModel}
               bind:this={modelInputEl}
@@ -278,32 +274,46 @@
 {/if}
 
 <style>
-  /* Airier, evenly-spaced rhythm between fields. The card body is framed by two
-     hairline dividers (header + actions) for a subtle grouped macOS-inspector
-     feel — on-palette borders only, no extra fills or shadows. */
+  /* Airier, evenly-spaced rhythm between fields — no header/footer divider
+     lines; the spacing scale alone carries the grouping. */
   .profile { display: flex; flex-direction: column; gap: var(--s-3); }
-  .card-head { padding-bottom: var(--s-2); border-bottom: 1px solid var(--border); }
-  .opt { color: var(--muted); font-weight: 400; }
-  .profile-actions {
+  .profile-title { margin: 0; }
+  .opt {
+    margin-left: 0.3rem;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: var(--fw-medium);
+    color: var(--muted);
+  }
+  /* The Context Engine toggle and Save action share a footer row. Extra top
+     space (not a divider) sets the actions apart from the fields above. */
+  .profile-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 0.6rem;
-    padding-top: var(--s-2);
-    border-top: 1px solid var(--border);
+    gap: var(--s-2);
+    margin-top: var(--s-1);
   }
 
   /* Master Context Engine ON/OFF switch, shared with the Save row. A native
      checkbox (role="switch") drives an accent track + sliding thumb; the visible
      label is the switch's accessible name via the wrapping <label>. */
+  /* The switch is presented as a self-contained inset pill so it reads as a
+     distinct setting sitting beside the primary Save action. */
   .mcp-switch {
     display: inline-flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.55rem;
+    padding: 0.35rem 0.7rem 0.35rem 0.6rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
     cursor: pointer;
     user-select: none;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
   }
-  .mcp-switch.is-disabled { cursor: not-allowed; }
+  .mcp-switch:hover:not(.is-disabled) { border-color: var(--border-strong); }
+  .mcp-switch.is-disabled { cursor: not-allowed; opacity: 0.6; }
   /* Visually-hidden but focusable: the ring is drawn on the track instead. */
   .mcp-switch-input {
     position: absolute;
@@ -343,10 +353,10 @@
   .mcp-switch-input:focus-visible + .mcp-switch-track { box-shadow: var(--focus); }
   .mcp-switch-input:disabled + .mcp-switch-track { opacity: 0.5; }
   .mcp-switch-label {
-    font-size: 0.9rem;
-    font-weight: 700;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semibold);
     color: var(--text);
-    line-height: 1.2;
+    line-height: var(--lh-tight);
   }
   .mcp-switch.is-disabled .mcp-switch-label { color: var(--muted); }
   @media (prefers-reduced-motion: reduce) {
@@ -363,24 +373,26 @@
     word-break: break-all;
   }
 
-  /* Compact Models row inside the card: a one-line summary on the left with a
-     Manage action on the right that opens the management modal below. */
+  /* Compact Models row: a plain summary of count + default on the left and a
+     Manage action on the right, framed as a subtle inset so it reads as a
+     grouped setting rather than a dense one-liner. */
   .models-summary {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-2);
+    padding: 0.5rem 0.5rem 0.5rem 0.7rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
   }
   .models-summary-text {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.88rem;
+    font-size: var(--fs-sm);
+    line-height: var(--lh);
     color: var(--text);
   }
   .models-summary-text.is-empty { color: var(--muted); }
-  .models-summary-actions { flex: 0 0 auto; display: flex; gap: var(--s-1); }
 
   /* Models management popup — mirrors the Add-provider dialog: a blurred
      backdrop centering a viewport-capped dialog whose body scrolls so the app
@@ -413,8 +425,8 @@
   .title {
     flex: 0 0 auto;
     margin: 0 0 var(--s-2);
-    font-size: 1.15rem;
-    font-weight: 700;
+    font-size: var(--fs-title);
+    font-weight: var(--fw-bold);
     color: var(--text);
   }
   .add-body {
@@ -475,8 +487,8 @@
     align-items: center;
     min-width: 0;
     padding: 0.32rem 0.4rem 0.32rem 0.6rem;
-    font-size: 0.84rem;
-    font-weight: 600;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semibold);
     color: var(--text);
     background: transparent;
     border: none;
