@@ -62,6 +62,56 @@
     }
   }
 
+  // Models are managed in a popup so the card shows only a compact summary.
+  // `addFocus` records whether the modal was opened via "Add" (focus the input)
+  // rather than "View" (just open). Esc / backdrop / Done all close it.
+  let modelsOpen = $state(false);
+  let addFocus = $state(false);
+  let modelInputEl = $state<HTMLInputElement | null>(null);
+  let modelsDialogEl = $state<HTMLDivElement | null>(null);
+
+  function openModels(focus: boolean): void {
+    addFocus = focus;
+    modelsOpen = true;
+  }
+
+  function closeModels(): void {
+    modelsOpen = false;
+  }
+
+  // Focus the model input only when opened via "Add"; runs after the dialog is
+  // rendered so the element ref exists.
+  $effect(() => {
+    if (modelsOpen && addFocus) {
+      queueMicrotask(() => modelInputEl?.focus());
+    }
+  });
+
+  // Esc closes the modal; Tab is trapped inside the dialog while it's open.
+  function onModelsKeydown(e: KeyboardEvent): void {
+    if (!modelsOpen) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeModels();
+      return;
+    }
+    if (e.key !== "Tab" || !modelsDialogEl) return;
+    const focusables = modelsDialogEl.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled])',
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
   function validate(): boolean {
     const next: Record<string, string> = {};
     if (!isHttpUrl(baseUrl)) {
@@ -104,6 +154,14 @@
   // upgraded to https we surface a non-blocking notice so the user sees the
   // saved value up front (http endpoints often drop the API key on redirect).
   const normalizedBase = $derived(normalizeBaseUrl(baseUrl));
+
+  // One-line description of the model list shown in the card: count (with
+  // correct plural) plus the current default, or an empty-state message.
+  const modelsSummary = $derived(
+    models.length === 0
+      ? "No models yet"
+      : `${models.length} model${models.length > 1 ? "s" : ""}${model ? ` · default ${model}` : ""}`,
+  );
 </script>
 
 <form class="card profile" onsubmit={submit} novalidate aria-labelledby="profile-h">
@@ -144,30 +202,15 @@
   </div>
 
   <div class="field">
-    <label class="field-label" for="pf-model-add">Models</label>
-    <div class="model-add">
-      <input class="field-input" id="pf-model-add" type="text" bind:value={newModel}
-        placeholder="gpt-5.5" autocomplete="off" spellcheck="false"
-        onkeydown={onModelKeydown}
-        aria-invalid={!!errors.models}
-        aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : undefined} />
-      <button class="btn-primary sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
-    </div>
-    {#if models.length}
-      <div class="seg-group" role="group" aria-label="Default model">
-        {#each models as m (m)}
-          <div class="seg" class:selected={m === model}>
-            <button class="seg-select" type="button" aria-pressed={m === model}
-              onclick={() => (model = m)} title={`Set ${m} as default`}>
-              <span class="seg-name">{m}</span>
-            </button>
-            <button class="seg-remove" type="button"
-              onclick={(e) => { e.preventDefault(); e.stopPropagation(); removeModel(m); }}
-              aria-label={`Remove ${m}`} title={`Remove ${m}`}>×</button>
-          </div>
-        {/each}
+    <span class="field-label" id="pf-models-label">Models</span>
+    <div class="models-summary">
+      <span class="models-summary-text" class:is-empty={models.length === 0}
+        aria-describedby="pf-models-label">{modelsSummary}</span>
+      <div class="models-summary-actions">
+        <button class="btn-primary sm" type="button" onclick={() => openModels(true)}>Add</button>
+        <button class="btn-ghost sm" type="button" onclick={() => openModels(false)}>View</button>
       </div>
-    {/if}
+    </div>
     {#if errors.models}
       <p class="field-error" id="err-models">{errors.models}</p>
     {:else if errors.model}
@@ -191,6 +234,52 @@
     </button>
   </div>
 </form>
+
+<svelte:window onkeydown={onModelsKeydown} />
+
+{#if modelsOpen}
+  <div class="backdrop" role="presentation"
+    onclick={(e) => e.target === e.currentTarget && closeModels()}>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pf-models-title"
+      tabindex="-1" bind:this={modelsDialogEl}>
+      <h2 class="title" id="pf-models-title">Models</h2>
+      <div class="add-body">
+        <div class="field">
+          <label class="field-label" for="pf-model-add">Add a model</label>
+          <div class="model-add">
+            <input class="field-input" id="pf-model-add" type="text" bind:value={newModel}
+              bind:this={modelInputEl}
+              placeholder="gpt-5.5" autocomplete="off" spellcheck="false"
+              onkeydown={onModelKeydown}
+              aria-invalid={!!errors.models}
+              aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : undefined} />
+            <button class="btn-primary sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
+          </div>
+        </div>
+        {#if models.length}
+          <div class="seg-group" role="group" aria-label="Default model">
+            {#each models as m (m)}
+              <div class="seg" class:selected={m === model}>
+                <button class="seg-select" type="button" aria-pressed={m === model}
+                  onclick={() => (model = m)} title={`Set ${m} as default`}>
+                  <span class="seg-name">{m}</span>
+                </button>
+                <button class="seg-remove" type="button"
+                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); removeModel(m); }}
+                  aria-label={`Remove ${m}`} title={`Remove ${m}`}>×</button>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="field-hint">No models yet — add your first one above.</p>
+        {/if}
+      </div>
+      <div class="actions">
+        <button class="btn-primary" type="button" onclick={closeModels}>Done</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   /* Airier, evenly-spaced rhythm between fields. The card body is framed by two
@@ -276,6 +365,77 @@
     background: var(--surface-2);
     border: 1px solid var(--border);
     word-break: break-all;
+  }
+
+  /* Compact Models row inside the card: a one-line summary on the left with
+     Add / View actions on the right that open the management modal below. */
+  .models-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .models-summary-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.88rem;
+    color: var(--text);
+  }
+  .models-summary-text.is-empty { color: var(--muted); }
+  .models-summary-actions { flex: 0 0 auto; display: flex; gap: var(--s-1); }
+
+  /* Models management popup — mirrors the Add-provider dialog: a blurred
+     backdrop centering a viewport-capped dialog whose body scrolls so the app
+     shell never gains a scrollbar. */
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--s-2);
+    background: rgba(0, 0, 0, 0.4);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    --wails-draggable: no-drag;
+  }
+  .dialog {
+    width: 100%;
+    max-width: 32rem;
+    max-height: min(90dvh, 44rem);
+    display: flex;
+    flex-direction: column;
+    padding: var(--s-3);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+  }
+  .title {
+    flex: 0 0 auto;
+    margin: 0 0 var(--s-2);
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .add-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding-right: 0.25rem;
+  }
+  .actions {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: var(--s-2);
   }
 
   .model-add { display: flex; gap: var(--s-1); align-items: stretch; }
