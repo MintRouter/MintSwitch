@@ -6,10 +6,10 @@
 
     /* Compact, even spacing scale (macOS-style). */
     --s-1: 0.5rem;
-    --s-2: 0.875rem;
-    --s-3: 1.25rem;
-    --s-4: 1.75rem;
-    --s-5: 2.5rem;
+    --s-2: 0.75rem;
+    --s-3: 1rem;
+    --s-4: 1.5rem;
+    --s-5: 2rem;
 
     /* Type ramp — display / title / heading / body / small / micro. */
     --fs-display: 1.75rem;
@@ -27,8 +27,8 @@
     --fw-bold: 700;
 
     /* Consistent interactive control heights (buttons/row controls). */
-    --control-h: 34px;
-    --control-h-sm: 28px;
+    --control-h: 30px;
+    --control-h-sm: 26px;
 
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Segoe UI",
         Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
@@ -39,61 +39,67 @@
 
 /* ----- Light theme (DEFAULT) — native macOS settings window --------------- */
 [data-theme="light"] {
-    --ink: #edecea;            /* window background (warm neutral) */
+    --ink: #f2f2f4;            /* window background (cool light gray) */
     --surface: #ffffff;        /* panels / cards */
-    --surface-2: #f4f3f1;      /* subtle inset fills (warm) */
-    --text: #1c1b19;           /* warm near-black */
-    --muted: #6c6a67;          /* warm secondary text */
+    --surface-2: #f6f6f7;      /* subtle inset fills (cool) */
+    --text: #1a1a1c;           /* cool near-black */
+    --muted: #6e6e73;          /* cool secondary text (AA on all light surfaces) */
 
     /* Mint is the brand + primary accent (retires system blue). */
-    --accent: #0a9d6e;         /* interactive mint (readable, large-bold on white) */
+    --accent: #0a7d57;         /* deep mint — 5.14:1 with white text (AA) */
     --accent-text: #ffffff;
-    --brand: #0fb083;          /* vivid mint for identity moments */
+    --brand: #0e8f63;          /* slightly brighter mint for identity moments */
+    --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--surface));
+    --accent-soft-text: #096a4a; /* 5.60:1 on --accent-soft (AA) */
 
-    --border: rgba(40, 35, 30, 0.10);      /* warm hairline */
-    --border-strong: rgba(40, 35, 30, 0.16);
+    --border: rgba(22, 24, 31, 0.10);      /* cool hairline */
+    --border-strong: rgba(22, 24, 31, 0.16);
     --danger: #d70015;
+    --muted-danger: #825b60;   /* quiet destructive rest state — 5.38:1 on --surface-2 */
 
     /* Low-saturation status tones. */
-    --ok: #1d8a3a;
-    --warn: #a85a00;
-    --info: #0066cc;
+    --ok: #1e7d42;
+    --warn: #995610;
+    --info: #1667c1;
 
     /* Soft, layered, real depth — kept flat/modern (light cards sit nearly flush). */
-    --shadow-card: 0 1px 2px rgba(20, 18, 15, 0.045), 0 3px 9px rgba(20, 18, 15, 0.045),
-        0 0 0 0.5px rgba(20, 18, 15, 0.04);
-    --shadow-pop: 0 8px 30px rgba(20, 18, 15, 0.16), 0 2px 8px rgba(20, 18, 15, 0.10),
-        0 0 0 0.5px rgba(20, 18, 15, 0.06);
-    --focus: 0 0 0 3px rgba(10, 157, 110, 0.45);
+    --shadow-card: 0 1px 2px rgba(15, 17, 23, 0.045), 0 3px 9px rgba(15, 17, 23, 0.045),
+        0 0 0 0.5px rgba(15, 17, 23, 0.04);
+    --shadow-pop: 0 8px 30px rgba(15, 17, 23, 0.16), 0 2px 8px rgba(15, 17, 23, 0.10),
+        0 0 0 0.5px rgba(15, 17, 23, 0.06);
+    --focus: 0 0 0 2px rgba(10, 125, 87, 0.38);
 
     color-scheme: light;
 }
 
 /* ----- Dark theme — native macOS settings window -------------------------- */
 [data-theme="dark"] {
-    --ink: #1b1a19;            /* warm dark window */
-    --surface: #262524;        /* warm charcoal panels */
-    --surface-2: #333230;
-    --text: #f5f4f2;
-    --muted: #9a9895;
+    --ink: #161618;            /* cool dark window */
+    --surface: #212124;        /* cool charcoal panels */
+    --surface-2: #2a2a2e;
+    --text: #f2f2f4;
+    --muted: #a0a0a8;          /* cool secondary text (AA on all dark surfaces) */
 
-    --accent: #20c191;         /* bright mint pops on dark */
-    --accent-text: #04241b;    /* deep ink for crisp text on bright mint */
-    --brand: #3ad9a6;          /* luminous mint for identity moments */
+    --accent: #2fbf8f;         /* measured mint on dark — 6.75:1 with ink text */
+    --accent-text: #06281d;    /* deep ink for crisp text on mint */
+    --brand: #46d6a0;          /* luminous mint for identity moments */
+    --accent-soft: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    --accent-soft-text: #45d19e; /* 6.52:1 on --accent-soft (AA) */
 
-    --border: rgba(255, 252, 248, 0.10);
-    --border-strong: rgba(255, 252, 248, 0.18);
+    --border: rgba(240, 240, 245, 0.10);
+    --border-strong: rgba(240, 240, 245, 0.18);
     --danger: #ff453a;
+    --muted-danger: #c99a9a;   /* quiet destructive rest state — 5.83:1 on --surface-2 */
 
-    --ok: #30d158;
-    --warn: #ff9f0a;
-    --info: #64d2ff;
+    --ok: #44c878;
+    --warn: #eda23f;
+    --info: #7cc3f2;
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.40), 0 4px 14px rgba(0, 0, 0, 0.35),
         0 0 0 0.5px rgba(0, 0, 0, 0.50);
     --shadow-pop: 0 12px 38px rgba(0, 0, 0, 0.60), 0 2px 10px rgba(0, 0, 0, 0.40),
         0 0 0 0.5px rgba(0, 0, 0, 0.60);
-    --focus: 0 0 0 3px rgba(32, 193, 145, 0.55);
+    --focus: 0 0 0 2px rgba(47, 191, 143, 0.48);
 
     color-scheme: dark;
 }
@@ -241,8 +247,8 @@ body {
     font-size: 16px; /* 16px guards against iOS focus-zoom */
     line-height: var(--lh);
     color: var(--text);
-    background: var(--surface-2);
-    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     outline: none;
     -webkit-user-select: text;
@@ -250,7 +256,7 @@ body {
     transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 .field-input::placeholder { color: var(--muted); opacity: 0.8; }
-.field-input:hover { border-color: var(--muted); }
+.field-input:hover { border-color: var(--border-strong); }
 .field-input:focus-visible { border-color: var(--accent); box-shadow: var(--focus); background: var(--surface); }
 .field-input[aria-invalid="true"] { border-color: var(--danger); }
 .field-input[aria-invalid="true"]:focus-visible {
@@ -259,8 +265,8 @@ body {
 .field-hint { margin: 0; font-size: var(--fs-micro); color: var(--muted); line-height: var(--lh); }
 .field-error { margin: 0; font-size: var(--fs-sm); color: var(--danger); font-weight: var(--fw-semibold); }
 
-/* ----- Buttons (one system: primary / ghost / danger + .sm) ---------------- */
-.btn-primary, .btn-ghost {
+/* ----- Buttons (one system: primary / soft / ghost / danger + .sm) --------- */
+.btn-primary, .btn-ghost, .btn-soft {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -277,7 +283,7 @@ body {
     transition: transform 0.08s ease, box-shadow 0.18s ease, background-color 0.18s ease,
         border-color 0.18s ease, filter 0.18s ease, opacity 0.18s ease;
 }
-.btn-primary.sm, .btn-ghost.sm {
+.btn-primary.sm, .btn-ghost.sm, .btn-soft.sm {
     min-height: var(--control-h-sm);
     padding: 0 0.75rem;
     font-size: var(--fs-sm);
@@ -296,21 +302,34 @@ body {
 }
 .btn-ghost:hover:not(:disabled) { border-color: var(--muted); }
 .btn-ghost:active:not(:disabled) { filter: brightness(0.97); transform: translateY(0.5px); }
-/* Destructive: visually separated, restrained until intent. */
-.btn-primary.danger, .btn-ghost.danger {
+/* Soft accent: tinted secondary emphasis (per-card actions) without solid fill. */
+.btn-soft {
+    color: var(--accent-soft-text);
+    background: var(--accent-soft);
+    border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.btn-soft:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 8%, var(--accent-soft));
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.btn-soft:active:not(:disabled) { filter: brightness(0.97); transform: translateY(0.5px); }
+/* Destructive: quiet at rest — red only appears on hover (intent). */
+.btn-primary.danger, .btn-ghost.danger, .btn-soft.danger {
     background: var(--surface-2);
     border-color: var(--border-strong);
-    color: var(--danger);
+    color: var(--muted-danger);
     box-shadow: none;
 }
 .btn-primary.danger:hover:not(:disabled),
-.btn-ghost.danger:hover:not(:disabled) {
+.btn-ghost.danger:hover:not(:disabled),
+.btn-soft.danger:hover:not(:disabled) {
+    color: var(--danger);
     border-color: var(--danger);
     background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
     filter: none;
 }
 /* Disabled stays legible as a button: higher opacity floor + its border kept. */
-.btn-primary:disabled, .btn-ghost:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+.btn-primary:disabled, .btn-ghost:disabled, .btn-soft:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
 .btn-ghost:disabled { border-color: var(--border-strong); }
 
 /* ----- Badges (soft tinted status tones) ----------------------------------- */
@@ -336,18 +355,18 @@ body {
 .badge.install.on,
 .badge.tone-success {
     color: var(--ok);
-    background: color-mix(in srgb, var(--ok) 12%, var(--surface-2));
-    border-color: color-mix(in srgb, var(--ok) 26%, var(--border));
+    background: color-mix(in srgb, var(--ok) 10%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--ok) 22%, var(--border));
 }
 .badge.tone-warning {
     color: var(--warn);
-    background: color-mix(in srgb, var(--warn) 12%, var(--surface-2));
-    border-color: color-mix(in srgb, var(--warn) 26%, var(--border));
+    background: color-mix(in srgb, var(--warn) 10%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--warn) 22%, var(--border));
 }
 .badge.tone-info {
     color: var(--info);
-    background: color-mix(in srgb, var(--info) 12%, var(--surface-2));
-    border-color: color-mix(in srgb, var(--info) 26%, var(--border));
+    background: color-mix(in srgb, var(--info) 10%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--info) 22%, var(--border));
 }
 .badge.tone-neutral { color: var(--muted); }
 
