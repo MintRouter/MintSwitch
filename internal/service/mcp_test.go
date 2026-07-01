@@ -98,6 +98,98 @@ func TestSetMCPKeyEmptyClears(t *testing.T) {
 	}
 }
 
+// saveActiveProfile persists an active profile carrying key as its APIKey so
+// tests can exercise the profile-sourced MCP key (the primary source).
+func saveActiveProfile(t *testing.T, s *Service, key string) {
+	t.Helper()
+	st, err := s.store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	st.ActiveProfile = &core.Profile{Label: "p", APIKey: key, BaseURL: "https://api.example.com/v1", Model: "m"}
+	if err := s.store.Save(st); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+}
+
+// TestMCPKeyFromActiveProfile proves the active profile's APIKey is the primary
+// source of the MCP key: with a profile key saved and NO legacy MCPKey, HasKey is
+// true and injection uses the profile key.
+func TestMCPKeyFromActiveProfile(t *testing.T) {
+	inj := &fakeInjector{id: "claude-code", injectRes: core.MCPResult{Message: "done"}}
+	s := newMCPService(t, inj)
+
+	saveActiveProfile(t, s, "sk-profile")
+
+	st, err := s.GetMCPState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if !st.HasKey {
+		t.Fatal("expected HasKey true from active profile key")
+	}
+	if st.Endpoint != core.DefaultMCPEndpoint {
+		t.Fatalf("endpoint = %q, want default", st.Endpoint)
+	}
+
+	if _, err := s.InjectMCPOne("claude-code"); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if inj.lastSpec == nil || inj.lastSpec.APIKey != "sk-profile" {
+		t.Fatalf("inject did not use profile key: %+v", inj.lastSpec)
+	}
+
+	// No legacy key was ever saved.
+	loaded, _ := s.store.Load()
+	if loaded.MCPKey != "" {
+		t.Fatalf("legacy MCPKey unexpectedly set: %q", loaded.MCPKey)
+	}
+}
+
+// TestActiveProfileKeyTakesPrecedenceOverMCPKey proves the profile key wins over
+// a saved legacy MCPKey when both are present.
+func TestActiveProfileKeyTakesPrecedenceOverMCPKey(t *testing.T) {
+	inj := &fakeInjector{id: "claude-code", injectRes: core.MCPResult{Message: "done"}}
+	s := newMCPService(t, inj)
+
+	if err := s.SetMCPKey("sk-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	saveActiveProfile(t, s, "sk-profile")
+
+	if _, err := s.InjectMCPOne("claude-code"); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if inj.lastSpec == nil || inj.lastSpec.APIKey != "sk-profile" {
+		t.Fatalf("profile key should take precedence: %+v", inj.lastSpec)
+	}
+}
+
+// TestMCPKeyFallsBackToLegacyKey proves the legacy MCPKey still works when the
+// active profile has no usable key (blank/whitespace), keeping existing setups
+// functional.
+func TestMCPKeyFallsBackToLegacyKey(t *testing.T) {
+	inj := &fakeInjector{id: "claude-code", injectRes: core.MCPResult{Message: "done"}}
+	s := newMCPService(t, inj)
+
+	if err := s.SetMCPKey("sk-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.GetMCPState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if !st.HasKey {
+		t.Fatal("expected HasKey true from legacy fallback key")
+	}
+	if _, err := s.InjectMCPOne("claude-code"); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if inj.lastSpec == nil || inj.lastSpec.APIKey != "sk-legacy" {
+		t.Fatalf("inject did not use legacy key: %+v", inj.lastSpec)
+	}
+}
+
 func TestInjectMCPOne(t *testing.T) {
 	inj := &fakeInjector{id: "claude-code", injectRes: core.MCPResult{Message: "done"}}
 	s := newMCPService(t, inj)

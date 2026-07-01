@@ -105,6 +105,36 @@ func TestTestMCPConnectionStatusMapping(t *testing.T) {
 	}
 }
 
+// TestTestMCPConnectionUsesProfileKey proves the probe authenticates with the
+// active profile's APIKey (the primary source) rather than a legacy MCPKey.
+func TestTestMCPConnectionUsesProfileKey(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := newMCPService(t, &fakeInjector{id: "claude-code"})
+	saveActiveProfile(t, s, "sk-profile")
+	stt, _ := s.store.Load()
+	stt.MCPEndpoint = srv.URL
+	if err := s.store.Save(stt); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.TestMCPConnection()
+	if err != nil {
+		t.Fatalf("test: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected OK, got %+v", res)
+	}
+	if gotAuth != "Bearer sk-profile" {
+		t.Fatalf("probe did not use profile key")
+	}
+}
+
 func TestProbeTransportError(t *testing.T) {
 	// A server that is immediately closed forces a connection-level failure.
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))

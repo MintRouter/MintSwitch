@@ -41,24 +41,39 @@ type MCPTestResult struct {
 	Meaning string `json:"meaning"`
 }
 
-// mcpSpec loads the persisted MCP server spec (name, endpoint, saved key) and
-// reports whether a key is present. The endpoint falls back to the default
-// constant when no override is saved.
+// mcpSpec loads the persisted MCP server spec (name, endpoint, key) and reports
+// whether a key is present. The active profile's APIKey is the primary source of
+// the MintRouter key, so the user never enters it twice; the legacy settings
+// MCPKey is used only as a fallback when no active profile key is set (keeping
+// existing setups working). The endpoint falls back to the default constant when
+// no override is saved.
 func (s *Service) mcpSpec() (core.MCPServerSpec, bool, error) {
 	st, err := s.store.Load()
 	if err != nil {
 		return core.MCPServerSpec{}, false, err
 	}
+	key := ""
+	if st.ActiveProfile != nil {
+		key = strings.TrimSpace(st.ActiveProfile.APIKey)
+	}
+	if key == "" {
+		key = strings.TrimSpace(st.MCPKey)
+	}
 	spec := core.MCPServerSpec{
 		Name:     core.DefaultMCPServerName,
 		Endpoint: strings.TrimSpace(st.MCPEndpoint),
-		APIKey:   st.MCPKey,
+		APIKey:   key,
 	}.Normalized()
-	return spec, strings.TrimSpace(st.MCPKey) != "", nil
+	return spec, key != "", nil
 }
 
-// SetMCPKey persists the MintRouter API key used for MCP injection. The key is
-// trimmed; an empty value clears the stored key. The key is never logged.
+// SetMCPKey persists the legacy MintRouter API key used for MCP injection. The
+// key is trimmed; an empty value clears the stored key. The key is never logged.
+//
+// This is now a legacy/fallback path: the active profile's APIKey is the primary
+// source of the MintRouter key (see [Service.mcpSpec]) and the UI no longer calls
+// this method. It remains exported for binding stability and to keep existing
+// setups that saved a standalone key working.
 func (s *Service) SetMCPKey(key string) error {
 	st, err := s.store.Load()
 	if err != nil {
@@ -68,9 +83,10 @@ func (s *Service) SetMCPKey(key string) error {
 	return s.store.Save(st)
 }
 
-// GetMCPState returns the redacted MCP state: whether a key is saved, the
-// endpoint that would be injected, and each injector's current status. It never
-// returns the raw key.
+// GetMCPState returns the redacted MCP state: whether a key is available, the
+// endpoint that would be injected, and each injector's current status. HasKey
+// reflects the active profile's APIKey (the primary source), falling back to the
+// legacy settings MCPKey. It never returns the raw key.
 func (s *Service) GetMCPState() (MCPState, error) {
 	spec, hasKey, err := s.mcpSpec()
 	if err != nil {
