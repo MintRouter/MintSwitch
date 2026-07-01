@@ -33,6 +33,7 @@ import (
 	"mintswitch/internal/adapters/pi"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	mcpauggie "mintswitch/internal/injectors/auggie"
 	mcpclaudecode "mintswitch/internal/injectors/claudecode"
 	mcpcursor "mintswitch/internal/injectors/cursor"
 	mcpfactorydroid "mintswitch/internal/injectors/factorydroid"
@@ -157,6 +158,7 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 		mcpopencode.New(r, e),
 		mcpfactorydroid.New(r, e),
 		mcpcursor.New(r, e),
+		mcpauggie.New(r, e),
 	}
 	// Register user-defined custom tools after the built-ins, in saved order.
 	// A load failure here is non-fatal: the built-ins still work and the user
