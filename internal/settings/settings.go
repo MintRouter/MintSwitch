@@ -33,7 +33,17 @@ type State struct {
 	// MCPEndpoint optionally overrides the default MintRouter MCP endpoint
 	// (core.DefaultMCPEndpoint). Empty means use the default.
 	MCPEndpoint string `json:"mcp_endpoint,omitempty"`
+	// ContextEngineDisabled is the persisted INVERSE of the Context Engine master
+	// toggle. The inverse is stored (with omitempty) so that the feature defaults
+	// to ENABLED when the field is absent from an old/existing settings file: an
+	// unset key unmarshals to false ⇒ not disabled ⇒ enabled. Read it through
+	// [State.ContextEngineEnabled] rather than accessing this field directly.
+	ContextEngineDisabled bool `json:"context_engine_disabled,omitempty"`
 }
+
+// ContextEngineEnabled reports whether the Context Engine master toggle is on.
+// It defaults to true when unset (see [State.ContextEngineDisabled]).
+func (s *State) ContextEngineEnabled() bool { return !s.ContextEngineDisabled }
 
 // Store loads and saves a [State] from a single JSON file.
 type Store struct {

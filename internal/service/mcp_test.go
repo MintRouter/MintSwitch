@@ -98,6 +98,43 @@ func TestSetMCPKeyEmptyClears(t *testing.T) {
 	}
 }
 
+func TestMCPEnabledDefaultsTrueWhenUnset(t *testing.T) {
+	s := newMCPService(t, &fakeInjector{id: "claude-code"})
+	st, err := s.GetMCPState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if !st.Enabled {
+		t.Fatal("expected Enabled true by default when the flag is unset")
+	}
+}
+
+func TestSetMCPEnabledRoundTrip(t *testing.T) {
+	s := newMCPService(t, &fakeInjector{id: "claude-code"})
+
+	if err := s.SetMCPEnabled(false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	st, err := s.GetMCPState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if st.Enabled {
+		t.Fatal("expected Enabled false after SetMCPEnabled(false)")
+	}
+
+	if err := s.SetMCPEnabled(true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	st, err = s.GetMCPState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if !st.Enabled {
+		t.Fatal("expected Enabled true after SetMCPEnabled(true)")
+	}
+}
+
 // saveActiveProfile persists an active profile carrying key as its APIKey so
 // tests can exercise the profile-sourced MCP key (the primary source).
 func saveActiveProfile(t *testing.T, s *Service, key string) {

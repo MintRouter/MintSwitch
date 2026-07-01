@@ -28,6 +28,7 @@ type MCPToolView struct {
 // non-secret endpoint that would be injected.
 type MCPState struct {
 	HasKey   bool          `json:"has_key"`
+	Enabled  bool          `json:"enabled"`
 	Endpoint string        `json:"endpoint"`
 	Tools    []MCPToolView `json:"tools"`
 }
@@ -83,11 +84,28 @@ func (s *Service) SetMCPKey(key string) error {
 	return s.store.Save(st)
 }
 
-// GetMCPState returns the redacted MCP state: whether a key is available, the
-// endpoint that would be injected, and each injector's current status. HasKey
-// reflects the active profile's APIKey (the primary source), falling back to the
-// legacy settings MCPKey. It never returns the raw key.
+// SetMCPEnabled persists the Context Engine master toggle. It loads the store,
+// updates only the toggle (never the key or endpoint), and saves. The inverse is
+// stored so the feature defaults to enabled when unset (see settings.State).
+func (s *Service) SetMCPEnabled(enabled bool) error {
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	st.ContextEngineDisabled = !enabled
+	return s.store.Save(st)
+}
+
+// GetMCPState returns the redacted MCP state: whether a key is available, whether
+// the Context Engine master toggle is enabled, the endpoint that would be
+// injected, and each injector's current status. HasKey reflects the active
+// profile's APIKey (the primary source), falling back to the legacy settings
+// MCPKey. It never returns the raw key.
 func (s *Service) GetMCPState() (MCPState, error) {
+	st, err := s.store.Load()
+	if err != nil {
+		return MCPState{}, err
+	}
 	spec, hasKey, err := s.mcpSpec()
 	if err != nil {
 		return MCPState{}, err
@@ -106,7 +124,7 @@ func (s *Service) GetMCPState() (MCPState, error) {
 			ConfigPaths: inj.MCPConfigPaths(),
 		})
 	}
-	return MCPState{HasKey: hasKey, Endpoint: spec.Endpoint, Tools: tools}, nil
+	return MCPState{HasKey: hasKey, Enabled: st.ContextEngineEnabled(), Endpoint: spec.Endpoint, Tools: tools}, nil
 }
 
 // InjectMCPOne injects the MintRouter MCP server into the single tool identified
