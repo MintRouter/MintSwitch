@@ -21,6 +21,12 @@
   const hasKey = $derived(!!mcpState?.has_key);
   const enabled = $derived(!!mcpState?.enabled);
   const endpoint = $derived(mcpState?.endpoint ?? "");
+  // Master is OFF but non-destructive (option A): already-injected tools keep
+  // status "configured_by_mintswitch" and stay active, yet per-card controls are
+  // hidden. Count them so we can surface a discoverable, non-alarming note.
+  const configuredCount = $derived(
+    (mcpState?.tools ?? []).filter((t) => t.status === "configured_by_mintswitch").length,
+  );
 
   async function testConnection(): Promise<void> {
     if (testing) return;
@@ -97,6 +103,15 @@
   {#if !hasKey}
     <p class="mcp-hint" role="note">
       Save your MintRouter API key in the profile above to enable Context Engine.
+    </p>
+  {/if}
+
+  {#if !enabled && configuredCount > 0}
+    <p class="mcp-hint" role="note">
+      Context Engine is off, but {configuredCount === 1
+        ? "1 tool still has it configured"
+        : `${configuredCount} tools still have it configured`}. Turn it on to
+      manage or remove them per tool.
     </p>
   {/if}
 
