@@ -184,10 +184,7 @@
       <span class="mcp-switch-track" aria-hidden="true">
         <span class="mcp-switch-thumb"></span>
       </span>
-      <span class="mcp-switch-text">
-        <span class="mcp-switch-label">Enable Context Engine</span>
-        <span class="mcp-switch-state">{mcpEnabled ? "On" : "Off"}</span>
-      </span>
+      <span class="mcp-switch-label">Context Engine</span>
     </label>
     <button class="btn-primary" type="submit" disabled={saving}>
       {saving ? "Saving…" : "Save"}
@@ -260,7 +257,6 @@
   }
   .mcp-switch-input:focus-visible + .mcp-switch-track { box-shadow: var(--focus); }
   .mcp-switch-input:disabled + .mcp-switch-track { opacity: 0.5; }
-  .mcp-switch-text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
   .mcp-switch-label {
     font-size: 0.9rem;
     font-weight: 700;
@@ -268,12 +264,6 @@
     line-height: 1.2;
   }
   .mcp-switch.is-disabled .mcp-switch-label { color: var(--muted); }
-  .mcp-switch-state {
-    font-size: 0.76rem;
-    font-weight: 600;
-    color: var(--muted);
-    line-height: 1.2;
-  }
   @media (prefers-reduced-motion: reduce) {
     .mcp-switch-track,
     .mcp-switch-thumb { transition: none; }
