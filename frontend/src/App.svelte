@@ -14,7 +14,6 @@
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import AddProviderForm from "./lib/AddProviderForm.svelte";
-  import McpPanel from "./lib/McpPanel.svelte";
 
   const emptyProfile: ProfileView = {
     label: "", base_url: "", models: [], model: "", small_fast_model: "", has_key: false,
@@ -383,8 +382,7 @@
         <h1 class="app-title">MintSwitch</h1>
       </header>
       <div class="col-scroll">
-        <ProfileForm {profile} {saving} onSave={saveProfile} />
-        <McpPanel {mcpState} onToggleEnabled={toggleMcpEnabled} {flash} />
+        <ProfileForm {profile} {saving} onSave={saveProfile} {mcpEnabled} {hasMcpKey} onToggleEnabled={toggleMcpEnabled} />
       </div>
     </section>
 
