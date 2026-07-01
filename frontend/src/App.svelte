@@ -13,6 +13,7 @@
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import AddProviderForm from "./lib/AddProviderForm.svelte";
+  import McpPanel from "./lib/McpPanel.svelte";
 
   const emptyProfile: ProfileView = {
     label: "", base_url: "", models: [], model: "", small_fast_model: "", has_key: false,
@@ -63,6 +64,12 @@
 
   const hasSavedProfile = $derived(
     !!(profile.base_url && profile.model && profile.has_key),
+  );
+
+  // Map tool id -> display name so the MCP panel labels its data-driven rows the
+  // same as the tool cards, without hardcoding the tool list.
+  const mcpToolNames = $derived(
+    Object.fromEntries(tools.map((t) => [t.id, t.name])) as Record<string, string>,
   );
 
   function flash(msg: string, kind: "success" | "error"): void {
@@ -331,7 +338,10 @@
       <header class="brand">
         <h1 class="app-title">MintSwitch</h1>
       </header>
-      <ProfileForm {profile} {saving} onSave={saveProfile} />
+      <div class="col-scroll">
+        <ProfileForm {profile} {saving} onSave={saveProfile} />
+        <McpPanel toolNames={mcpToolNames} {flash} />
+      </div>
     </section>
 
     <section class="col-tools" aria-label="Tools">
@@ -455,21 +465,26 @@
     display: flex;
     flex-direction: column;
   }
-  .col-form :global(.profile) {
+  /* Both inspector cards (profile + MCP) scroll together as one region so the
+     shell itself never scrolls; each card sizes to its content. */
+  .col-scroll {
     flex: 1 1 auto;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
     overflow-y: auto;
     scrollbar-gutter: stable both-edges;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
   }
-  .col-form :global(.profile::-webkit-scrollbar) { width: 8px; height: 8px; }
-  .col-form :global(.profile::-webkit-scrollbar-track) { background: transparent; }
-  .col-form :global(.profile::-webkit-scrollbar-thumb) {
+  .col-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .col-scroll::-webkit-scrollbar-track { background: transparent; }
+  .col-scroll::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--muted) 55%, transparent);
     border-radius: 8px;
   }
-  .col-form :global(.profile::-webkit-scrollbar-thumb:hover) {
+  .col-scroll::-webkit-scrollbar-thumb:hover {
     background: color-mix(in srgb, var(--muted) 70%, transparent);
   }
   .col-tools { display: flex; flex-direction: column; min-height: 0; }
@@ -524,8 +539,8 @@
       grid-auto-rows: auto;
       scroll-snap-type: none;
     }
-    /* Stacked: let the whole page scroll instead of the form scrolling on its own. */
-    .col-form :global(.profile) { overflow: visible; flex: none; }
+    /* Stacked: let the whole page scroll instead of the column scrolling on its own. */
+    .col-scroll { overflow: visible; flex: none; }
   }
 
   .theme-toggle { flex: 0 0 auto; }
