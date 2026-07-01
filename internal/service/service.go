@@ -414,9 +414,76 @@ func (s *Service) effectiveProfileFor(toolID string) (core.Profile, error) {
 	return p, nil
 }
 
+// contextEngineEnabled reports the persisted Context Engine master toggle,
+// defaulting to false (no MCP work) when the store cannot be read so a settings
+// error never turns a successful Apply into an unexpected MCP mutation.
+func (s *Service) contextEngineEnabled() bool {
+	st, err := s.store.Load()
+	if err != nil {
+		return false
+	}
+	return st.ContextEngineEnabled()
+}
+
+// injectMCPIfEnabled is the best-effort Context Engine step run after a
+// successful Apply. It injects the MintRouter MCP server into toolID only when
+// the master toggle is enabled, the tool has a registered injector, and a key is
+// available. It never returns an error and never aborts Apply: an injection
+// failure is reported as a display-safe note to fold into the Apply message, and
+// an empty string means nothing noteworthy happened (silent no-op or success).
+func (s *Service) injectMCPIfEnabled(toolID string, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	inj, ok := s.mcpInjector(toolID)
+	if !ok {
+		return ""
+	}
+	spec, hasKey, err := s.mcpSpec()
+	if err != nil || !hasKey {
+		return ""
+	}
+	if _, err := inj.InjectMCP(spec); err != nil {
+		return fmt.Sprintf("Context Engine not injected: %v", err)
+	}
+	return ""
+}
+
+// removeMCPIfCapable is the best-effort Context Engine step run after a
+// successful Restore. It removes the MintRouter MCP server from toolID when the
+// tool has a registered injector (a safe no-op when nothing was injected). It
+// never returns an error and never aborts Restore: a removal failure is reported
+// as a display-safe note to fold into the Restore message.
+func (s *Service) removeMCPIfCapable(toolID string) string {
+	inj, ok := s.mcpInjector(toolID)
+	if !ok {
+		return ""
+	}
+	if _, err := inj.RemoveMCP(); err != nil {
+		return fmt.Sprintf("Context Engine not removed: %v", err)
+	}
+	return ""
+}
+
+// joinMessage folds an optional MCP note onto a base message, separating them
+// with a space so both remain readable. Either side may be empty.
+func joinMessage(base, note string) string {
+	switch {
+	case note == "":
+		return base
+	case base == "":
+		return note
+	default:
+		return base + " " + note
+	}
+}
+
 // ApplyOne applies the active profile to the single tool identified by toolID,
 // honoring the per-tool model selection. It first validates the saved profile
-// and returns an error for an unknown tool or an invalid/missing profile.
+// and returns an error for an unknown tool or an invalid/missing profile. After
+// a successful Apply it injects the Context Engine MCP server when the master
+// toggle is enabled; an MCP failure never aborts Apply (it is folded into the
+// result message).
 func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 	a, ok := s.reg.Get(toolID)
 	if !ok {
@@ -426,18 +493,34 @@ func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
-	return a.Apply(p)
+	res, err := a.Apply(p)
+	if err != nil {
+		return res, err
+	}
+	if note := s.injectMCPIfEnabled(toolID, s.contextEngineEnabled()); note != "" {
+		res.Message = joinMessage(res.Message, note)
+	}
+	return res, nil
 }
 
 // RestoreOne restores the single tool identified by toolID to its pre-apply
 // state. It returns an error for an unknown tool; a tool with nothing to restore
-// is a safe no-op handled by the adapter.
+// is a safe no-op handled by the adapter. After a successful Restore it removes
+// the Context Engine MCP server for capable tools; an MCP failure never aborts
+// Restore (it is folded into the result message).
 func (s *Service) RestoreOne(toolID string) (core.RestoreResult, error) {
 	a, ok := s.reg.Get(toolID)
 	if !ok {
 		return core.RestoreResult{}, fmt.Errorf("service: unknown tool %q", toolID)
 	}
-	return a.Restore()
+	res, err := a.Restore()
+	if err != nil {
+		return res, err
+	}
+	if note := s.removeMCPIfCapable(toolID); note != "" {
+		res.Message = joinMessage(res.Message, note)
+	}
+	return res, nil
 }
 
 // ApplyAll applies the active profile to every registered tool and returns a
@@ -448,6 +531,7 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 	if _, err := s.activeProfile(); err != nil {
 		return nil, err
 	}
+	enabled := s.contextEngineEnabled()
 	adapters := s.reg.All()
 	out := make([]ToolOpResult, 0, len(adapters))
 	for _, a := range adapters {
@@ -461,7 +545,7 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 		if aerr != nil {
 			r.Error = aerr.Error()
 		} else {
-			r.Message = res.Message
+			r.Message = joinMessage(res.Message, s.injectMCPIfEnabled(a.ID(), enabled))
 		}
 		out = append(out, r)
 	}
@@ -535,7 +619,7 @@ func (s *Service) RestoreAll() ([]ToolOpResult, error) {
 		if aerr != nil {
 			r.Error = aerr.Error()
 		} else {
-			r.Message = res.Message
+			r.Message = joinMessage(res.Message, s.removeMCPIfCapable(a.ID()))
 		}
 		out = append(out, r)
 	}
