@@ -214,6 +214,9 @@
     gap: 3px;
     margin: 0.1rem 0 0;
     padding: 3px;
+    width: fit-content;
+    max-width: 100%;
+    align-self: flex-start;
     background: var(--surface);
     border: 1px solid var(--border-strong);
     border-radius: 9px;
