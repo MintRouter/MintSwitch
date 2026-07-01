@@ -129,6 +129,19 @@
     });
   }
 
+  // Canonical display names for the known MCP injector ids (from GetMCPState).
+  // These win over the toolNames prop so the panel reads consistently even when
+  // an id has no endpoint adapter (cursor, auggie) or the adapter name carries a
+  // suffix (claude-code). Any id not listed here falls back to toolNames, then a
+  // prettified id — so a new injector never shows a raw kebab-case id.
+  const mcpNames: Record<string, string> = {
+    "claude-code": "Claude Code",
+    opencode: "OpenCode",
+    "factory-droid": "Factory Droid",
+    cursor: "Cursor",
+    auggie: "Auggie",
+  };
+
   // Prettify a tool id (claude-code -> "Claude Code") for the fallback name.
   function prettify(id: string): string {
     return id
@@ -138,7 +151,7 @@
       .join(" ");
   }
   function name(id: string): string {
-    return toolNames[id] || prettify(id);
+    return mcpNames[id] || toolNames[id] || prettify(id);
   }
 
   interface McpMeta {
