@@ -459,6 +459,18 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    scrollbar-gutter: stable both-edges;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+  }
+  .col-form :global(.profile::-webkit-scrollbar) { width: 8px; height: 8px; }
+  .col-form :global(.profile::-webkit-scrollbar-track) { background: transparent; }
+  .col-form :global(.profile::-webkit-scrollbar-thumb) {
+    background: color-mix(in srgb, var(--muted) 55%, transparent);
+    border-radius: 8px;
+  }
+  .col-form :global(.profile::-webkit-scrollbar-thumb:hover) {
+    background: color-mix(in srgb, var(--muted) 70%, transparent);
   }
   .col-tools { display: flex; flex-direction: column; min-height: 0; }
   /* Only this region scrolls if the cards overflow; at 5 tools it fits. */
@@ -470,7 +482,18 @@
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: var(--s-2);
     align-content: start;
-    padding-right: 0.25rem;
+    scrollbar-gutter: stable both-edges;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+  }
+  .tool-grid::-webkit-scrollbar { width: 8px; height: 8px; }
+  .tool-grid::-webkit-scrollbar-track { background: transparent; }
+  .tool-grid::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--muted) 55%, transparent);
+    border-radius: 8px;
+  }
+  .tool-grid::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--muted) 70%, transparent);
   }
   @media (max-width: 860px), (max-height: 600px) {
     .layout { grid-template-columns: 1fr; min-height: 0; }
