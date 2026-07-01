@@ -69,6 +69,17 @@
   // whether MintSwitch itself wrote the config for this tool.
   const showMcp = $derived(mcpCapable && tool.installed && mcpEnabled && hasMcpKey);
   const mcpChecked = $derived(mcpStatus === "configured_by_mintswitch");
+  // A pre-existing external "mintrouter" entry: enabling would overwrite it, so
+  // we surface a subtle "(external)" marker and an explanatory tooltip instead
+  // of silently letting the checkbox look like a fresh, safe opt-in.
+  const mcpExternal = $derived(mcpStatus === "configured_externally");
+  const mcpTitle = $derived(
+    mcpExternal
+      ? "A different 'mintrouter' MCP entry already exists; enabling replaces it (a backup is kept)."
+      : mcpChecked
+        ? `Disable Context Engine for ${tool.name}`
+        : `Enable Context Engine for ${tool.name}`,
+  );
 </script>
 
 <article class="card tool" class:is-uninstalled={!tool.installed}
@@ -154,11 +165,14 @@
       </button>
     {/if}
     {#if showMcp}
-      <label class={`mcp-inject ${mcpBusy ? "is-busy" : ""}`}>
+      <label class={`mcp-inject ${mcpBusy ? "is-busy" : ""}`} title={mcpTitle}>
         <input class="mcp-inject-input" type="checkbox"
           checked={mcpChecked} disabled={mcpBusy}
           onchange={(e) => onMcpToggle(tool.id, e.currentTarget.checked)} />
         <span class="mcp-inject-label">{mcpBusy ? "Working…" : "Context Engine"}</span>
+        {#if mcpExternal}
+          <span class="mcp-inject-external">(external)</span>
+        {/if}
       </label>
     {/if}
   </div>
@@ -327,4 +341,9 @@
   }
   .mcp-inject-input:disabled { cursor: default; }
   .mcp-inject-label { line-height: 1; }
+  .mcp-inject-external {
+    line-height: 1;
+    font-weight: 500;
+    color: var(--muted);
+  }
 </style>
