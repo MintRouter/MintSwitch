@@ -6,8 +6,11 @@ export {
     Service
 };
 
-export type {
+export {
     InstallResult,
+    MCPState,
+    MCPTestResult,
+    MCPToolView,
     ProfileView,
     ToolOpResult,
     ToolView

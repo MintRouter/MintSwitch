@@ -8,7 +8,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -27,7 +27,9 @@ import * as $models from "./models.js";
  * logged. It requires a Service built with NewWithDeps (real resolver/engine).
  */
 export function AddCustomTool(name: string, configPath: string, binaryName: string, template: string): $CancellablePromise<$models.ToolView> {
-    return $Call.ByID(1299394314, name, configPath, binaryName, template);
+    return $Call.ByID(1299394314, name, configPath, binaryName, template).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 /**
@@ -36,17 +38,32 @@ export function AddCustomTool(name: string, configPath: string, binaryName: stri
  * (returning an error, no partial results) when no valid profile is saved.
  * Individual adapter failures are captured per tool and do not abort the run.
  */
-export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[] | null> {
-    return $Call.ByID(3266725423);
+export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[]> {
+    return $Call.ByID(3266725423).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
- * ApplyOne applies the active profile to the single tool identified by toolID.
- * It first validates the saved profile and returns an error for an unknown tool
- * or an invalid/missing profile.
+ * ApplyOne applies the active profile to the single tool identified by toolID,
+ * honoring the per-tool model selection. It first validates the saved profile
+ * and returns an error for an unknown tool or an invalid/missing profile.
  */
 export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult> {
-    return $Call.ByID(1465759944, toolID);
+    return $Call.ByID(1465759944, toolID).then(($result: any) => {
+        return $$createType3($result);
+    });
+}
+
+/**
+ * GetMCPState returns the redacted MCP state: whether a key is saved, the
+ * endpoint that would be injected, and each injector's current status. It never
+ * returns the raw key.
+ */
+export function GetMCPState(): $CancellablePromise<$models.MCPState> {
+    return $Call.ByID(2725053381).then(($result: any) => {
+        return $$createType4($result);
+    });
 }
 
 /**
@@ -54,7 +71,19 @@ export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult
  * profile is saved it returns a zero ProfileView (HasKey=false) and no error.
  */
 export function GetProfile(): $CancellablePromise<$models.ProfileView> {
-    return $Call.ByID(1851804553);
+    return $Call.ByID(1851804553).then(($result: any) => {
+        return $$createType5($result);
+    });
+}
+
+/**
+ * InjectMCPOne injects the MintRouter MCP server into the single tool identified
+ * by toolID. It fails when no key is saved or the tool is unknown.
+ */
+export function InjectMCPOne(toolID: string): $CancellablePromise<core$0.MCPResult> {
+    return $Call.ByID(575156053, toolID).then(($result: any) => {
+        return $$createType6($result);
+    });
 }
 
 /**
@@ -64,7 +93,9 @@ export function GetProfile(): $CancellablePromise<$models.ProfileView> {
  * (not an error) with a clear, user-facing message so the UI can show it.
  */
 export function Install(toolID: string): $CancellablePromise<$models.InstallResult> {
-    return $Call.ByID(941254115, toolID);
+    return $Call.ByID(941254115, toolID).then(($result: any) => {
+        return $$createType7($result);
+    });
 }
 
 /**
@@ -73,8 +104,10 @@ export function Install(toolID: string): $CancellablePromise<$models.InstallResu
  * when none is saved). A per-tool Status error is surfaced in Detail rather than
  * failing the whole list.
  */
-export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
-    return $Call.ByID(3280393555);
+export function ListTools(): $CancellablePromise<$models.ToolView[]> {
+    return $Call.ByID(3280393555).then(($result: any) => {
+        return $$createType8($result);
+    });
 }
 
 /**
@@ -86,12 +119,24 @@ export function RemoveCustomTool(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * RemoveMCPOne removes the MintRouter MCP server from the single tool identified
+ * by toolID. It is a safe no-op when nothing was injected.
+ */
+export function RemoveMCPOne(toolID: string): $CancellablePromise<core$0.MCPResult> {
+    return $Call.ByID(2841344080, toolID).then(($result: any) => {
+        return $$createType6($result);
+    });
+}
+
+/**
  * RestoreAll restores every registered tool to its pre-apply state and returns a
  * per-tool outcome. It needs no profile; individual adapter failures are
  * captured per tool and do not abort the run.
  */
-export function RestoreAll(): $CancellablePromise<$models.ToolOpResult[] | null> {
-    return $Call.ByID(748026073);
+export function RestoreAll(): $CancellablePromise<$models.ToolOpResult[]> {
+    return $Call.ByID(748026073).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
@@ -100,7 +145,9 @@ export function RestoreAll(): $CancellablePromise<$models.ToolOpResult[] | null>
  * is a safe no-op handled by the adapter.
  */
 export function RestoreOne(toolID: string): $CancellablePromise<core$0.RestoreResult> {
-    return $Call.ByID(2514822234, toolID);
+    return $Call.ByID(2514822234, toolID).then(($result: any) => {
+        return $$createType9($result);
+    });
 }
 
 /**
@@ -114,6 +161,36 @@ export function SaveProfile(p: core$0.Profile): $CancellablePromise<void> {
 }
 
 /**
+ * SetMCPKey persists the MintRouter API key used for MCP injection. The key is
+ * trimmed; an empty value clears the stored key. The key is never logged.
+ */
+export function SetMCPKey(key: string): $CancellablePromise<void> {
+    return $Call.ByID(106943507, key);
+}
+
+/**
+ * SetToolModel records (or clears) the per-tool model selection for toolID. An
+ * empty model deletes the selection so the tool uses the profile default. A
+ * non-empty model must be a member of the active profile's Models, otherwise a
+ * clear error is returned. The toolID must be a registered tool. The selection
+ * is persisted via the settings store.
+ */
+export function SetToolModel(toolID: string, model: string): $CancellablePromise<void> {
+    return $Call.ByID(2858844647, toolID, model);
+}
+
+/**
+ * TestMCPConnection probes the MintRouter MCP endpoint with the saved key via a
+ * JSON-RPC initialize request and maps the HTTP status to a user-facing meaning.
+ * The key/Authorization header are never logged or included in the result.
+ */
+export function TestMCPConnection(): $CancellablePromise<$models.MCPTestResult> {
+    return $Call.ByID(2075638960).then(($result: any) => {
+        return $$createType10($result);
+    });
+}
+
+/**
  * Uninstall removes the tool identified by toolID using the method it was
  * actually installed with (npm, Homebrew, or a standalone binary), surfacing the
  * exact command (or delete action) and its output. Its return contract matches
@@ -121,5 +198,20 @@ export function SaveProfile(p: core$0.Profile): $CancellablePromise<void> {
  * non-OK result carrying a clear, user-facing message instead of throwing.
  */
 export function Uninstall(toolID: string): $CancellablePromise<$models.InstallResult> {
-    return $Call.ByID(3584833602, toolID);
+    return $Call.ByID(3584833602, toolID).then(($result: any) => {
+        return $$createType7($result);
+    });
 }
+
+// Private type creation functions
+const $$createType0 = $models.ToolView.createFrom;
+const $$createType1 = $models.ToolOpResult.createFrom;
+const $$createType2 = $Create.Array($$createType1);
+const $$createType3 = core$0.ApplyResult.createFrom;
+const $$createType4 = $models.MCPState.createFrom;
+const $$createType5 = $models.ProfileView.createFrom;
+const $$createType6 = core$0.MCPResult.createFrom;
+const $$createType7 = $models.InstallResult.createFrom;
+const $$createType8 = $Create.Array($$createType0);
+const $$createType9 = core$0.RestoreResult.createFrom;
+const $$createType10 = $models.MCPTestResult.createFrom;
