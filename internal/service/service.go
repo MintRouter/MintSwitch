@@ -34,6 +34,8 @@ import (
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
 	mcpclaudecode "mintswitch/internal/injectors/claudecode"
+	mcpfactorydroid "mintswitch/internal/injectors/factorydroid"
+	mcpopencode "mintswitch/internal/injectors/opencode"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/paths"
 	"mintswitch/internal/settings"
@@ -149,7 +151,11 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	s.e = e
 	// Register the MCP injectors. This is a distinct registry from the endpoint
 	// tool adapters above: MCP injection is independent of the active profile.
-	s.mcp = []core.MCPInjector{mcpclaudecode.New(r, e)}
+	s.mcp = []core.MCPInjector{
+		mcpclaudecode.New(r, e),
+		mcpopencode.New(r, e),
+		mcpfactorydroid.New(r, e),
+	}
 	// Register user-defined custom tools after the built-ins, in saved order.
 	// A load failure here is non-fatal: the built-ins still work and the user
 	// can re-add custom tools; it must not prevent the app from starting.
