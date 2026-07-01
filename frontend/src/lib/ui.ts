@@ -80,8 +80,7 @@ export const builtinLogoIds = new Set<string>([
   "claude-code",
   "codex",
   "opencode",
-  "factory-droid",
-  "pi",
+  "antigravity",
 ]);
 
 /**
