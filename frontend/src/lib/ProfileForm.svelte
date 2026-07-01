@@ -63,15 +63,12 @@
   }
 
   // Models are managed in a popup so the card shows only a compact summary.
-  // `addFocus` records whether the modal was opened via "Add" (focus the input)
-  // rather than "View" (just open). Esc / backdrop / Done all close it.
+  // Esc / backdrop / Done all close it.
   let modelsOpen = $state(false);
-  let addFocus = $state(false);
   let modelInputEl = $state<HTMLInputElement | null>(null);
   let modelsDialogEl = $state<HTMLDivElement | null>(null);
 
-  function openModels(focus: boolean): void {
-    addFocus = focus;
+  function openModels(): void {
     modelsOpen = true;
   }
 
@@ -79,10 +76,10 @@
     modelsOpen = false;
   }
 
-  // Focus the model input only when opened via "Add"; runs after the dialog is
+  // Focus the model input whenever the modal opens; runs after the dialog is
   // rendered so the element ref exists.
   $effect(() => {
-    if (modelsOpen && addFocus) {
+    if (modelsOpen) {
       queueMicrotask(() => modelInputEl?.focus());
     }
   });
@@ -207,8 +204,7 @@
       <span class="models-summary-text" class:is-empty={models.length === 0}
         aria-describedby="pf-models-label">{modelsSummary}</span>
       <div class="models-summary-actions">
-        <button class="btn-primary sm" type="button" onclick={() => openModels(true)}>Add</button>
-        <button class="btn-ghost sm" type="button" onclick={() => openModels(false)}>View</button>
+        <button class="btn-primary sm" type="button" onclick={openModels}>Manage</button>
       </div>
     </div>
     {#if errors.models}
@@ -367,8 +363,8 @@
     word-break: break-all;
   }
 
-  /* Compact Models row inside the card: a one-line summary on the left with
-     Add / View actions on the right that open the management modal below. */
+  /* Compact Models row inside the card: a one-line summary on the left with a
+     Manage action on the right that opens the management modal below. */
   .models-summary {
     display: flex;
     align-items: center;
