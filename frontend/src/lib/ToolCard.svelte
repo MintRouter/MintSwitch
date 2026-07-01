@@ -6,6 +6,13 @@
     tool: ToolView;
     hasSavedProfile: boolean;
     busy: boolean;
+    // Context Engine (MCP) per-tool inject, driven by App's single MCP state.
+    mcpEnabled: boolean;
+    mcpCapable: boolean;
+    mcpStatus?: string;
+    hasMcpKey: boolean;
+    mcpBusy: boolean;
+    onMcpToggle: (id: string, checked: boolean) => void;
     onApply: (id: string) => void;
     onRestore: (id: string) => void;
     onInstall: (id: string) => void;
@@ -13,7 +20,11 @@
     onRemove: (id: string) => void;
     onModelChange: (toolID: string, model: string) => void;
   }
-  let { tool, hasSavedProfile, busy, onApply, onRestore, onInstall, onUninstall, onRemove, onModelChange }: Props = $props();
+  let {
+    tool, hasSavedProfile, busy,
+    mcpEnabled, mcpCapable, mcpStatus, hasMcpKey, mcpBusy, onMcpToggle,
+    onApply, onRestore, onInstall, onUninstall, onRemove, onModelChange,
+  }: Props = $props();
 
   // Provider logos are self-contained app-icon SVGs under /logos/<id>.svg. If a
   // tool has no asset (custom providers) or it fails to load we fall back to a
@@ -51,6 +62,13 @@
   const selectedModel = $derived(
     tool.selected_model && models.includes(tool.selected_model) ? tool.selected_model : "",
   );
+
+  // Context Engine inject control: only meaningful for an MCP-capable, installed
+  // tool once the master toggle is on and a key is saved. When the master is
+  // off the control simply isn't rendered (non-destructive). Checked reflects
+  // whether MintSwitch itself wrote the config for this tool.
+  const showMcp = $derived(mcpCapable && tool.installed && mcpEnabled && hasMcpKey);
+  const mcpChecked = $derived(mcpStatus === "configured_by_mintswitch");
 </script>
 
 <article class="card tool" class:is-uninstalled={!tool.installed}
@@ -134,6 +152,14 @@
         disabled={busy} title="Uninstall this tool with npm">
         {busy ? "Working…" : "Uninstall"}
       </button>
+    {/if}
+    {#if showMcp}
+      <label class={`mcp-inject ${mcpBusy ? "is-busy" : ""}`}>
+        <input class="mcp-inject-input" type="checkbox"
+          checked={mcpChecked} disabled={mcpBusy}
+          onchange={(e) => onMcpToggle(tool.id, e.currentTarget.checked)} />
+        <span class="mcp-inject-label">{mcpBusy ? "Working…" : "Context Engine"}</span>
+      </label>
     {/if}
   </div>
 </article>
@@ -272,4 +298,33 @@
     background: var(--ok);
     box-shadow: none;
   }
+
+  /* Context Engine inject: a compact labelled checkbox pinned to the trailing
+     edge of the action row (margin-left:auto pushes it past Apply/Restore/
+     Uninstall). accent-color keeps it on-brand; the global :focus-visible ring
+     covers keyboard focus. */
+  .mcp-inject {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 0 0 auto;
+    margin-left: auto;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .mcp-inject.is-busy { cursor: default; color: var(--muted); }
+  .mcp-inject-input {
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    flex: 0 0 auto;
+    accent-color: var(--accent);
+    cursor: inherit;
+  }
+  .mcp-inject-input:disabled { cursor: default; }
+  .mcp-inject-label { line-height: 1; }
 </style>

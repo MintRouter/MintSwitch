@@ -6,6 +6,7 @@
     ToolOpResult,
     ProfileView,
     InstallResult,
+    MCPState,
   } from "../bindings/mintswitch/internal/service";
   import type { Profile } from "../bindings/mintswitch/internal/core";
   import { errMsg, npmCommand } from "./lib/ui";
@@ -26,6 +27,7 @@
   let saving = $state(false);
   let refreshing = $state(false);
   let busyIds = $state<string[]>([]);
+  let mcpState = $state<MCPState | null>(null);
   let opResults = $state<ToolOpResult[] | null>(null);
   let installLog = $state<InstallResult | null>(null);
   let toast = $state<{ msg: string; kind: "success" | "error" } | null>(null);
@@ -66,11 +68,14 @@
     !!(profile.base_url && profile.model && profile.has_key),
   );
 
-  // Map tool id -> display name so the MCP panel labels its data-driven rows the
-  // same as the tool cards, without hardcoding the tool list.
-  const mcpToolNames = $derived(
-    Object.fromEntries(tools.map((t) => [t.id, t.name])) as Record<string, string>,
+  // MCP state lives here (App is the single source) so the left panel and the
+  // per-tool card controls stay in sync from one GetMCPState() fetch. The map is
+  // keyed by tool id; a tool is MCP-capable only when it appears in it.
+  const mcpToolMap = $derived(
+    new Map((mcpState?.tools ?? []).map((t) => [t.id, t])),
   );
+  const mcpEnabled = $derived(!!mcpState?.enabled);
+  const hasMcpKey = $derived(!!mcpState?.has_key);
 
   function flash(msg: string, kind: "success" | "error"): void {
     toast = { msg, kind };
@@ -79,9 +84,14 @@
   }
 
   async function refresh(): Promise<void> {
-    const [t, p] = await Promise.all([Service.ListTools(), Service.GetProfile()]);
+    const [t, p, m] = await Promise.all([
+      Service.ListTools(),
+      Service.GetProfile(),
+      Service.GetMCPState(),
+    ]);
     tools = t ?? [];
     profile = p ?? emptyProfile;
+    mcpState = m ?? null;
   }
 
   async function load(): Promise<void> {
@@ -161,6 +171,40 @@
     } finally {
       busyIds = busyIds.filter((x) => x !== id);
     }
+  }
+
+  // Master Context Engine toggle (left panel). Persists the global flag then
+  // refreshes so the per-card inject controls appear/disappear accordingly.
+  async function toggleMcpEnabled(enabled: boolean): Promise<void> {
+    try {
+      await Service.SetMCPEnabled(enabled);
+      flash(enabled ? "Context Engine enabled." : "Context Engine disabled.", "success");
+    } catch (e) {
+      flash(errMsg(e), "error");
+    }
+    await refresh();
+  }
+
+  // Per-tool inject control (right, inside each ToolCard). Checked injects the
+  // MintRouter MCP server into that tool; unchecked removes it. Shares busyIds
+  // so the card shows a per-row busy state, then refresh re-syncs status.
+  function onMcpToggle(id: string, checked: boolean): void {
+    const name = tools.find((t) => t.id === id)?.name ?? id;
+    void withBusy(id, async () => {
+      try {
+        const r = checked ? await Service.InjectMCPOne(id) : await Service.RemoveMCPOne(id);
+        flash(
+          r.message ||
+            (checked
+              ? `Enabled Context Engine for ${name}.`
+              : `Disabled Context Engine for ${name}.`),
+          "success",
+        );
+      } catch (e) {
+        flash(errMsg(e), "error");
+      }
+      await refresh();
+    });
   }
 
   function applyOne(id: string): void {
@@ -340,7 +384,7 @@
       </header>
       <div class="col-scroll">
         <ProfileForm {profile} {saving} onSave={saveProfile} />
-        <McpPanel toolNames={mcpToolNames} {flash} />
+        <McpPanel {mcpState} onToggleEnabled={toggleMcpEnabled} {flash} />
       </div>
     </section>
 
@@ -418,6 +462,9 @@
           <div class="tool-grid">
             {#each tools as t (t.id)}
               <ToolCard tool={t} {hasSavedProfile} busy={busyIds.includes(t.id)}
+                {mcpEnabled} {hasMcpKey} mcpCapable={mcpToolMap.has(t.id)}
+                mcpStatus={mcpToolMap.get(t.id)?.status} mcpBusy={busyIds.includes(t.id)}
+                {onMcpToggle}
                 onApply={applyOne} onRestore={restoreOne}
                 onInstall={installOne} onUninstall={uninstallOne} onRemove={removeProvider}
                 onModelChange={changeToolModel} />
