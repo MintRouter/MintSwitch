@@ -1,6 +1,8 @@
 :root {
     /* Shared, non-color tokens (identical across themes). */
     --radius: 10px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
 
     /* Compact, even spacing scale (macOS-style). */
     --s-1: 0.5rem;
@@ -8,6 +10,25 @@
     --s-3: 1.25rem;
     --s-4: 1.75rem;
     --s-5: 2.5rem;
+
+    /* Type ramp — display / title / heading / body / small / micro. */
+    --fs-display: 1.75rem;
+    --fs-title: 1.25rem;
+    --fs-heading: 1.05rem;
+    --fs-body: 0.9rem;
+    --fs-sm: 0.82rem;
+    --fs-micro: 0.72rem;
+    --lh-tight: 1.2;
+    --lh: 1.45;
+    --tracking-tight: -0.01em;
+    --tracking-wide: 0.06em;
+    --fw-medium: 500;
+    --fw-semibold: 600;
+    --fw-bold: 700;
+
+    /* Consistent interactive control heights (buttons/row controls). */
+    --control-h: 34px;
+    --control-h-sm: 28px;
 
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Segoe UI",
         Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
@@ -18,15 +39,19 @@
 
 /* ----- Light theme (DEFAULT) — native macOS settings window --------------- */
 [data-theme="light"] {
-    --ink: #ececee;            /* window background */
+    --ink: #edecea;            /* window background (warm neutral) */
     --surface: #ffffff;        /* panels / cards */
-    --surface-2: #f5f5f7;      /* subtle inset fills */
-    --text: #1d1d1f;
-    --muted: #6e6e73;
-    --accent: #0071e3;         /* system blue */
+    --surface-2: #f4f3f1;      /* subtle inset fills (warm) */
+    --text: #1c1b19;           /* warm near-black */
+    --muted: #6c6a67;          /* warm secondary text */
+
+    /* Mint is the brand + primary accent (retires system blue). */
+    --accent: #0a9d6e;         /* interactive mint (readable, large-bold on white) */
     --accent-text: #ffffff;
-    --border: rgba(0, 0, 0, 0.10);
-    --border-strong: rgba(0, 0, 0, 0.16);
+    --brand: #0fb083;          /* vivid mint for identity moments */
+
+    --border: rgba(40, 35, 30, 0.10);      /* warm hairline */
+    --border-strong: rgba(40, 35, 30, 0.16);
     --danger: #d70015;
 
     /* Low-saturation status tones. */
@@ -34,33 +59,41 @@
     --warn: #a85a00;
     --info: #0066cc;
 
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.05);
-    --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
-    --focus: 0 0 0 3px rgba(0, 113, 227, 0.45);
+    /* Soft, layered, real depth. */
+    --shadow-card: 0 1px 2px rgba(20, 18, 15, 0.06), 0 4px 12px rgba(20, 18, 15, 0.06),
+        0 0 0 0.5px rgba(20, 18, 15, 0.04);
+    --shadow-pop: 0 8px 30px rgba(20, 18, 15, 0.16), 0 2px 8px rgba(20, 18, 15, 0.10),
+        0 0 0 0.5px rgba(20, 18, 15, 0.06);
+    --focus: 0 0 0 3px rgba(10, 157, 110, 0.45);
 
     color-scheme: light;
 }
 
 /* ----- Dark theme — native macOS settings window -------------------------- */
 [data-theme="dark"] {
-    --ink: #1e1e1e;
-    --surface: #2c2c2e;
-    --surface-2: #3a3a3c;
-    --text: #f5f5f7;
-    --muted: #98989d;
-    --accent: #0a84ff;
-    --accent-text: #ffffff;
-    --border: rgba(255, 255, 255, 0.10);
-    --border-strong: rgba(255, 255, 255, 0.18);
+    --ink: #1b1a19;            /* warm dark window */
+    --surface: #262524;        /* warm charcoal panels */
+    --surface-2: #333230;
+    --text: #f5f4f2;
+    --muted: #9a9895;
+
+    --accent: #20c191;         /* bright mint pops on dark */
+    --accent-text: #04241b;    /* deep ink for crisp text on bright mint */
+    --brand: #3ad9a6;          /* luminous mint for identity moments */
+
+    --border: rgba(255, 252, 248, 0.10);
+    --border-strong: rgba(255, 252, 248, 0.18);
     --danger: #ff453a;
 
     --ok: #30d158;
     --warn: #ff9f0a;
     --info: #64d2ff;
 
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(0, 0, 0, 0.5);
-    --shadow-pop: 0 10px 34px rgba(0, 0, 0, 0.55), 0 0 0 0.5px rgba(0, 0, 0, 0.6);
-    --focus: 0 0 0 3px rgba(10, 132, 255, 0.5);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.40), 0 4px 14px rgba(0, 0, 0, 0.35),
+        0 0 0 0.5px rgba(0, 0, 0, 0.50);
+    --shadow-pop: 0 12px 38px rgba(0, 0, 0, 0.60), 0 2px 10px rgba(0, 0, 0, 0.40),
+        0 0 0 0.5px rgba(0, 0, 0, 0.60);
+    --focus: 0 0 0 3px rgba(32, 193, 145, 0.55);
 
     color-scheme: dark;
 }
@@ -120,13 +153,30 @@ body {
 }
 .app-title {
     margin: 0;
-    font-size: 1.5rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
+    font-size: var(--fs-display);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--tracking-tight);
     color: var(--text);
 }
 
-.section-title { margin: 0; font-size: 1.15rem; font-weight: 700; }
+.section-title {
+    margin: 0;
+    font-size: var(--fs-title);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--tracking-tight);
+}
+
+/* Uppercase, letter-spaced, muted eyebrow for field/section headers. */
+.micro-label {
+    font-size: var(--fs-micro);
+    font-weight: var(--fw-semibold);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    color: var(--muted);
+}
 .tools-head {
     flex: 0 0 auto;
     display: flex;
@@ -146,9 +196,22 @@ body {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-card);
+    transition: box-shadow 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
 }
-.card-title { margin: 0; font-size: 1.05rem; font-weight: 700; }
-.card-sub { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.85rem; }
+/* Opt-in subtle lift for clickable/interactive cards. */
+.card.card-hover:hover,
+.card.interactive:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-pop);
+    transform: translateY(-1px);
+}
+.card-title {
+    margin: 0;
+    font-size: var(--fs-heading);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+}
+.card-sub { margin: 0.2rem 0 0; color: var(--muted); font-size: var(--fs-sm); line-height: var(--lh); }
 
 /* ----- Empty / loading / error states ------------------------------------- */
 .state {
@@ -166,89 +229,120 @@ body {
 :where(button, a, input, [tabindex]):focus-visible {
     outline: none;
     box-shadow: var(--focus);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
 }
 
 /* ----- Form fields --------------------------------------------------------- */
 .field { display: flex; flex-direction: column; gap: 0.35rem; }
-.field-label { font-size: 0.82rem; font-weight: 600; color: var(--text); }
+.field-label { font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--text); }
 .field-input {
     width: 100%;
     padding: 0.5rem 0.65rem;
     font-size: 16px; /* 16px guards against iOS focus-zoom */
+    line-height: var(--lh);
     color: var(--text);
     background: var(--surface-2);
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     outline: none;
     -webkit-user-select: text;
     user-select: text;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 .field-input::placeholder { color: var(--muted); opacity: 0.8; }
 .field-input:hover { border-color: var(--muted); }
-.field-input:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
+.field-input:focus-visible { border-color: var(--accent); box-shadow: var(--focus); background: var(--surface); }
 .field-input[aria-invalid="true"] { border-color: var(--danger); }
-.field-hint { margin: 0; font-size: 0.78rem; color: var(--muted); }
-.field-error { margin: 0; font-size: 0.8rem; color: var(--danger); font-weight: 600; }
+.field-input[aria-invalid="true"]:focus-visible {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.field-hint { margin: 0; font-size: var(--fs-micro); color: var(--muted); line-height: var(--lh); }
+.field-error { margin: 0; font-size: var(--fs-sm); color: var(--danger); font-weight: var(--fw-semibold); }
 
-/* ----- Buttons (macOS) ----------------------------------------------------- */
+/* ----- Buttons (one system: primary / ghost / danger + .sm) ---------------- */
 .btn-primary, .btn-ghost {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 0.4rem;
-    font-size: 0.9rem;
-    font-weight: 600;
-    padding: 0.45rem 0.95rem;
-    border-radius: 8px;
+    min-height: var(--control-h);
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
+    line-height: 1;
+    padding: 0 0.95rem;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     border: 1px solid transparent;
+    white-space: nowrap;
     transition: transform 0.08s ease, box-shadow 0.18s ease, background-color 0.18s ease,
-        border-color 0.18s ease, opacity 0.18s ease;
+        border-color 0.18s ease, filter 0.18s ease, opacity 0.18s ease;
 }
-.btn-primary.sm, .btn-ghost.sm { padding: 0.36rem 0.75rem; font-size: 0.84rem; }
+.btn-primary.sm, .btn-ghost.sm {
+    min-height: var(--control-h-sm);
+    padding: 0 0.75rem;
+    font-size: var(--fs-sm);
+}
 .btn-primary {
     color: var(--accent-text);
     background: var(--accent);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
-.btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
-.btn-primary:active:not(:disabled) { filter: brightness(0.94); }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.06); box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent); }
+.btn-primary:active:not(:disabled) { filter: brightness(0.94); transform: translateY(0.5px); }
 .btn-ghost {
     color: var(--text);
     background: var(--surface-2);
     border-color: var(--border-strong);
 }
 .btn-ghost:hover:not(:disabled) { border-color: var(--muted); }
-.btn-ghost:active:not(:disabled) { filter: brightness(0.97); }
+.btn-ghost:active:not(:disabled) { filter: brightness(0.97); transform: translateY(0.5px); }
+/* Destructive: visually separated, restrained until intent. */
 .btn-primary.danger, .btn-ghost.danger {
     background: var(--surface-2);
     border-color: var(--border-strong);
     color: var(--danger);
+    box-shadow: none;
 }
 .btn-primary.danger:hover:not(:disabled),
-.btn-ghost.danger:hover:not(:disabled) { border-color: var(--danger); }
-.btn-primary:disabled, .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-ghost.danger:hover:not(:disabled) {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
+    filter: none;
+}
+.btn-primary:disabled, .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 
-/* ----- Badges (low-saturation system tones) -------------------------------- */
+/* ----- Badges (soft tinted status tones) ----------------------------------- */
 .badge {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
     padding: 0.2rem 0.55rem;
-    font-size: 0.74rem;
-    font-weight: 600;
+    font-size: var(--fs-micro);
+    font-weight: var(--fw-semibold);
     letter-spacing: 0.01em;
-    border-radius: 6px;
+    border-radius: var(--radius-xs);
     border: 1px solid var(--border);
     background: var(--surface-2);
     color: var(--muted);
     white-space: nowrap;
 }
-.badge.install.on { color: var(--ok); }
-.badge.tone-success { color: var(--ok); }
-.badge.tone-warning { color: var(--warn); }
-.badge.tone-info { color: var(--info); }
+/* Each tone carries a subtle tint of its own hue for clearer, calmer status. */
+.badge.install.on,
+.badge.tone-success {
+    color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 12%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--ok) 26%, var(--border));
+}
+.badge.tone-warning {
+    color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--warn) 26%, var(--border));
+}
+.badge.tone-info {
+    color: var(--info);
+    background: color-mix(in srgb, var(--info) 12%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--info) 26%, var(--border));
+}
 .badge.tone-neutral { color: var(--muted); }
 
 /* ----- Bulk results -------------------------------------------------------- */
