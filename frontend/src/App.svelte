@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { Service } from "../bindings/mintswitch/internal/service";
   import type {
     ToolView,
@@ -70,6 +70,8 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (toast = null), 5000);
   }
+
+  onDestroy(() => clearTimeout(toastTimer));
 
   async function refresh(): Promise<void> {
     const [t, p, m] = await Promise.all([
