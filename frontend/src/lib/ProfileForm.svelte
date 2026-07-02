@@ -290,9 +290,8 @@
   <div class="ce-intro">
     <span class="micro-label">Context Engine</span>
     <p class="ce-intro-text">
-      MintRouter.AI's MCP server helps your AI coding tools understand your
-      codebase — semantic code search on a real-time index. Enable the toggle
-      below to inject it into your tools when you Apply.
+      Semantic code search for your AI coding tools, powered by MintRouter.AI's
+      MCP server. Enable the toggle below to inject it when you Apply.
     </p>
   </div>
 
@@ -377,10 +376,12 @@
 <style>
   /* Tight, even rhythm between field groups — no header/footer divider lines;
      a compact local gap (tighter than the token scale) keeps the card short.
+     One step tighter (12→10px, feedback #36) so the saved-key state (badge +
+     hint line) still fits the fixed-height card with slack and never scrolls.
      The card GROWS to fill the left column (feedback #32) so its bottom edge
      lines up with the tools panel; with tall content (many models) it still
      sizes to content and the column scrolls as before. */
-  .profile { display: flex; flex-direction: column; gap: 12px; flex: 1 0 auto; }
+  .profile { display: flex; flex-direction: column; gap: 10px; flex: 1 0 auto; }
   .profile-title { margin: 0; }
   /* Label + saved-state badge share a row (e.g. API KEY · Saved). */
   .label-row { display: flex; align-items: center; gap: 0.5rem; }
@@ -403,7 +404,7 @@
     gap: var(--s-1);
     margin-top: auto;
     border-top: 1px solid var(--border);
-    padding-top: 12px;
+    padding-top: 10px;
   }
 
   /* Master Context Engine ON/OFF switch, shared with the Save row. A native
@@ -476,13 +477,15 @@
      between the Models row and the anchored footer. A hairline (same separator
      language as the footer's) sits right under Models/Manage, then a
      micro-heading + short muted marketing blurb. Small type + roomy leading so
-     it reads as supporting copy, not a field. */
+     it reads as supporting copy, not a field. Copy is capped at ~3 wrapped
+     lines (feedback #36): the saved-key state adds a hint line under API key,
+     and the card must keep ≥8px slack without scrolling. */
   .ce-intro {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     border-top: 1px solid var(--border);
-    padding-top: 12px;
+    padding-top: 10px;
   }
   .ce-intro-text {
     margin: 0;
