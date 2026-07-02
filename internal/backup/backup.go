@@ -37,13 +37,25 @@ func NewEngine(root string) *Engine { return &Engine{Root: root} }
 
 // dirFor returns the backup directory for a given source path. The directory
 // name combines a readable, sanitized form of the path with a short hash of the
-// cleaned absolute path to avoid collisions between distinct paths.
+// cleaned absolute path to avoid collisions between distinct paths. New
+// directories use a 16-hex-char hash; directories created by older versions
+// used 8, so an existing legacy directory is reused to keep every entry for a
+// path (including its pristine oldest snapshot) in a single directory.
 func (e *Engine) dirFor(path string) string {
 	clean := filepath.Clean(path)
-	sum := sha256.Sum256([]byte(clean))
-	short := hex.EncodeToString(sum[:])[:8]
+	h := sha256.Sum256([]byte(clean))
+	sum := hex.EncodeToString(h[:])
 	safe := sanitize(clean)
-	return filepath.Join(e.Root, safe+"-"+short)
+	if legacy := filepath.Join(e.Root, safe+"-"+sum[:8]); dirExists(legacy) {
+		return legacy
+	}
+	return filepath.Join(e.Root, safe+"-"+sum[:16])
+}
+
+// dirExists reports whether path exists and is a directory.
+func dirExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 func sanitize(p string) string {

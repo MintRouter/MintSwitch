@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mintswitch/internal/backup"
@@ -608,5 +609,36 @@ func TestPureUserConfigNeverOrphan(t *testing.T) {
 	}
 	if string(got) != user {
 		t.Fatalf("pure user config rewritten: %q", got)
+	}
+}
+
+// TestRestoreReportsUnstrippableJSONC pins the fix for silent-partial
+// restores: when the tool is still managed (marker in store), no backup
+// exists, and the active kilo.jsonc carries JSONC-only syntax, Restore cannot
+// strip the managed provider from it — the result message must say so instead
+// of claiming a clean no-op. The file is left untouched and the marker is
+// still cleared.
+func TestRestoreReportsUnstrippableJSONC(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.jsoncPath()
+	content := "// my comment\n{\"provider\":{}}\n"
+	writeFile(t, path, content)
+	if err := a.m.Put(a.ID(), core.NewMarker(sampleProfile(), "work")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !strings.Contains(res.Message, "JSONC-only syntax") {
+		t.Fatalf("message must flag the unstrippable kilo.jsonc, got %q", res.Message)
+	}
+	got, rerr := os.ReadFile(path)
+	if rerr != nil || string(got) != content {
+		t.Fatalf("kilo.jsonc must be left untouched, got %q, %v", got, rerr)
+	}
+	if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
+		t.Fatalf("marker after Restore = inStore=%v err=%v, want deleted", inStore, err)
 	}
 }

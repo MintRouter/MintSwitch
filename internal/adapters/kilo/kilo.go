@@ -261,8 +261,20 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 			}
 		}
 	}
+	jsoncBlocked := false
 	if !restoredAny {
 		for _, path := range []string{a.jsoncPath(), a.jsonPath()} {
+			// A comment-carrying kilo.jsonc cannot be parsed or rewritten (the
+			// errJSONC contract), so with the marker still in the store the
+			// managed keys may silently survive the strip fallback. Flag it so
+			// the result message tells the user instead of claiming a clean
+			// no-op.
+			if inStore && strings.HasSuffix(path, ".jsonc") && fileExists(path) {
+				if _, strict, rerr := readConfig(path); rerr == nil && !strict {
+					jsoncBlocked = true
+					continue
+				}
+			}
 			if !inStore && !a.orphanRemnantAt(path) {
 				continue
 			}
@@ -277,6 +289,9 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 				}
 			}
 		}
+	}
+	if jsoncBlocked {
+		res.Message += " kilo.jsonc contains comments or other JSONC-only syntax, so MintSwitch could not check or remove its settings from it; edit the file manually if needed."
 	}
 	if err := a.m.Delete(id); err != nil {
 		return core.RestoreResult{}, err

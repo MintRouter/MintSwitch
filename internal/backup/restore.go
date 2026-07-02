@@ -45,6 +45,14 @@ func (e *Engine) RestoreLatest(path string) (restored bool, entry string, err er
 //
 // After a successful restore, every backup entry for path is pruned so a
 // contaminated snapshot can never resurface on a later restore.
+//
+// If the prune fails, RestorePristine returns restored=true together with the
+// prune error: the file WAS restored on disk, but callers must treat the error
+// as a failed restore and keep their managed state (marker, etc.) so a retry
+// runs the whole restore — hitting the same pristine oldest entry — again.
+// Swallowing the error and clearing managed state instead would let the
+// surviving old entries shadow a newer pristine snapshot taken by a later
+// Apply, restoring stale content.
 func (e *Engine) RestorePristine(path string) (restored bool, entry string, err error) {
 	dir := e.dirFor(path)
 	entry, err = oldest(dir)

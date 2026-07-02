@@ -16,6 +16,8 @@ package codex
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -172,17 +174,34 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	cfg["openai_base_url"] = p.BaseURL
 	cfg["model"] = p.Model
 	delete(cfg, core.MarkerKey)
+	origCfg, readErr := os.ReadFile(cfgPath)
+	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return core.ApplyResult{}, readErr
+	}
+	cfgExisted := readErr == nil
 	if err := writeTOML(cfgPath, cfg); err != nil {
 		return core.ApplyResult{}, err
+	}
+	// rollbackCfg best-effort reverts config.toml to its pre-Apply bytes when
+	// the auth.json half of the two-file write fails, so a failed Apply never
+	// leaves config.toml pointing at the proxy without a matching API key.
+	rollbackCfg := func() {
+		if cfgExisted {
+			_ = core.WriteFileAtomic(cfgPath, origCfg, 0o600)
+		} else {
+			_ = os.Remove(cfgPath)
+		}
 	}
 
 	auth, err := readJSON(authPath)
 	if err != nil {
+		rollbackCfg()
 		return core.ApplyResult{}, err
 	}
 	auth[authKeyName] = p.APIKey
 	auth[authModeKey] = authModeAPIKey
 	if err := writeJSON(authPath, auth); err != nil {
+		rollbackCfg()
 		return core.ApplyResult{}, err
 	}
 

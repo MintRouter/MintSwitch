@@ -910,3 +910,50 @@ func TestNewWithDepsSweepsLegacyMarkers(t *testing.T) {
 		t.Fatalf("migrated fingerprint = %q, want legacyfp", marker.Fingerprint)
 	}
 }
+
+// strippingAdapter wraps fakeAdapter with a configurable StripLegacyMarker so
+// tests can drive SweepLegacyMarkers failures.
+type strippingAdapter struct {
+	*fakeAdapter
+	stripErr error
+}
+
+func (s *strippingAdapter) StripLegacyMarker() error { return s.stripErr }
+
+// TestSweepFailureSurfacesInToolDetail pins the sweep-error surfacing fix: a
+// StripLegacyMarker failure recorded by SweepLegacyMarkers shows up in that
+// tool's ListTools Detail (appended to the adapter's own detail), and a later
+// clean sweep clears it.
+func TestSweepFailureSurfacesInToolDetail(t *testing.T) {
+	a := &strippingAdapter{
+		fakeAdapter: &fakeAdapter{id: "alpha", name: "Alpha", detail: "status detail"},
+		stripErr:    errors.New("boom"),
+	}
+	r := core.NewRegistry()
+	r.Register(a)
+	store := settings.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	svc := NewWithRegistry(r, store)
+
+	svc.SweepLegacyMarkers()
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	want := "Legacy marker cleanup failed: boom"
+	if len(views) != 1 || !strings.Contains(views[0].Detail, want) {
+		t.Fatalf("Detail = %q, want it to contain %q", views[0].Detail, want)
+	}
+	if !strings.Contains(views[0].Detail, "status detail") {
+		t.Fatalf("Detail = %q must keep the adapter's own detail", views[0].Detail)
+	}
+
+	a.stripErr = nil
+	svc.SweepLegacyMarkers()
+	views, err = svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools after clean sweep: %v", err)
+	}
+	if strings.Contains(views[0].Detail, want) {
+		t.Fatalf("Detail = %q must clear after a clean sweep", views[0].Detail)
+	}
+}

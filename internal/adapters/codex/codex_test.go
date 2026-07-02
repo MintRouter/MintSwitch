@@ -2,6 +2,7 @@ package codex
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -527,4 +528,61 @@ func TestPureUserConfigNeverOrphan(t *testing.T) {
 			t.Fatalf("pure user file %s rewritten: %q", path, got)
 		}
 	}
+}
+
+// TestApplyRollsBackConfigWhenAuthFails pins the two-file atomicity fix: when
+// the auth.json half of Apply fails, config.toml is rolled back to its
+// pre-Apply state (original bytes for an existing file, removal for a created
+// one) and no managed marker is recorded, so a failed Apply never leaves
+// config.toml pointing at the proxy without a matching API key.
+func TestApplyRollsBackConfigWhenAuthFails(t *testing.T) {
+	t.Run("existing config restored", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		cfgPath, authPath := a.configPath(), a.authPath()
+		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		userCfg := "model = \"user-model\"\n"
+		if err := os.WriteFile(cfgPath, []byte(userCfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(authPath, []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := a.Apply(sampleProfile()); err == nil {
+			t.Fatal("expected Apply to fail on malformed auth.json")
+		}
+		got, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != userCfg {
+			t.Fatalf("config.toml not rolled back: %q, want %q", got, userCfg)
+		}
+		if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
+			t.Fatalf("marker after failed Apply = inStore=%v err=%v, want absent", inStore, err)
+		}
+	})
+
+	t.Run("created config removed", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		cfgPath, authPath := a.configPath(), a.authPath()
+		if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(authPath, []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := a.Apply(sampleProfile()); err == nil {
+			t.Fatal("expected Apply to fail on malformed auth.json")
+		}
+		if _, err := os.Stat(cfgPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("config.toml must be removed by rollback, stat err = %v", err)
+		}
+		if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
+			t.Fatalf("marker after failed Apply = inStore=%v err=%v, want absent", inStore, err)
+		}
+	})
 }

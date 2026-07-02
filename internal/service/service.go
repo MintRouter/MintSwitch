@@ -64,6 +64,14 @@ type Service struct {
 	// production constructors (a 10s-timeout client is built on demand); tests
 	// may set it to an httptest client.
 	mcpClient *http.Client
+	// sweepMu guards sweepErrs, which is written by SweepLegacyMarkers (at
+	// construction, or when re-invoked) and read by viewFor, which deliberately
+	// runs without taking mu.
+	sweepMu sync.Mutex
+	// sweepErrs records the last legacy-marker sweep failure per tool ID, so
+	// the error is surfaced in the tool's Detail via ListTools instead of only
+	// being logged.
+	sweepErrs map[string]string
 }
 
 // ToolView is the per-tool summary returned by [Service.ListTools].
@@ -187,17 +195,32 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 // SweepLegacyMarkers strips the legacy in-file "mintswitchManaged" key from
 // every registered adapter that implements [core.LegacyMarkerStripper]
 // (migrating the marker into the sidecar store). It is best-effort: a failure
-// on one tool is logged and never blocks the others or app startup.
+// on one tool is logged, recorded per tool so ListTools surfaces it in that
+// tool's Detail, and never blocks the others or app startup.
 func (s *Service) SweepLegacyMarkers() {
+	errs := make(map[string]string)
 	for _, a := range s.reg.All() {
 		stripper, ok := a.(core.LegacyMarkerStripper)
 		if !ok {
 			continue
 		}
 		if err := stripper.StripLegacyMarker(); err != nil {
-			log.Printf("service: legacy marker sweep for %s: %v", a.ID(), err)
+			log.Printf("service: legacy marker sweep for %s (%s): %v",
+				a.ID(), strings.Join(a.ConfigPaths(), ", "), err)
+			errs[a.ID()] = fmt.Sprintf("Legacy marker cleanup failed: %v", err)
 		}
 	}
+	s.sweepMu.Lock()
+	s.sweepErrs = errs
+	s.sweepMu.Unlock()
+}
+
+// sweepErrFor returns the recorded legacy-marker sweep failure for toolID, or
+// "" when the last sweep succeeded for it (or never ran).
+func (s *Service) sweepErrFor(toolID string) string {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	return s.sweepErrs[toolID]
 }
 
 // NewWithRegistry builds a Service from a pre-built registry and settings store,
@@ -251,6 +274,9 @@ func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
 	status, detail, serr := a.Status(p)
 	if serr != nil {
 		detail = serr.Error()
+	}
+	if msg := s.sweepErrFor(a.ID()); msg != "" {
+		detail = joinMessage(detail, msg)
 	}
 	// Backward compat for profiles saved before Models existed: surface the
 	// single selected Model as a one-element list so the UI always has options.
