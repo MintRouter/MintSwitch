@@ -9,6 +9,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
 
@@ -17,7 +18,7 @@ func newAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
 	home := t.TempDir()
 	data := t.TempDir()
 	r := &paths.Resolver{Home: home, DataDir: data}
-	a := New(r, backup.NewEngine(r.BackupsDir()))
+	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
 	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
 	return a, r
 }
@@ -206,5 +207,176 @@ func TestRestoreNoBackupNoOp(t *testing.T) {
 	}
 	if res.BackupPath != "" {
 		t.Fatalf("expected no backup path, got %q", res.BackupPath)
+	}
+}
+
+// TestStatusDefaultWhenProviderRemoved proves a store entry alone does not
+// report Applied: when the managed provider block was removed from the file
+// (e.g. an external restore/wipe), Status falls back to Default.
+func TestStatusDefaultWhenProviderRemoved(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	p := sampleProfile()
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.WriteFile(a.configPath(), []byte(`{"theme":"opencode"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusDefault {
+		t.Fatalf("want Default when managed provider block is gone, got %v", st)
+	}
+}
+
+// writeLegacyConfig writes an opencode.json carrying the legacy in-file marker
+// for profile p plus user keys (provider/model/mcp), mimicking the real broken
+// config a pre-store MintSwitch apply leaves behind.
+func writeLegacyConfig(t *testing.T, a *Adapter, p core.Profile) string {
+	t.Helper()
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]any{
+		"$schema": "https://opencode.ai/config.json",
+		"provider": map[string]any{
+			providerID: map[string]any{
+				"npm":     npmPackage,
+				"name":    providerName,
+				"options": map[string]any{"baseURL": p.BaseURL, "apiKey": p.APIKey},
+				"models":  map[string]any{p.Model: map[string]any{"name": p.Model}},
+			},
+		},
+		"model": providerID + "/" + p.Model,
+		"mcp": map[string]any{
+			"mintrouter-context": map[string]any{"type": "remote", "url": "https://mcp.example.com"},
+		},
+		core.MarkerKey: core.NewMarker(p, p.Label),
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestApplyStripsLegacyMarker proves an Apply over a legacy-marker file removes
+// the key in the same write and records the fresh marker in the store, without
+// snapshotting the managed file (backup gate honors the legacy marker).
+func TestApplyStripsLegacyMarker(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	p := sampleProfile()
+	path := writeLegacyConfig(t, a, p)
+
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if res.BackupPath != "" {
+		t.Fatalf("legacy-managed file must not be backed up, got %q", res.BackupPath)
+	}
+	root := readJSON(t, path)
+	if _, ok := root[core.MarkerKey]; ok {
+		t.Fatalf("legacy marker not stripped on Apply: %v", root)
+	}
+	if _, ok := root["mcp"]; !ok {
+		t.Fatalf("user mcp key lost: %v", root)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want AppliedByMintSwitch, got %v", st)
+	}
+}
+
+// TestStripLegacyMarkerMigrates is the startup-sweep case: an opencode.json
+// broken by the legacy marker gets the key removed — keeping provider, model
+// and mcp intact — and the marker migrated into the store, without any Apply.
+func TestStripLegacyMarkerMigrates(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	path := writeLegacyConfig(t, a, p)
+
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	root := readJSON(t, path)
+	if _, ok := root[core.MarkerKey]; ok {
+		t.Fatalf("legacy marker still in file: %v", root)
+	}
+	prov := root["provider"].(map[string]any)
+	if _, ok := prov[providerID]; !ok {
+		t.Fatalf("provider block lost: %v", root)
+	}
+	if root["model"] != providerID+"/"+p.Model {
+		t.Fatalf("model lost: %v", root["model"])
+	}
+	if _, ok := root["mcp"]; !ok {
+		t.Fatalf("mcp key lost: %v", root)
+	}
+	marker, ok, err := a.m.Get(id)
+	if err != nil || !ok {
+		t.Fatalf("store entry after migrate = ok=%v err=%v", ok, err)
+	}
+	if marker.Fingerprint != core.Fingerprint(p) {
+		t.Fatalf("migrated fingerprint mismatch: %q", marker.Fingerprint)
+	}
+}
+
+// TestStripLegacyMarkerKeepsExistingStoreEntry proves the sweep never
+// overwrites a marker already recorded in the store (the store is newer truth).
+func TestStripLegacyMarkerKeepsExistingStoreEntry(t *testing.T) {
+	a, _ := newAdapter(t)
+	stored := core.NewMarker(secondProfile(), "personal")
+	if err := a.m.Put(id, stored); err != nil {
+		t.Fatal(err)
+	}
+	writeLegacyConfig(t, a, sampleProfile())
+
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	marker, ok, err := a.m.Get(id)
+	if err != nil || !ok {
+		t.Fatalf("store entry = ok=%v err=%v", ok, err)
+	}
+	if marker.Fingerprint != stored.Fingerprint {
+		t.Fatalf("store entry overwritten by legacy marker: %+v", marker)
+	}
+	if root := readJSON(t, a.configPath()); root[core.MarkerKey] != nil {
+		t.Fatal("legacy marker still in file")
+	}
+}
+
+// TestStripLegacyMarkerNoOp proves the sweep neither creates a missing file nor
+// rewrites a clean one.
+func TestStripLegacyMarkerNoOp(t *testing.T) {
+	a, _ := newAdapter(t)
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip on missing file: %v", err)
+	}
+	if _, err := os.Stat(a.configPath()); !os.IsNotExist(err) {
+		t.Fatalf("strip must not create opencode.json, stat err=%v", err)
+	}
+
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clean := []byte(`{"theme": "opencode"}`)
+	if err := os.WriteFile(path, clean, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip on clean file: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(clean) {
+		t.Fatalf("clean file rewritten: %q", got)
 	}
 }

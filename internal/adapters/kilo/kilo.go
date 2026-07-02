@@ -13,6 +13,10 @@
 // carrying comments or other JSONC-only syntax is never rewritten — Status
 // reports ModifiedExternally and Apply refuses — because Go's encoding/json
 // round-trip would destroy the user's comments.
+//
+// The managed marker lives in the sidecar marker store, never in the config
+// file: Kilo validates it with a strict zod schema and rejects unknown
+// top-level keys.
 package kilo
 
 import (
@@ -25,8 +29,12 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
+
+// id is the stable adapter identifier, also the tool's key in the marker store.
+const id = "kilo"
 
 // providerID is Kilo's built-in OpenAI-compatible provider key under "provider".
 const providerID = "openai-compatible"
@@ -39,26 +47,31 @@ const jsoncDetail = "kilo.jsonc contains comments or other JSONC-only syntax; " 
 // without destroying JSONC-only syntax such as comments.
 var errJSONC = errors.New("kilo: " + jsoncDetail + " Edit the file manually or convert it to plain JSON")
 
-// Ensure Adapter satisfies the shared tool adapter contract.
-var _ core.ToolAdapter = (*Adapter)(nil)
+// Ensure Adapter satisfies the shared adapter contracts.
+var (
+	_ core.ToolAdapter          = (*Adapter)(nil)
+	_ core.LegacyMarkerStripper = (*Adapter)(nil)
+)
 
 // Adapter manages Kilo Code's configuration on behalf of MintSwitch.
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
+	m *markers.Store
 	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
 	// exec.LookPath.
 	lookPath func(string) (string, error)
 }
 
-// New constructs a Kilo Code adapter. All filesystem locations derive from the
-// injected resolver and backup engine so tests can point HOME at a temp dir.
-func New(r *paths.Resolver, e *backup.Engine) *Adapter {
-	return &Adapter{r: r, e: e, lookPath: exec.LookPath}
+// New constructs a Kilo Code adapter that resolves paths via r, backs up via e,
+// and records its managed marker in m. All filesystem locations derive from the
+// injected dependencies so tests can point HOME at a temp dir.
+func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
+	return &Adapter{r: r, e: e, m: m, lookPath: exec.LookPath}
 }
 
 // ID returns the stable adapter identifier.
-func (a *Adapter) ID() string { return "kilo" }
+func (a *Adapter) ID() string { return id }
 
 // Name returns the display name.
 func (a *Adapter) Name() string { return "Kilo Code" }
@@ -95,7 +108,12 @@ func (a *Adapter) Detect() (bool, string) {
 
 // Status inspects the current config relative to the given profile. A
 // kilo.jsonc carrying JSONC-only syntax reports ModifiedExternally: MintSwitch
-// cannot rewrite it without destroying the user's comments.
+// cannot rewrite it without destroying the user's comments. The marker is read
+// from the sidecar store: no entry means Default; an entry whose managed
+// provider block ("provider"."openai-compatible") has been removed from the
+// file also means Default (the file is back to an unmanaged state, e.g. after
+// an external restore/wipe); otherwise the marker fingerprint decides Applied
+// vs ModifiedExternally, exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
@@ -108,8 +126,15 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	if !strict {
 		return core.StatusModifiedExternally, jsoncDetail, nil
 	}
-	marker, ok := extractMarker(root)
-	if !ok {
+	marker, ok, err := a.m.Get(id)
+	if err != nil {
+		return core.StatusDefault, "", err
+	}
+	if !ok || !marker.Managed {
+		return core.StatusDefault, core.StatusDefault.Detail(), nil
+	}
+	provider, _ := root["provider"].(map[string]any)
+	if _, present := provider[providerID]; !present {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
@@ -120,13 +145,17 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 
 // Apply backs up the existing config (only when it is not already
 // MintSwitch-managed), then idempotently injects the MintSwitch endpoint under
-// Kilo's built-in "openai-compatible" provider, the default model, and the
-// managed marker, preserving all other keys. It refuses to touch a kilo.jsonc
-// carrying JSONC-only syntax (see errJSONC).
+// Kilo's built-in "openai-compatible" provider and the default model,
+// preserving all other keys. It refuses to touch a kilo.jsonc carrying
+// JSONC-only syntax (see errJSONC). The managed marker is recorded in the
+// sidecar store — never in the config file, which Kilo validates strictly —
+// and a leftover legacy in-file marker is stripped in the same write.
 //
-// The backup is created only on the first Apply over a pristine/unmanaged (or
-// absent) file, so the pristine pre-MintSwitch snapshot is what Restore reverts
-// to even after repeated Applies.
+// "Already managed" (the backup gate) means a store entry OR a legacy in-file
+// marker, so upgrading from a legacy-marker install never snapshots a managed
+// file. The backup is created only on the first Apply over a pristine/unmanaged
+// (or absent) file, so the pristine pre-MintSwitch snapshot is what Restore
+// reverts to even after repeated Applies.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -142,8 +171,13 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if root == nil {
 		root = map[string]any{}
 	}
+	_, inStore, err := a.m.Get(id)
+	if err != nil {
+		return core.ApplyResult{}, err
+	}
 	var backupPath string
-	if _, managed := extractMarker(root); !managed {
+	legacy, hasLegacy := extractLegacyMarker(root)
+	if !inStore && !(hasLegacy && legacy.Managed) {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
 			return core.ApplyResult{}, err
@@ -165,9 +199,12 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}
 	root["provider"] = provider
 	root["model"] = providerID + "/" + p.Model
-	root[core.MarkerKey] = core.NewMarker(p, p.Label)
+	delete(root, core.MarkerKey)
 
 	if err := writeConfig(path, root); err != nil {
+		return core.ApplyResult{}, err
+	}
+	if err := a.m.Put(id, core.NewMarker(p, p.Label)); err != nil {
 		return core.ApplyResult{}, err
 	}
 	return core.ApplyResult{
@@ -177,9 +214,10 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts the config to its pre-apply state via the backup engine. It
-// checks both candidate files (kilo.jsonc and kilo.json) since the active file
-// may have changed since Apply. It is a safe no-op when nothing was applied.
+// Restore reverts the config to its pre-apply state via the backup engine and
+// removes the tool's entry from the sidecar marker store. It checks both
+// candidate files (kilo.jsonc and kilo.json) since the active file may have
+// changed since Apply. It is a safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	res := core.RestoreResult{
 		ChangedPath: a.configPath(),
@@ -198,7 +236,48 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 			}
 		}
 	}
+	if err := a.m.Delete(id); err != nil {
+		return core.RestoreResult{}, err
+	}
 	return res, nil
+}
+
+// StripLegacyMarker removes the legacy top-level marker key from both candidate
+// config files (kilo.jsonc and kilo.json — Kilo's loader merges both, so a
+// legacy key in either breaks its strict schema), migrating the marker into the
+// sidecar store when the store has no entry for this tool yet. A kilo.jsonc
+// carrying JSONC-only syntax is skipped (no-op, no error): rewriting it would
+// destroy the user's comments, matching the errJSONC contract elsewhere. It is
+// a no-op when the files are absent or carry no legacy marker; it never creates
+// a file.
+func (a *Adapter) StripLegacyMarker() error {
+	for _, path := range []string{a.jsoncPath(), a.jsonPath()} {
+		if !fileExists(path) {
+			continue
+		}
+		root, strict, err := readConfig(path)
+		if err != nil {
+			return err
+		}
+		if !strict {
+			continue
+		}
+		if _, present := root[core.MarkerKey]; !present {
+			continue
+		}
+		if legacy, ok := extractLegacyMarker(root); ok && legacy.Managed {
+			if _, inStore, err := a.m.Get(id); err == nil && !inStore {
+				if err := a.m.Put(id, legacy); err != nil {
+					return err
+				}
+			}
+		}
+		delete(root, core.MarkerKey)
+		if err := writeConfig(path, root); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // fileExists reports whether path exists and is a regular file.
@@ -241,8 +320,10 @@ func writeConfig(path string, root map[string]any) error {
 	return core.WriteJSONObjectAtomic(path, root)
 }
 
-// extractMarker decodes the MintSwitch marker from the parsed config, if present.
-func extractMarker(root map[string]any) (core.Marker, bool) {
+// extractLegacyMarker pulls a legacy in-file MintSwitch marker out of the
+// parsed config. It reports false when the key is absent or its value does not
+// decode as a [core.Marker].
+func extractLegacyMarker(root map[string]any) (core.Marker, bool) {
 	raw, ok := root[core.MarkerKey]
 	if !ok {
 		return core.Marker{}, false
@@ -253,9 +334,6 @@ func extractMarker(root map[string]any) (core.Marker, bool) {
 	}
 	var m core.Marker
 	if err := json.Unmarshal(b, &m); err != nil {
-		return core.Marker{}, false
-	}
-	if !m.Managed {
 		return core.Marker{}, false
 	}
 	return m, true
