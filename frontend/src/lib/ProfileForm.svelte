@@ -294,35 +294,33 @@
     font-weight: var(--fw-medium);
     color: var(--muted);
   }
-  /* The Context Engine toggle and Save action share a footer row. Extra top
-     space (not a divider) sets the actions apart from the fields above. */
+  /* The Context Engine toggle and Save action share a footer row. A hairline
+     plus extra top space sets the actions apart from the fields above. */
   .profile-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: var(--s-1);
     margin-top: var(--s-1);
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
   }
 
   /* Master Context Engine ON/OFF switch, shared with the Save row. A native
      checkbox (role="switch") drives an accent track + sliding thumb; the visible
      label is the switch's accessible name via the wrapping <label>. */
-  /* The switch is presented as a self-contained inset pill so it reads as a
-     distinct setting sitting beside the primary Save action. */
+  /* Chromeless: just the track + label, structured by the footer hairline. */
   .mcp-switch {
     display: inline-flex;
     align-items: center;
     min-width: 0;
     gap: 0.45rem;
-    padding: 0.3rem 0.55rem 0.3rem 0.45rem;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 999px;
+    padding: 0;
+    background: transparent;
+    border: none;
     cursor: pointer;
     user-select: none;
-    transition: border-color 0.15s ease, background-color 0.15s ease;
   }
-  .mcp-switch:hover:not(.is-disabled) { border-color: var(--border-strong); }
   .mcp-switch.is-disabled { cursor: not-allowed; opacity: 0.6; }
   /* Visually-hidden but focusable: the ring is drawn on the track instead. */
   .mcp-switch-input {
@@ -384,18 +382,16 @@
     word-break: break-all;
   }
 
-  /* Compact Models row: a plain summary of count + default on the left and a
-     Manage action on the right, framed as a subtle inset so it reads as a
-     grouped setting rather than a dense one-liner. */
+  /* Compact Models row: a muted summary of count + default on the left and a
+     quiet-accent Manage action on the right — plain text + button, no inset. */
   .models-summary {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-2);
-    padding: 0.5rem 0.5rem 0.5rem 0.7rem;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    padding: 2px 0;
+    background: transparent;
+    border: none;
   }
   .models-summary-text {
     flex: 1 1 auto;
@@ -405,10 +401,19 @@
     text-overflow: ellipsis;
     font-size: var(--fs-sm);
     line-height: var(--lh);
-    color: var(--text);
+    color: var(--muted);
   }
   .models-summary-text.is-empty { color: var(--muted); }
-  .models-summary .btn-ghost { flex: 0 0 auto; }
+  .models-summary .btn-ghost {
+    flex: 0 0 auto;
+    background: transparent;
+    border-color: transparent;
+    color: var(--accent-soft-text);
+  }
+  .models-summary .btn-ghost:hover:not(:disabled) {
+    background: var(--accent-soft);
+    border-color: transparent;
+  }
 
   /* Models management popup — mirrors the Add-provider dialog: a blurred
      backdrop centering a viewport-capped dialog whose body scrolls so the app
@@ -480,9 +485,9 @@
     width: fit-content;
     max-width: 100%;
     align-self: flex-start;
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    border-radius: 9px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
   }
   .seg {
     display: inline-flex;
@@ -491,8 +496,8 @@
     max-width: 100%;
     min-height: 36.5px; /* matches .field-input box height so add-row + chips read level */
     border: 1px solid transparent; /* reserves ring space; shown only on unselected hover */
-    border-radius: 6px;
-    background: var(--surface-2);
+    border-radius: 7px;
+    background: transparent;
     transition: background-color 0.15s ease, border-color 0.15s ease;
   }
   .seg.selected { background: var(--accent); }
@@ -508,7 +513,7 @@
     color: var(--text);
     background: transparent;
     border: none;
-    border-radius: 6px 0 0 6px;
+    border-radius: 7px 0 0 7px;
     cursor: pointer;
     transition: color 0.15s ease;
   }
@@ -521,7 +526,7 @@
     justify-content: center;
     padding: 0 0.6rem 0 0.4rem;
     border: none;
-    border-radius: 0 6px 6px 0;
+    border-radius: 0 7px 7px 0;
     background: transparent;
     color: var(--muted);
     font-size: 1.05rem;
