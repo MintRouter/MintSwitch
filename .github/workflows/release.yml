@@ -35,9 +35,10 @@ jobs:
           - os: macos-latest
             platform: darwin
             arch: arm64
-          # Labels match both self-hosted Linux runners so whichever is idle
-          # picks the job up (requires Docker on the runner host).
-          - os: [self-hosted, Linux, X64]
+          # Pinned to the dind-labelled runner: this job runs in a container,
+          # so it must land on a host with Docker (the other self-hosted
+          # runner is not guaranteed to have it).
+          - os: [self-hosted, Linux, X64, dind]
             container: ubuntu:24.04
             platform: linux
             arch: amd64
@@ -130,7 +131,8 @@ jobs:
     name: Create GitHub Release
     needs: build
     # Also self-hosted: this job only downloads artifacts and calls the
-    # GitHub API, so it has no OS dependencies and needs no container.
+    # GitHub API, so it has no OS dependencies and needs no container —
+    # generic labels are fine (no dind pin needed), any idle runner works.
     runs-on: [self-hosted, Linux, X64]
     steps:
       # The self-hosted workspace persists between runs; remove any stale
