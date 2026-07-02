@@ -7,11 +7,12 @@
     profile: ProfileView;
     saving: boolean;
     onSave: (p: Profile) => Promise<boolean>;
+    onAutoSave: (p: Profile) => Promise<string | null>;
     mcpEnabled: boolean;
     hasMcpKey: boolean;
     onToggleEnabled: (enabled: boolean) => void;
   }
-  let { profile, saving, onSave, mcpEnabled, hasMcpKey, onToggleEnabled }: Props = $props();
+  let { profile, saving, onSave, onAutoSave, mcpEnabled, hasMcpKey, onToggleEnabled }: Props = $props();
 
   let label = $state("");
   let baseUrl = $state("");
@@ -47,6 +48,46 @@
     return modelNames[m] || m;
   }
 
+  // Builds the SaveProfile payload from the current form state. api_key is the
+  // caller's choice: the typed key on explicit Save, "" (= keep the stored key)
+  // on auto-save. The Small / fast model field was removed from the UI; always
+  // send "" so the Profile/binding shape stays unchanged (the old "None").
+  function payload(key: string): Profile {
+    return {
+      label: label.trim(),
+      api_key: key,
+      base_url: normalizedBase.url,
+      models: models,
+      model_names: modelNames,
+      model: model,
+      small_fast_model: "",
+    };
+  }
+
+  // Model changes made in the dialog (add / remove / default) persist
+  // immediately so a refresh never loses them — no explicit Save needed. Only
+  // runs when the profile is persistable as-is: a key is already stored (the
+  // auto-save sends api_key "" = keep it) plus a valid base URL and default
+  // model. Otherwise (e.g. first-run profile never saved) the change stays
+  // local exactly as before — no error — and the explicit Save persists it.
+  let autoSaveError = $state("");
+
+  function canAutoSave(): boolean {
+    return (
+      profile.has_key &&
+      isHttpUrl(normalizedBase.url) &&
+      models.length > 0 &&
+      models.includes(model)
+    );
+  }
+
+  async function autoSave(): Promise<void> {
+    if (!canAutoSave()) return;
+    autoSaveError = "";
+    const err = await onAutoSave(payload(""));
+    if (err) autoSaveError = err;
+  }
+
   // Add the typed model to the list (trimmed, deduped by ID). The optional
   // display name is stored alongside; re-adding an existing ID never duplicates
   // it but a newly typed name updates its alias. The first model added becomes
@@ -65,6 +106,7 @@
     newModel = "";
     newModelName = "";
     modelInputEl?.focus();
+    void autoSave();
   }
 
   function onModelKeydown(e: KeyboardEvent): void {
@@ -76,7 +118,8 @@
 
   // Remove a model (and its display name); if it was the default, fall back to
   // the first remaining model (or clear the default when none are left) so it's
-  // never orphaned.
+  // never orphaned. Removing the last model cannot auto-save (a profile needs a
+  // model), so the stored list only shrinks to empty via the explicit Save.
   function removeModel(m: string): void {
     models = models.filter((x) => x !== m);
     if (m in modelNames) {
@@ -87,6 +130,14 @@
     if (model === m) {
       model = models[0] ?? "";
     }
+    void autoSave();
+  }
+
+  // Changing the default model in the dialog also persists immediately.
+  function setDefault(m: string): void {
+    if (model === m) return;
+    model = m;
+    void autoSave();
   }
 
   // Models are managed in a popup so the card shows only a compact summary.
@@ -96,6 +147,7 @@
   let modelsDialogEl = $state<HTMLDivElement | null>(null);
 
   function openModels(): void {
+    autoSaveError = "";
     modelsOpen = true;
   }
 
@@ -156,18 +208,7 @@
   async function submit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     if (saving || !validate()) return;
-    const payload: Profile = {
-      label: label.trim(),
-      api_key: apiKey,
-      base_url: normalizedBase.url,
-      models: models,
-      model_names: modelNames,
-      model: model,
-      // The Small / fast model field was removed from the UI; always send "" so
-      // the Profile/binding shape stays unchanged (equivalent to the old "None").
-      small_fast_model: "",
-    };
-    const ok = await onSave(payload);
+    const ok = await onSave(payload(apiKey));
     if (ok) apiKey = "";
   }
 
@@ -290,7 +331,7 @@
                 placeholder="opus4.8" autocomplete="off" spellcheck="false"
                 onkeydown={onModelKeydown} />
             </div>
-            <button class="btn-primary sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
+            <button class="btn-primary sm" type="button" onclick={addModel} disabled={!newModel.trim() || saving}>Add</button>
           </div>
         </div>
         {#if models.length}
@@ -298,7 +339,7 @@
             {#each models as m (m)}
               <div class="seg" class:selected={m === model}>
                 <button class="seg-select" type="button" aria-pressed={m === model}
-                  onclick={() => (model = m)} title={`Set ${displayName(m)} as default`}>
+                  onclick={() => setDefault(m)} title={`Set ${displayName(m)} as default`}>
                   <span class="seg-name">{displayName(m)}</span>
                   {#if modelNames[m]}
                     <span class="seg-id">{m}</span>
@@ -312,6 +353,9 @@
           </div>
         {:else}
           <p class="field-hint">No models yet — add your first one above.</p>
+        {/if}
+        {#if autoSaveError}
+          <p class="field-error" role="alert">Couldn't save: {autoSaveError}</p>
         {/if}
       </div>
       <div class="actions">
