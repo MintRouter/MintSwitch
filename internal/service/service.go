@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ import (
 	mcpkilo "mintswitch/internal/injectors/kilo"
 	mcpopencode "mintswitch/internal/injectors/opencode"
 	"mintswitch/internal/installer"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 	"mintswitch/internal/settings"
 )
@@ -135,10 +137,14 @@ func New() (*Service, error) {
 }
 
 // NewWithDeps builds a Service from an injected Resolver and backup Engine,
-// registering the built-in adapters. Tests can point r.Home at a temp dir.
+// registering the built-in adapters over a sidecar marker store at
+// r.MarkersPath(). Tests can point r.Home at a temp dir. It runs the one-time
+// legacy-marker sweep (see [Service.SweepLegacyMarkers]) before returning, so
+// tool configs broken by the legacy in-file marker heal at app startup.
 func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg := core.NewRegistry()
-	reg.Register(claudecode.New(r, e))
+	mk := markers.NewStore(r.MarkersPath())
+	reg.Register(claudecode.New(r, e, mk))
 	reg.Register(codex.New(r, e))
 	reg.Register(opencode.New(r, e))
 	reg.Register(droid.New(r, e))
@@ -159,7 +165,24 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 		mcpdroid.New(r, e),
 		mcpkilo.New(r, e),
 	}
+	s.SweepLegacyMarkers()
 	return s
+}
+
+// SweepLegacyMarkers strips the legacy in-file "mintswitchManaged" key from
+// every registered adapter that implements [core.LegacyMarkerStripper]
+// (migrating the marker into the sidecar store). It is best-effort: a failure
+// on one tool is logged and never blocks the others or app startup.
+func (s *Service) SweepLegacyMarkers() {
+	for _, a := range s.reg.All() {
+		stripper, ok := a.(core.LegacyMarkerStripper)
+		if !ok {
+			continue
+		}
+		if err := stripper.StripLegacyMarker(); err != nil {
+			log.Printf("service: legacy marker sweep for %s: %v", a.ID(), err)
+		}
+	}
 }
 
 // NewWithRegistry builds a Service from a pre-built registry and settings store,

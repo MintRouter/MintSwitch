@@ -159,6 +159,16 @@ export function SetToolModel(toolID: string, model: string): $CancellablePromise
 }
 
 /**
+ * SweepLegacyMarkers strips the legacy in-file "mintswitchManaged" key from
+ * every registered adapter that implements [core.LegacyMarkerStripper]
+ * (migrating the marker into the sidecar store). It is best-effort: a failure
+ * on one tool is logged and never blocks the others or app startup.
+ */
+export function SweepLegacyMarkers(): $CancellablePromise<void> {
+    return $Call.ByID(4002993474);
+}
+
+/**
  * TestMCPConnection probes the MintRouter MCP endpoint with the saved key via a
  * JSON-RPC initialize request and maps the HTTP status to a user-facing meaning.
  * The key/Authorization header are never logged or included in the result.
