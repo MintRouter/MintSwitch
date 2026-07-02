@@ -320,4 +320,3 @@ func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
 		t.Fatalf("status after strip = %v, want Default", st)
 	}
 }
-
