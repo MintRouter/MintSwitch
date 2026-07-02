@@ -529,7 +529,7 @@
     cursor: pointer;
     transition: color 0.15s ease, opacity 0.15s ease;
   }
-  .seg-remove:hover { color: var(--danger); }
+  .seg-remove:hover { color: var(--danger-strong); }
   .seg.selected .seg-remove { color: var(--accent-text); }
   .seg.selected .seg-remove:hover { color: var(--accent-text); opacity: 0.75; }
 </style>
