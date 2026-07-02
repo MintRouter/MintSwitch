@@ -14,11 +14,12 @@ vars:
   # Docker image for cross-compilation with CGO (used when CGO_ENABLED=1 on non-Windows)
   CROSS_IMAGE: wails-cross
 
-  # Windows executable base name (bin/MintSwitch.exe). Overrides the root
-  # Taskfile's lowercase APP_NAME so build, NSIS and MSIX all use the same
-  # casing; NSIS derives PRODUCT_EXECUTABLE from INFO_PROJECTNAME
-  # ("MintSwitch"), which already matches.
-  APP_NAME: "MintSwitch"
+  # Windows executable base name (bin/MintSwitch.exe). A dedicated var (not an
+  # APP_NAME override) because Task merges included taskfiles' global vars, so
+  # overriding APP_NAME here would leak into the darwin/linux builds. NSIS
+  # derives PRODUCT_EXECUTABLE from INFO_PROJECTNAME ("MintSwitch"), which
+  # already matches.
+  EXE_NAME: "MintSwitch"
 
 tasks:
   build:
@@ -57,7 +58,7 @@ tasks:
       - task: generate:syso
         vars:
           ARCH: '{{.ARCH}}'
-      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.EXE_NAME}}.exe"'
       - cmd: powershell Remove-item *.syso
         platforms: [windows]
       - cmd: rm -f *.syso
@@ -89,7 +90,7 @@ tasks:
       - task: generate:syso
         vars:
           ARCH: '{{.ARCH}}'
-      - docker run --rm -v "{{.ROOT_DIR}}:/app" {{.DOCKER_MOUNTS}} -e APP_NAME="{{.APP_NAME}}" {{if .EXTRA_TAGS}}-e EXTRA_TAGS="{{.EXTRA_TAGS}}"{{end}} {{if eq .OBFUSCATED "true"}}-e OBFUSCATED=true{{end}} {{if .GARBLE_ARGS}}-e GARBLE_ARGS="{{.GARBLE_ARGS}}"{{end}} {{.CROSS_IMAGE}} windows {{.DOCKER_ARCH}}
+      - docker run --rm -v "{{.ROOT_DIR}}:/app" {{.DOCKER_MOUNTS}} -e APP_NAME="{{.EXE_NAME}}" {{if .EXTRA_TAGS}}-e EXTRA_TAGS="{{.EXTRA_TAGS}}"{{end}} {{if eq .OBFUSCATED "true"}}-e OBFUSCATED=true{{end}} {{if .GARBLE_ARGS}}-e GARBLE_ARGS="{{.GARBLE_ARGS}}"{{end}} {{.CROSS_IMAGE}} windows {{.DOCKER_ARCH}}
       - cmd: docker run --rm -v "{{.ROOT_DIR}}:/app" alpine chown -R $(id -u):$(id -g) /app/bin
         platforms: [linux, darwin]
       - rm -f *.syso
@@ -131,9 +132,9 @@ tasks:
       - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"
       - |
         {{if eq OS "windows"}}
-        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" project.nsi
+        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.EXE_NAME}}.exe" project.nsi
         {{else}}
-        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" project.nsi
+        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.EXE_NAME}}.exe" project.nsi
         {{end}}
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
@@ -148,10 +149,10 @@ tasks:
       - |-
         wails3 tool msix \
           --config "{{.ROOT_DIR}}/wails.json" \
-          --name "{{.APP_NAME}}" \
-          --executable "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" \
+          --name "{{.EXE_NAME}}" \
+          --executable "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.EXE_NAME}}.exe" \
           --arch "{{.ARCH}}" \
-          --out "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}-{{.ARCH}}.msix" \
+          --out "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.EXE_NAME}}-{{.ARCH}}.msix" \
           {{if .CERT_PATH}}--cert "{{.CERT_PATH}}"{{end}} \
           {{if .PUBLISHER}}--publisher "{{.PUBLISHER}}"{{end}} \
           {{if .USE_MSIX_TOOL}}--use-msix-tool{{else}}--use-makeappx{{end}}
@@ -168,7 +169,7 @@ tasks:
 
   run:
     cmds:
-      - '{{.BIN_DIR}}/{{.APP_NAME}}.exe'
+      - '{{.BIN_DIR}}/{{.EXE_NAME}}.exe'
 
   sign:
     summary: Signs the Windows executable
@@ -182,7 +183,7 @@ tasks:
     cmds:
       # Certificate vars are optional: if unset, `wails3 tool sign` falls back to
       # the certificate configured globally via `wails3 setup`.
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.exe" {{if .SIGN_CERTIFICATE}}--certificate "{{.SIGN_CERTIFICATE}}"{{end}} {{if .SIGN_THUMBPRINT}}--thumbprint "{{.SIGN_THUMBPRINT}}"{{end}} {{if .TIMESTAMP_SERVER}}--timestamp "{{.TIMESTAMP_SERVER}}"{{end}}
+      - wails3 tool sign --input "{{.BIN_DIR}}/{{.EXE_NAME}}.exe" {{if .SIGN_CERTIFICATE}}--certificate "{{.SIGN_CERTIFICATE}}"{{end}} {{if .SIGN_THUMBPRINT}}--thumbprint "{{.SIGN_THUMBPRINT}}"{{end}} {{if .TIMESTAMP_SERVER}}--timestamp "{{.TIMESTAMP_SERVER}}"{{end}}
 
   sign:installer:
     summary: Signs the NSIS installer
@@ -198,4 +199,4 @@ tasks:
     vars:
       INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
     cmds:
-      - wails3 tool sign --input "build/windows/nsis/{{.APP_NAME}}-installer.exe" {{if .SIGN_CERTIFICATE}}--certificate "{{.SIGN_CERTIFICATE}}"{{end}} {{if .SIGN_THUMBPRINT}}--thumbprint "{{.SIGN_THUMBPRINT}}"{{end}} {{if .TIMESTAMP_SERVER}}--timestamp "{{.TIMESTAMP_SERVER}}"{{end}}
+      - wails3 tool sign --input "build/windows/nsis/{{.EXE_NAME}}-installer.exe" {{if .SIGN_CERTIFICATE}}--certificate "{{.SIGN_CERTIFICATE}}"{{end}} {{if .SIGN_THUMBPRINT}}--thumbprint "{{.SIGN_THUMBPRINT}}"{{end}} {{if .TIMESTAMP_SERVER}}--timestamp "{{.TIMESTAMP_SERVER}}"{{end}}
