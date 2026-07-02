@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mintswitch/internal/core"
@@ -324,6 +326,57 @@ func TestSaveProfileNormalizesModelNames(t *testing.T) {
 	}
 	if len(view.ModelNames) != 1 || view.ModelNames["a"] != "opus4.8" {
 		t.Fatalf("ModelNames = %v, want map[a:opus4.8]", view.ModelNames)
+	}
+}
+
+// TestModelNamesPersistenceRoundtrip: display names survive an app restart.
+// SaveProfile must write model_names into the settings file on disk, and a
+// brand-new Service over a brand-new Store at the same path (simulating a
+// relaunch/refresh) must read them back intact via GetProfile AND surface them
+// per tool via ListTools — including when a per-tool model override is set
+// (the effectiveProfileFor path used by viewFor).
+func TestModelNamesPersistenceRoundtrip(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	p := multiModelProfile("opus-id", "gpt-id")
+	p.ModelNames = map[string]string{"opus-id": "opus4.8", "gpt-id": "gpt5.5"}
+	if err := svc.SaveProfile(p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := svc.SetToolModel("alpha", "gpt-id"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+
+	// The names must be present in the persisted settings file itself.
+	raw, err := os.ReadFile(storeFrom(svc).Path)
+	if err != nil {
+		t.Fatalf("read settings file: %v", err)
+	}
+	if !strings.Contains(string(raw), `"model_names"`) ||
+		!strings.Contains(string(raw), `"opus4.8"`) ||
+		!strings.Contains(string(raw), `"gpt5.5"`) {
+		t.Fatal("settings file does not contain the saved model_names")
+	}
+
+	// Simulate a restart: fresh Service + fresh Store over the same file.
+	reloaded := NewWithRegistry(reg(a), settings.NewStore(storeFrom(svc).Path))
+	want := map[string]string{"opus-id": "opus4.8", "gpt-id": "gpt5.5"}
+	view, err := reloaded.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile after reload: %v", err)
+	}
+	if !maps.Equal(view.ModelNames, want) {
+		t.Fatalf("ProfileView.ModelNames after reload = %v, want %v", view.ModelNames, want)
+	}
+	views, err := reloaded.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools after reload: %v", err)
+	}
+	if !maps.Equal(views[0].ModelNames, want) {
+		t.Fatalf("ToolView.ModelNames after reload = %v, want %v", views[0].ModelNames, want)
+	}
+	if views[0].SelectedModel != "gpt-id" {
+		t.Fatalf("SelectedModel after reload = %q, want gpt-id", views[0].SelectedModel)
 	}
 }
 
