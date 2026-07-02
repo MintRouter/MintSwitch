@@ -46,6 +46,18 @@ func isOurEntry(v any) bool {
 	return name == entryDisplayName
 }
 
+// hasManagedEntry reports whether root's customModels array still contains
+// the MintSwitch-owned entry that Apply writes.
+func hasManagedEntry(root map[string]any) bool {
+	models, _ := root[customModelsKey].([]any)
+	for _, v := range models {
+		if isOurEntry(v) {
+			return true
+		}
+	}
+	return false
+}
+
 // extractMarker decodes the MintSwitch marker from the parsed config, if present.
 func extractMarker(root map[string]any) (core.Marker, bool) {
 	raw, ok := root[core.MarkerKey]
