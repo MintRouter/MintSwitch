@@ -47,6 +47,12 @@ const jsoncDetail = "kilo.jsonc contains comments or other JSONC-only syntax; " 
 // without destroying JSONC-only syntax such as comments.
 var errJSONC = errors.New("kilo: " + jsoncDetail + " Edit the file manually or convert it to plain JSON")
 
+// orphanDetail explains the orphan-remnant state: the config still carries the
+// MintSwitch-injected settings but the managed marker is gone (e.g. a previous
+// restore was interrupted after clearing the marker).
+const orphanDetail = "MintSwitch settings are still present but the managed marker is missing " +
+	"(a previous restore may have been interrupted). Restore Default will remove them."
+
 // Ensure Adapter satisfies the shared adapter contracts.
 var (
 	_ core.ToolAdapter          = (*Adapter)(nil)
@@ -109,11 +115,14 @@ func (a *Adapter) Detect() (bool, string) {
 // Status inspects the current config relative to the given profile. A
 // kilo.jsonc carrying JSONC-only syntax reports ModifiedExternally: MintSwitch
 // cannot rewrite it without destroying the user's comments. The marker is read
-// from the sidecar store: no entry means Default; an entry whose managed
-// provider block ("provider"."openai-compatible") has been removed from the
-// file also means Default (the file is back to an unmanaged state, e.g. after
-// an external restore/wipe); otherwise the marker fingerprint decides Applied
-// vs ModifiedExternally, exactly as with the legacy in-file marker.
+// from the sidecar store: no entry means Default — unless the file still
+// carries the full MintSwitch injection signature (see orphanRemnant), which
+// reports ModifiedExternally so the UI offers Restore even after the marker
+// was lost (e.g. an interrupted restore). An entry whose managed provider
+// block ("provider"."openai-compatible") has been removed from the file also
+// means Default (the file is back to an unmanaged state, e.g. after an
+// external restore/wipe); otherwise the marker fingerprint decides Applied vs
+// ModifiedExternally, exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
@@ -131,6 +140,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, "", err
 	}
 	if !ok || !marker.Managed {
+		if orphanRemnant(root) {
+			return core.StatusModifiedExternally, orphanDetail, nil
+		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	provider, _ := root["provider"].(map[string]any)
@@ -220,9 +232,11 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // checks both candidate files (kilo.jsonc and kilo.json) since the active
 // file may have changed since Apply. When no backup exists but a file is
 // still MintSwitch-managed (marker in store and the managed provider block
-// present), it falls back to stripping the managed provider, preserving every
-// other key (a comment-carrying kilo.jsonc is skipped, matching the errJSONC
-// contract). It is a safe no-op when nothing was applied.
+// present, or — with the marker lost — the full injection signature still in
+// the file, see orphanRemnant), it falls back to stripping the managed
+// provider, preserving every other key (a comment-carrying kilo.jsonc is
+// skipped, matching the errJSONC contract). It is a safe no-op when nothing
+// was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	_, inStore, err := a.m.Get(id)
 	if err != nil {
@@ -247,8 +261,11 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 			}
 		}
 	}
-	if !restoredAny && inStore {
+	if !restoredAny {
 		for _, path := range []string{a.jsoncPath(), a.jsonPath()} {
+			if !inStore && !a.orphanRemnantAt(path) {
+				continue
+			}
 			stripped, err := a.stripManaged(path)
 			if err != nil {
 				return core.RestoreResult{}, err
@@ -265,6 +282,46 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		return core.RestoreResult{}, err
 	}
 	return res, nil
+}
+
+// orphanRemnant reports whether root still carries the FULL MintSwitch
+// injection signature without requiring a marker: the "openai-compatible"
+// provider block holding both managed options (baseURL and apiKey) AND the
+// default "model" pointing at that provider — exactly the shape Apply writes.
+// It is deliberately stricter than stripManaged's gate because
+// "openai-compatible" is a Kilo built-in provider a user could configure
+// themselves: only the complete signature is treated as a MintSwitch remnant,
+// so a hand-written config never shows Restore or gets stripped by mistake.
+func orphanRemnant(root map[string]any) bool {
+	provider, _ := root["provider"].(map[string]any)
+	block, _ := provider[providerID].(map[string]any)
+	opts, _ := block["options"].(map[string]any)
+	if opts == nil {
+		return false
+	}
+	if _, ok := opts["baseURL"]; !ok {
+		return false
+	}
+	if _, ok := opts["apiKey"]; !ok {
+		return false
+	}
+	m, _ := root["model"].(string)
+	return strings.HasPrefix(m, providerID+"/")
+}
+
+// orphanRemnantAt reports whether the config file at path carries the orphan
+// remnant signature (see orphanRemnant). A missing, corrupt, or
+// comment-carrying file is never a remnant, so this probe can never make
+// Restore touch a file it could not safely rewrite.
+func (a *Adapter) orphanRemnantAt(path string) bool {
+	if !fileExists(path) {
+		return false
+	}
+	root, strict, err := readConfig(path)
+	if err != nil || !strict || root == nil {
+		return false
+	}
+	return orphanRemnant(root)
 }
 
 // stripManaged removes the MintSwitch-managed provider block

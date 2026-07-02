@@ -461,3 +461,128 @@ func TestRestoreNoBackupStripsManagedProvider(t *testing.T) {
 		t.Fatalf("status after strip = %v, want Default", st)
 	}
 }
+
+// TestOrphanStatusAndRestoreWithBackup is the regression for the lost-marker
+// gap: with the sidecar marker gone but the pristine backup intact, Status
+// must report ModifiedExternally (so the UI offers Restore instead of treating
+// the tool as never applied) and Restore must still revert byte-for-byte.
+func TestOrphanStatusAndRestoreWithBackup(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"$schema":"https://opencode.ai/config.json","theme":"dark"}` + "\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// Simulate the lost marker (e.g. an interrupted earlier restore).
+	if err := a.m.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+
+	st, detail, err := a.Status(sampleProfile())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st != core.StatusModifiedExternally || detail != orphanDetail {
+		t.Fatalf("orphan status = %v %q, want ModifiedExternally + orphanDetail", st, detail)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("not byte-for-byte restored: %q", got)
+	}
+}
+
+// TestOrphanRestoreNoBackupStrips covers the orphan-no-backup branch: marker
+// gone AND backups gone, but the file still carries the MintSwitch provider —
+// Restore must strip it and the managed model while preserving the user's own
+// settings, and Status must offer Restore beforehand.
+func TestOrphanRestoreNoBackupStrips(t *testing.T) {
+	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"dark","mcp":{"own":{"type":"remote"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.RemoveAll(r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.m.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusModifiedExternally {
+		t.Fatalf("orphan status = %v, want ModifiedExternally", st)
+	}
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	want := "No backup found; removed the MintSwitch provider from OpenCode config."
+	if res.Message != want {
+		t.Fatalf("message = %q, want %q", res.Message, want)
+	}
+	root := readJSON(t, path)
+	if _, present := root["provider"]; present {
+		t.Fatalf("provider must be stripped: %v", root)
+	}
+	if _, present := root["model"]; present {
+		t.Fatalf("model must be stripped: %v", root)
+	}
+	if root["theme"] != "dark" {
+		t.Fatalf("user settings must be preserved: %v", root)
+	}
+	if _, present := root["mcp"]; !present {
+		t.Fatalf("user mcp key must be preserved: %v", root)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+
+// TestPureUserConfigNeverOrphan proves the no-false-positive contract: a
+// hand-written config that never saw Apply (no mintrouter provider) stays
+// Default (no Restore button) and Restore leaves it byte-for-byte untouched.
+func TestPureUserConfigNeverOrphan(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"theme":"dark","provider":{"anthropic":{"options":{"baseURL":"https://api.anthropic.com"}}},"model":"anthropic/claude-3"}`
+	if err := os.WriteFile(path, []byte(user), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("pure user config status = %v, want Default", st)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != user {
+		t.Fatalf("pure user config rewritten: %q", got)
+	}
+}

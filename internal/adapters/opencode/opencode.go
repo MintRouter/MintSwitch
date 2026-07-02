@@ -35,6 +35,12 @@ const providerName = "MintSwitch (MintRouter)"
 // npmPackage is the AI SDK package used for OpenAI-compatible endpoints.
 const npmPackage = "@ai-sdk/openai-compatible"
 
+// orphanDetail explains the orphan-remnant state: the config still carries the
+// MintSwitch provider but the managed marker is gone (e.g. a previous restore
+// was interrupted after clearing the marker).
+const orphanDetail = "The MintSwitch provider is still present but the managed marker is missing " +
+	"(a previous restore may have been interrupted). Restore Default will remove it."
+
 // Ensure Adapter satisfies the shared adapter contracts.
 var (
 	_ core.ToolAdapter          = (*Adapter)(nil)
@@ -84,10 +90,13 @@ func (a *Adapter) Detect() (bool, string) {
 }
 
 // Status inspects the current config relative to the given profile. The marker
-// is read from the sidecar store: no entry means Default; an entry whose
-// managed provider block ("provider".mintrouter) has been removed from the file
-// also means Default (the file is back to an unmanaged state, e.g. after an
-// external restore/wipe); otherwise the marker fingerprint decides Applied vs
+// is read from the sidecar store: no entry means Default — unless the file
+// still carries the MintSwitch provider block (see orphanRemnantAt), which
+// reports ModifiedExternally so the UI offers Restore even after the marker
+// was lost (e.g. an interrupted restore). An entry whose managed provider
+// block ("provider".mintrouter) has been removed from the file also means
+// Default (the file is back to an unmanaged state, e.g. after an external
+// restore/wipe); otherwise the marker fingerprint decides Applied vs
 // ModifiedExternally, exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
@@ -99,6 +108,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, "", err
 	}
 	if !ok || !marker.Managed {
+		if a.orphanRemnantAt(path) {
+			return core.StatusModifiedExternally, orphanDetail, nil
+		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	root, err := readConfig(path)
@@ -191,9 +203,10 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // backup engine (oldest snapshot; all entries are pruned after a successful
 // restore) and removes the tool's entry from the sidecar marker store. When
 // no backup exists but the file is still MintSwitch-managed (marker in store
-// and provider.mintrouter present), it falls back to stripping the managed
-// provider, preserving every other key. It is a safe no-op when nothing was
-// applied.
+// and provider.mintrouter present, or — with the marker lost — the provider
+// block still in the file, see orphanRemnantAt), it falls back to stripping
+// the managed provider, preserving every other key. It is a safe no-op when
+// nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
 	_, inStore, err := a.m.Get(id)
@@ -205,7 +218,7 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		return core.RestoreResult{}, err
 	}
 	stripped := false
-	if !restored && inStore {
+	if !restored && (inStore || a.orphanRemnantAt(path)) {
 		stripped, err = a.stripManaged(path)
 		if err != nil {
 			return core.RestoreResult{}, err
@@ -222,6 +235,23 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		msg = "No backup found; removed the MintSwitch provider from OpenCode config."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// orphanRemnantAt reports whether the config file at path still carries the
+// MintSwitch provider block ("provider".mintrouter) without requiring a
+// marker. The "mintrouter" provider key is MintSwitch-specific — no tool or
+// user writes it independently — so its presence alone is a reliable remnant
+// signal. A missing or corrupt file is never a remnant, so this probe can
+// never make Status error or Restore touch a file it could not safely
+// rewrite.
+func (a *Adapter) orphanRemnantAt(path string) bool {
+	root, err := readConfig(path)
+	if err != nil {
+		return false
+	}
+	provider, _ := root["provider"].(map[string]any)
+	_, present := provider[providerID]
+	return present
 }
 
 // stripManaged removes the MintSwitch provider block (provider.mintrouter)
