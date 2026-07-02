@@ -6,29 +6,20 @@
     tool: ToolView;
     hasSavedProfile: boolean;
     busy: boolean;
-    // Context Engine (MCP) per-tool inject, driven by App's single MCP state.
-    mcpEnabled: boolean;
-    mcpCapable: boolean;
-    mcpStatus?: string;
-    hasMcpKey: boolean;
-    mcpBusy: boolean;
-    onMcpToggle: (id: string, checked: boolean) => void;
     onApply: (id: string) => void;
     onRestore: (id: string) => void;
     onInstall: (id: string) => void;
     onUninstall: (id: string) => void;
-    onRemove: (id: string) => void;
     onModelChange: (toolID: string, model: string) => void;
   }
   let {
     tool, hasSavedProfile, busy,
-    mcpEnabled, mcpCapable, mcpStatus, hasMcpKey, mcpBusy, onMcpToggle,
-    onApply, onRestore, onInstall, onUninstall, onRemove, onModelChange,
+    onApply, onRestore, onInstall, onUninstall, onModelChange,
   }: Props = $props();
 
   // Provider logos are self-contained app-icon SVGs under /logos/<id>.svg. If a
-  // tool has no asset (custom providers) or it fails to load we fall back to a
-  // neutral monogram tile so the card layout never breaks.
+  // tool has no asset or it fails to load we fall back to a neutral monogram
+  // tile so the card layout never breaks.
   let logoFailed = $state(false);
   const logoSrc = $derived(toolLogoSrc(tool.id));
   const monogram = $derived((tool.name ?? "?").trim().charAt(0).toUpperCase() || "?");
@@ -46,40 +37,41 @@
   });
 
   const meta = $derived(statusMeta(tool.status));
+  // ONE compact status line per card (short label + tone dot) under the title;
+  // the full statusMeta sentence lives in the tooltip. Only "Applied" carries
+  // the success tone — plain "Installed" stays neutral so a card never shows
+  // two different greens meaning different things.
+  const statusLine = $derived.by(() => {
+    if (!tool.installed) return { label: "Not installed", tone: "neutral", full: meta.label };
+    if (tool.status === "applied_by_mintswitch") {
+      return { label: "Applied", tone: "success", full: meta.label };
+    }
+    if (tool.status === "modified_externally") {
+      return { label: "Modified", tone: "warning", full: meta.label };
+    }
+    return { label: "Installed", tone: "neutral", full: meta.label };
+  });
   // Apply needs an installed tool and a saved profile (the backend fails fast
   // without one). Restore only makes sense once we've changed something.
   const canApply = $derived(tool.installed && hasSavedProfile && !busy);
   const canRestore = $derived(
     tool.installed && tool.status !== "default" && tool.status !== "not_installed" && !busy,
   );
-  const paths = $derived(tool.config_paths ?? []);
 
   // Per-tool model picker. The list comes from the active profile (via the
   // backend ToolView). selectedModel is the effective model; if it isn't a
   // member of the current list (e.g. the profile changed) we fall back to the
   // empty "Use profile default" option so the control never shows a stale value.
   const models = $derived(tool.models ?? []);
+  // Optional per-model display names: option labels show the friendly name
+  // (fallback = the model ID) while option values stay the canonical ID.
+  const modelNames = $derived(tool.model_names ?? {});
   const selectedModel = $derived(
     tool.selected_model && models.includes(tool.selected_model) ? tool.selected_model : "",
   );
-
-  // Context Engine inject control: only meaningful for an MCP-capable, installed
-  // tool once the master toggle is on and a key is saved. When the master is
-  // off the control simply isn't rendered (non-destructive). Checked reflects
-  // whether MintSwitch itself wrote the config for this tool.
-  const showMcp = $derived(mcpCapable && tool.installed && mcpEnabled && hasMcpKey);
-  const mcpChecked = $derived(mcpStatus === "configured_by_mintswitch");
-  // A pre-existing external "mintrouter" entry: enabling would overwrite it, so
-  // we surface a subtle "(external)" marker and an explanatory tooltip instead
-  // of silently letting the checkbox look like a fresh, safe opt-in.
-  const mcpExternal = $derived(mcpStatus === "configured_externally");
-  const mcpTitle = $derived(
-    mcpExternal
-      ? "A different 'mintrouter' MCP entry already exists; enabling replaces it (a backup is kept)."
-      : mcpChecked
-        ? `Disable Context Engine for ${tool.name}`
-        : `Enable Context Engine for ${tool.name}`,
-  );
+  // When the model row exists, Apply sits inline at its right (one row saved);
+  // otherwise it stays full-width in the actions block as before.
+  const hasModelRow = $derived(tool.installed && models.length >= 1);
 </script>
 
 <article class="card tool" class:is-uninstalled={!tool.installed}
@@ -97,89 +89,74 @@
         <p class="tool-subtitle">{nameParts.subtitle}</p>
       {/if}
     </div>
-    <span class="badge install" class:on={tool.installed}>
+    <p class={`tool-status tone-${statusLine.tone}`} title={statusLine.full}>
       <span class="dot" aria-hidden="true"></span>
-      {tool.installed ? "Installed" : "Not installed"}
-    </span>
+      {statusLine.label}
+    </p>
   </div>
 
-  {#if tool.status !== "default" && tool.status !== "not_installed"}
-    <span class={`badge status tone-${meta.tone}`}>{meta.label}</span>
-  {/if}
+  <div class="tool-divider" aria-hidden="true"></div>
 
-  {#if tool.installed}
-    {#if paths.length}
-      <ul class="paths" aria-label="Config paths">
-        {#each paths as p (p)}
-          <li><code>{p}</code></li>
-        {/each}
-      </ul>
-    {/if}
-  {:else}
-    {#if paths.length}
-      <ul class="paths" aria-label="Config path that would be used">
-        <li class="paths-label">Would manage:</li>
-        {#each paths as p (p)}
-          <li><code>{p}</code></li>
-        {/each}
-      </ul>
-    {/if}
-  {/if}
-
-  <div class="tool-actions">
-    {#if tool.installed && models.length >= 1}
-      <select class="tool-model-select" id={`model-${tool.id}`} aria-label="Model"
-        value={selectedModel}
-        onchange={(e) => onModelChange(tool.id, e.currentTarget.value)}>
-        <option value="">Use profile default</option>
-        {#each models as m (m)}
-          <option value={m}>{m}</option>
-        {/each}
-      </select>
-    {/if}
-    {#if !tool.installed && !tool.custom}
-      <button class="btn-primary sm install-btn" type="button" onclick={() => onInstall(tool.id)}
-        disabled={busy} title="Install this tool with npm">
-        {busy ? "Installing…" : "Install"}
-      </button>
-    {/if}
-    <button class="btn-primary sm" type="button" onclick={() => onApply(tool.id)}
+  {#snippet applyButton()}
+    <button class="btn-primary sm soft" type="button" onclick={() => onApply(tool.id)}
       disabled={!canApply}
       title={!tool.installed ? "Tool is not installed" : !hasSavedProfile ? "Save a profile first" : undefined}>
       Apply
     </button>
-    <button class="btn-ghost sm" type="button" onclick={() => onRestore(tool.id)}
-      disabled={!canRestore}
-      title={!tool.installed ? "Tool is not installed" : !canRestore ? "Nothing to restore" : undefined}>
-      Restore default
-    </button>
-    {#if tool.custom}
-      <button class="btn-ghost sm danger" type="button" onclick={() => onRemove(tool.id)}
-        disabled={busy} title="Remove this custom provider from MintSwitch">
-        {busy ? "Working…" : "Remove provider"}
-      </button>
-    {:else if tool.installed}
-      <button class="btn-ghost sm danger" type="button" onclick={() => onUninstall(tool.id)}
-        disabled={busy} title="Uninstall this tool with npm">
-        {busy ? "Working…" : "Uninstall"}
+  {/snippet}
+
+  {#if hasModelRow}
+    <div class="tool-row">
+      <select class="tool-model-select" id={`model-${tool.id}`}
+        aria-label="Model"
+        value={selectedModel}
+        onchange={(e) => onModelChange(tool.id, e.currentTarget.value)}>
+        <option value="">Use profile default</option>
+        {#each models as m (m)}
+          <option value={m}>{modelNames[m] || m}</option>
+        {/each}
+      </select>
+      {@render applyButton()}
+    </div>
+  {/if}
+
+  <div class="tool-actions">
+    {#if !tool.installed && tool.installable}
+      <button class="btn-primary sm soft" type="button" onclick={() => onInstall(tool.id)}
+        disabled={busy} title="Install this tool with npm">
+        {busy ? "Installing…" : "Install"}
       </button>
     {/if}
-    {#if showMcp}
-      <label class={`mcp-inject ${mcpBusy ? "is-busy" : ""}`} title={mcpTitle}>
-        <input class="mcp-inject-input" type="checkbox"
-          checked={mcpChecked} disabled={mcpBusy}
-          onchange={(e) => onMcpToggle(tool.id, e.currentTarget.checked)} />
-        <span class="mcp-inject-label">{mcpBusy ? "Working…" : "Context Engine"}</span>
-        {#if mcpExternal}
-          <span class="mcp-inject-external">(external)</span>
-        {/if}
-      </label>
+    {#if !hasModelRow}
+      {@render applyButton()}
     {/if}
+    <div class="actions-row secondary">
+      <button class="btn-ghost sm quiet" type="button" onclick={() => onRestore(tool.id)}
+        disabled={!canRestore}
+        title={!tool.installed ? "Tool is not installed" : !canRestore ? "Nothing to restore" : undefined}>
+        Restore default
+      </button>
+      {#if tool.installed && tool.installable}
+        <button class="btn-ghost sm quiet danger" type="button" onclick={() => onUninstall(tool.id)}
+          disabled={busy} title="Uninstall this tool with npm">
+          {busy ? "Working…" : "Uninstall"}
+        </button>
+      {/if}
+    </div>
   </div>
 </article>
 
 <style>
-  .tool { display: flex; flex-direction: column; gap: 0.6rem; }
+  /* Nested card on the tools panel ("My subscription" language): hairline
+     border does the separation, radius one step below the panel's 12px, and
+     no drop shadow — nested cards sit flat on the panel surface. */
+  .tool {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border-radius: var(--radius-sm);
+    box-shadow: none;
+  }
   .tool-head {
     display: flex;
     align-items: flex-start;
@@ -210,34 +187,51 @@
     flex-direction: column;
     gap: 0.1rem;
   }
+  /* Titles wrap only at spaces (never mid-word — no overflow-wrap:anywhere),
+     may run to two lines, and are never ellipsised. */
   .tool-name {
     margin: 0;
     font-size: 1.02rem;
     font-weight: 700;
     color: var(--text);
     line-height: 1.25;
-    overflow-wrap: anywhere;
   }
   .tool-subtitle {
     margin: 0;
     font-size: 0.78rem;
     color: var(--muted);
     line-height: 1.3;
-    overflow-wrap: anywhere;
+  }
+  /* Hairline separating the header from the card body (subscription-card
+     section divider). */
+  .tool-divider {
+    flex: 0 0 auto;
+    height: 1px;
+    background: var(--border);
+  }
+  /* Body row holding the model select (no visible label — the select carries
+     aria-label="Model" for accessibility) plus the inline Apply button pinned
+     to its right at fit-content width — one row instead of two. */
+  .tool-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .tool-row .btn-primary {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   /* Custom-styled to match .field-input: native chevron removed (appearance:
      none) and replaced with a single inline-SVG chevron whose stroke tracks
      --muted per theme. padding-right clears the chevron so long model names
-     never collide with it. Content-sized so it sits inline with the action
-     buttons rather than claiming a full-width row; a min-width keeps short
-     names like "opus4.8" from looking empty and it wraps to its own line when
-     the actions row runs out of space. */
+     never collide with it. Fills the full card width (min-width: 0 so it
+     shrinks instead of forcing a wrap). */
   .tool-model-select {
-    width: auto;
-    min-width: 7rem;
-    max-width: 12rem;
-    padding: 0.36rem 1.8rem 0.36rem 0.7rem; /* matches .btn-*.sm vertical box; right pad clears chevron */
-    font-size: 0.84rem; /* matches .btn-*.sm */
+    flex: 1 1 auto;
+    min-width: 0;
+    height: var(--control-h-sm); /* exact height parity with .btn-*.sm */
+    padding: 0 1.8rem 0 0.7rem;  /* right pad clears the chevron */
+    font-size: var(--fs-sm); /* matches .btn-*.sm */
     line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
@@ -248,8 +242,8 @@
     background-repeat: no-repeat;
     background-position: right 0.6rem center;
     background-size: 12px 8px;
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
     outline: none;
     cursor: pointer;
     appearance: none;
@@ -259,91 +253,115 @@
   :global([data-theme="dark"]) .tool-model-select {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%2398989d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
-  .tool-model-select:hover { border-color: var(--muted); }
+  .tool-model-select:hover { border-color: var(--border-strong); }
   .tool-model-select:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
-  .badge.install { flex: 0 0 auto; align-self: flex-start; }
-  .status { align-self: flex-start; }
-  .paths {
+  /* Compact status meta line pinned to the header's right edge: tone-coloured
+     dot + short label, with the full sentence in the tooltip. Only the dot
+     carries the tone — the label stays muted so a card holds at most two
+     colour points (icon + dot). */
+  .tool-status {
     margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .paths code {
-    font-size: 0.76rem;
-    color: var(--muted);
-    word-break: break-all;
-  }
-  .paths-label {
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  /* Not-installed: visually dimmed to signal config controls are inert. Apply
-     and Restore are disabled in the markup; the Install button stays usable, so
-     we lift it back to full strength as the card's primary call to action. */
-  .tool.is-uninstalled {
-    opacity: 0.6;
-    filter: saturate(0.7);
-  }
-  .tool.is-uninstalled .tool-name { color: var(--muted); }
-  .tool.is-uninstalled .install-btn { opacity: 1; filter: none; }
-  .tool-actions {
-    display: flex;
-    flex-wrap: wrap;
+    margin-left: auto;
+    align-self: flex-start;
+    flex: 0 0 auto;
+    display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    margin-top: auto;
-    padding-top: 0.4rem;
+    gap: 0.35rem;
+    font-size: var(--fs-micro);
+    font-weight: var(--fw-semibold);
+    color: var(--muted);
+    line-height: 1.3;
   }
-  .install .dot {
+  .tool-status .dot {
+    flex: 0 0 auto;
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: var(--muted);
-    box-shadow: none;
   }
-  .install.on .dot {
-    background: var(--ok);
-    box-shadow: none;
-  }
+  .tool-status.tone-success .dot { background: var(--ok); }
+  .tool-status.tone-warning .dot { background: var(--warn); }
 
-  /* Context Engine inject: a compact labelled checkbox pinned to the trailing
-     edge of the action row (margin-left:auto pushes it past Apply/Restore/
-     Uninstall). accent-color keeps it on-brand; the global :focus-visible ring
-     covers keyboard focus. */
-  .mcp-inject {
-    display: inline-flex;
+  /* Not-installed: an intentional recessed treatment (inset surface + muted
+     title) that reads as "inactive" while keeping all text at readable
+     contrast — no whole-card opacity that would sink text below contrast. The
+     Install button uses the same soft accent tint as Apply, keeping the main
+     screen at exactly two solid-accent blocks. */
+  .tool.is-uninstalled { background: var(--surface-2); }
+  .tool.is-uninstalled .tool-name { color: var(--muted); }
+
+  /* Action block pinned to the card foot: full-width soft primary button(s)
+     stacked vertically, then the quiet secondary row (Restore left,
+     destructive right). */
+  .tool-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: auto;
+  }
+  .tool-actions > .btn-primary { width: 100%; }
+  .actions-row {
+    display: flex;
     align-items: center;
     gap: 0.4rem;
+  }
+  .actions-row .btn-ghost {
     flex: 0 0 auto;
-    margin-left: auto;
-    cursor: pointer;
-    user-select: none;
-    font-size: 0.84rem;
-    font-weight: 600;
-    color: var(--text);
     white-space: nowrap;
   }
-  .mcp-inject.is-busy { cursor: default; color: var(--muted); }
-  .mcp-inject-input {
-    width: 1rem;
-    height: 1rem;
-    margin: 0;
-    flex: 0 0 auto;
-    accent-color: var(--accent);
-    cursor: inherit;
+  .actions-row.secondary { justify-content: space-between; }
+  /* Destructive (Uninstall) stays pinned to the row's end even when Restore is
+     absent. */
+  .actions-row.secondary .danger { margin-left: auto; }
+  /* Per-card Apply is a soft accent tint (not solid) so solid accent doesn't
+     repeat across the grid. Falls back to color-mix while the --accent-soft
+     tokens land in style.css. */
+  .tool-row .btn-primary.soft,
+  .tool-actions .btn-primary.soft {
+    color: var(--accent-soft-text, var(--accent));
+    background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, var(--surface)));
+    box-shadow: none;
   }
-  .mcp-inject-input:disabled { cursor: default; }
-  .mcp-inject-label { line-height: 1; }
-  .mcp-inject-external {
-    line-height: 1;
-    font-weight: 500;
+  .tool-row .btn-primary.soft:hover:not(:disabled),
+  .tool-actions .btn-primary.soft:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 20%, var(--surface));
+    filter: none;
+    box-shadow: none;
+  }
+  .tool-row .btn-primary.soft:active:not(:disabled),
+  .tool-actions .btn-primary.soft:active:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 26%, var(--surface));
+    filter: none;
+  }
+  /* Secondary row is text-quiet: no fill, no border, muted text — but keeps a
+     ≥26px hit area. Slight negative margins optically align the labels with
+     the card edges. Uninstall only turns red on hover (intent). */
+  .tool-actions .btn-ghost.quiet {
+    min-height: 26px;
+    padding: 0 0.5rem;
+    background: transparent;
+    border-color: transparent;
     color: var(--muted);
   }
+  .actions-row.secondary .btn-ghost.quiet:first-child { margin-left: -0.5rem; }
+  .actions-row.secondary .btn-ghost.quiet.danger { margin-right: -0.5rem; }
+  .tool-actions .btn-ghost.quiet:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--surface-2);
+    border-color: transparent;
+  }
+  .tool-actions .btn-ghost.quiet.danger:hover:not(:disabled) {
+    color: var(--danger-strong);
+    background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+    border-color: transparent;
+    filter: none;
+  }
+  /* Disabled controls must stay readable: override the global 0.4 opacity;
+     quiet buttons stay borderless even when disabled. */
+  .tool-row .btn-primary:disabled,
+  .tool-actions .btn-primary:disabled,
+  .tool-actions .btn-ghost:disabled {
+    opacity: 0.55;
+  }
+  .tool-actions .btn-ghost.quiet:disabled { border-color: transparent; }
 </style>

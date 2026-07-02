@@ -129,8 +129,10 @@ body {
     -webkit-user-select: none;
     user-select: none;
     --wails-draggable: drag;
-    padding: max(var(--s-3), env(safe-area-inset-top)) max(var(--s-3), env(safe-area-inset-right))
-             max(var(--s-3), env(safe-area-inset-bottom)) max(var(--s-3), env(safe-area-inset-left));
+    /* Full-bleed chrome (feedback #21): the white titlebar + topbar zone runs
+       flush to the window edges like Multilogin's, so the body carries no
+       frame — .layout supplies its own side/bottom margins instead. */
+    padding: 0;
 }
 
 #app, #root { display: contents; }
@@ -373,24 +375,6 @@ body {
     border-color: color-mix(in srgb, var(--info) 22%, var(--border));
 }
 .badge.tone-neutral { color: var(--muted); }
-
-/* ----- Bulk results -------------------------------------------------------- */
-.results {
-    list-style: none;
-    margin: 0 0 var(--s-2);
-    padding: 0.6rem 0.8rem;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-}
-.result { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.85rem; }
-.result-mark { color: var(--danger); font-weight: 800; }
-.result.ok .result-mark { color: var(--ok); }
-.result-id { font-weight: 700; color: var(--text); min-width: 7rem; }
-.result-msg { color: var(--muted); word-break: break-word; }
 
 /* ----- Toast --------------------------------------------------------------- */
 .toast {

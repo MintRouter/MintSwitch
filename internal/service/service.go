@@ -19,47 +19,41 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
-	"mintswitch/internal/adapters/antigravity"
 	"mintswitch/internal/adapters/claudecode"
 	"mintswitch/internal/adapters/codex"
-	"mintswitch/internal/adapters/custom"
+	"mintswitch/internal/adapters/droid"
+	"mintswitch/internal/adapters/kilo"
 	"mintswitch/internal/adapters/opencode"
+	"mintswitch/internal/adapters/zed"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
-	mcpantigravity "mintswitch/internal/injectors/antigravity"
 	mcpclaudecode "mintswitch/internal/injectors/claudecode"
 	mcpcodex "mintswitch/internal/injectors/codex"
+	mcpdroid "mintswitch/internal/injectors/droid"
+	mcpkilo "mintswitch/internal/injectors/kilo"
 	mcpopencode "mintswitch/internal/injectors/opencode"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/paths"
 	"mintswitch/internal/settings"
 )
 
-// builtinIDs is the set of reserved built-in tool IDs. A custom tool may not
-// claim any of these.
-var builtinIDs = map[string]bool{
-	"claude-code": true,
-	"codex":       true,
-	"opencode":    true,
-	"antigravity": true,
-}
-
 // Service is the backend façade bound into the Wails application.
 type Service struct {
 	reg   *core.Registry
 	store *settings.Store
 	inst  *installer.Installer
-	// r and e are retained so custom tools added at runtime can construct a
-	// generic adapter. They are nil for the test seams that inject a pre-built
-	// registry; AddCustomTool requires them.
-	r *paths.Resolver
-	e *backup.Engine
+	// mu serializes every operation that mutates state — the settings file
+	// (save profile, per-tool models, MCP toggles/key) and the managed tool
+	// config files (apply/restore/inject) — so concurrent UI calls cannot
+	// interleave their load-modify-save cycles. Read-only methods do not take
+	// it, so long-running mutations never block the UI's status polling.
+	mu sync.Mutex
 	// mcp holds the registered MCP injectors (separate from the endpoint tool
 	// registry) in registration order.
 	mcp []core.MCPInjector
@@ -77,22 +71,20 @@ type ToolView struct {
 	Status      string   `json:"status"`
 	Detail      string   `json:"detail"`
 	ConfigPaths []string `json:"config_paths"`
-	// Custom is true for user-defined tools managed by the generic JSON-template
-	// adapter, false for the built-ins. The UI hides Install/Uninstall for these
-	// and offers a Remove action instead.
-	Custom bool `json:"custom"`
 	// Models is the active profile's selectable model list (with backward-compat
 	// seeding from the selected Model), used to populate the per-tool dropdown.
 	// It is empty when no profile is saved.
 	Models []string `json:"models"`
+	// ModelNames maps a member of Models to its optional display name, used only
+	// for dropdown labels. Missing entries fall back to the model ID.
+	ModelNames map[string]string `json:"model_names"`
 	// SelectedModel is the effective model that has been (or would be) applied to
 	// this tool: the per-tool override when set, otherwise the profile default.
 	// It is empty when no profile is saved.
 	SelectedModel string `json:"selected_model"`
 	// Installable is true when the tool has a whitelisted npm package the
 	// installer can install/uninstall. It is false for tools distributed only as
-	// a standalone binary (e.g. antigravity) and for custom tools, so the UI can
-	// hide the Install action for those.
+	// a standalone binary, so the UI can hide the Install action for those.
 	Installable bool `json:"installable"`
 }
 
@@ -107,12 +99,15 @@ type ToolOpResult struct {
 // ProfileView is the non-secret view of the active profile returned to the
 // frontend. It never carries the API key; HasKey reports whether one is stored.
 type ProfileView struct {
-	Label          string   `json:"label"`
-	BaseURL        string   `json:"base_url"`
-	Models         []string `json:"models"`
-	Model          string   `json:"model"`
-	SmallFastModel string   `json:"small_fast_model"`
-	HasKey         bool     `json:"has_key"`
+	Label   string   `json:"label"`
+	BaseURL string   `json:"base_url"`
+	Models  []string `json:"models"`
+	// ModelNames maps a member of Models to its optional display name, used only
+	// for UI labels. Missing entries fall back to the model ID.
+	ModelNames     map[string]string `json:"model_names"`
+	Model          string            `json:"model"`
+	SmallFastModel string            `json:"small_fast_model"`
+	HasKey         bool              `json:"has_key"`
 }
 
 // InstallResult is the structured outcome of an Install/Uninstall operation,
@@ -128,7 +123,7 @@ type InstallResult struct {
 }
 
 // New builds a Service backed by the real environment: a default
-// paths.Resolver, a backup.Engine under the user's data dir, and the four
+// paths.Resolver, a backup.Engine under the user's data dir, and the
 // built-in tool adapters. It returns an error only if the home/data directories
 // cannot be resolved.
 func New() (*Service, error) {
@@ -140,33 +135,29 @@ func New() (*Service, error) {
 }
 
 // NewWithDeps builds a Service from an injected Resolver and backup Engine,
-// registering the four built-in adapters. Tests can point r.Home at a temp dir.
+// registering the built-in adapters. Tests can point r.Home at a temp dir.
 func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg := core.NewRegistry()
 	reg.Register(claudecode.New(r, e))
 	reg.Register(codex.New(r, e))
 	reg.Register(opencode.New(r, e))
-	reg.Register(antigravity.New(r, e))
+	reg.Register(droid.New(r, e))
+	reg.Register(zed.New(r, e))
+	reg.Register(kilo.New(r, e))
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
 	store := settings.NewStore(r.SettingsPath())
 	s := NewWithInstaller(reg, store, inst)
-	s.r = r
-	s.e = e
 	// Register the MCP injectors. This is a distinct registry from the endpoint
 	// tool adapters above: MCP injection is independent of the active profile.
+	// Zed deliberately has NO injector: its context_servers settings schema is
+	// not yet verified, and Zed forbids writing secrets (the API key) into
+	// settings.json, so there is no safe place to inject the MCP entry.
 	s.mcp = []core.MCPInjector{
 		mcpclaudecode.New(r, e),
 		mcpopencode.New(r, e),
 		mcpcodex.New(r, e),
-		mcpantigravity.New(r, e),
-	}
-	// Register user-defined custom tools after the built-ins, in saved order.
-	// A load failure here is non-fatal: the built-ins still work and the user
-	// can re-add custom tools; it must not prevent the app from starting.
-	if st, err := store.Load(); err == nil {
-		for _, def := range st.CustomTools {
-			reg.Register(custom.New(def, r, e))
-		}
+		mcpdroid.New(r, e),
+		mcpkilo.New(r, e),
 	}
 	return s
 }
@@ -229,7 +220,6 @@ func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
 	if len(models) == 0 && strings.TrimSpace(p.Model) != "" {
 		models = []string{p.Model}
 	}
-	_, isCustom := a.(*custom.Adapter)
 	_, installable := installer.Spec(a.ID())
 	return ToolView{
 		ID:            a.ID(),
@@ -238,8 +228,8 @@ func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
 		Status:        status.String(),
 		Detail:        detail,
 		ConfigPaths:   a.ConfigPaths(),
-		Custom:        isCustom,
 		Models:        models,
+		ModelNames:    p.ModelNames,
 		SelectedModel: selectedModel,
 		Installable:   installable,
 	}
@@ -266,6 +256,7 @@ func (s *Service) GetProfile() (ProfileView, error) {
 		Label:          p.Label,
 		BaseURL:        p.BaseURL,
 		Models:         models,
+		ModelNames:     p.ModelNames,
 		Model:          p.Model,
 		SmallFastModel: p.SmallFastModel,
 		HasKey:         strings.TrimSpace(p.APIKey) != "",
@@ -277,6 +268,8 @@ func (s *Service) GetProfile() (ProfileView, error) {
 // form without re-sending the secret; the merged profile is then validated via
 // [core.Profile.Validate] and an invalid profile is rejected with an error.
 func (s *Service) SaveProfile(p core.Profile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	st, err := s.store.Load()
 	if err != nil {
 		return err
@@ -285,6 +278,7 @@ func (s *Service) SaveProfile(p core.Profile) error {
 	p.Model = strings.TrimSpace(p.Model)
 	p.SmallFastModel = strings.TrimSpace(p.SmallFastModel)
 	p.Models = normalizeModels(p.Models, p.Model)
+	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
 	if strings.TrimSpace(p.APIKey) == "" && st.ActiveProfile != nil {
 		p.APIKey = st.ActiveProfile.APIKey
 	}
@@ -314,6 +308,8 @@ func (s *Service) SaveProfile(p core.Profile) error {
 // clear error is returned. The toolID must be a registered tool. The selection
 // is persisted via the settings store.
 func (s *Service) SetToolModel(toolID, model string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.reg.Get(toolID); !ok {
 		return fmt.Errorf("service: unknown tool %q", toolID)
 	}
@@ -364,6 +360,32 @@ func normalizeModels(models []string, selected string) []string {
 	}
 	if selected != "" && !seen[selected] {
 		out = append([]string{selected}, out...)
+	}
+	return out
+}
+
+// normalizeModelNames trims display names and keeps only entries whose (trimmed)
+// model ID is a member of models and whose name is non-empty, so stale or blank
+// aliases never persist. It returns nil when nothing remains.
+func normalizeModelNames(names map[string]string, models []string) map[string]string {
+	if len(names) == 0 {
+		return nil
+	}
+	member := make(map[string]bool, len(models))
+	for _, m := range models {
+		member[m] = true
+	}
+	out := make(map[string]string, len(names))
+	for id, name := range names {
+		id = strings.TrimSpace(id)
+		name = strings.TrimSpace(name)
+		if name == "" || !member[id] {
+			continue
+		}
+		out[id] = name
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -487,6 +509,8 @@ func joinMessage(base, note string) string {
 // toggle is enabled; an MCP failure never aborts Apply (it is folded into the
 // result message).
 func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	a, ok := s.reg.Get(toolID)
 	if !ok {
 		return core.ApplyResult{}, fmt.Errorf("service: unknown tool %q", toolID)
@@ -511,6 +535,8 @@ func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 // the Context Engine MCP server for capable tools; an MCP failure never aborts
 // Restore (it is folded into the result message).
 func (s *Service) RestoreOne(toolID string) (core.RestoreResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	a, ok := s.reg.Get(toolID)
 	if !ok {
 		return core.RestoreResult{}, fmt.Errorf("service: unknown tool %q", toolID)
@@ -530,6 +556,8 @@ func (s *Service) RestoreOne(toolID string) (core.RestoreResult, error) {
 // (returning an error, no partial results) when no valid profile is saved.
 // Individual adapter failures are captured per tool and do not abort the run.
 func (s *Service) ApplyAll() ([]ToolOpResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, err := s.activeProfile(); err != nil {
 		return nil, err
 	}
@@ -613,6 +641,8 @@ func (s *Service) installResult(toolID, action string, args []string, out string
 // per-tool outcome. It needs no profile; individual adapter failures are
 // captured per tool and do not abort the run.
 func (s *Service) RestoreAll() ([]ToolOpResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	adapters := s.reg.All()
 	out := make([]ToolOpResult, 0, len(adapters))
 	for _, a := range adapters {
@@ -628,122 +658,4 @@ func (s *Service) RestoreAll() ([]ToolOpResult, error) {
 	return out, nil
 }
 
-// AddCustomTool validates, persists and registers a new user-defined tool. The
-// ID is derived as a slug from name and must be unique and not collide with a
-// built-in. The template must parse as a JSON object; name and configPath must
-// be non-empty. binaryName is optional. On success the new tool is registered
-// and its [ToolView] (Custom=true) is returned. The template/api key are never
-// logged. It requires a Service built with NewWithDeps (real resolver/engine).
-func (s *Service) AddCustomTool(name, configPath, binaryName, template string) (ToolView, error) {
-	if s.r == nil || s.e == nil {
-		return ToolView{}, errors.New("service: custom tools are unavailable in this configuration")
-	}
-	name = strings.TrimSpace(name)
-	configPath = strings.TrimSpace(configPath)
-	binaryName = strings.TrimSpace(binaryName)
-	if name == "" {
-		return ToolView{}, errors.New("service: custom tool name is required")
-	}
-	if configPath == "" {
-		return ToolView{}, errors.New("service: custom tool config path is required")
-	}
-	if err := validateTemplate(template); err != nil {
-		return ToolView{}, err
-	}
-	id := slugID(name)
-	if id == "" {
-		return ToolView{}, errors.New("service: custom tool name must contain at least one letter or digit")
-	}
-	if builtinIDs[id] {
-		return ToolView{}, fmt.Errorf("service: %q collides with a built-in tool id; choose a different name", id)
-	}
-	st, err := s.store.Load()
-	if err != nil {
-		return ToolView{}, err
-	}
-	for _, def := range st.CustomTools {
-		if def.ID == id {
-			return ToolView{}, fmt.Errorf("service: a custom tool named %q already exists", name)
-		}
-	}
-	def := core.CustomToolDef{
-		ID:         id,
-		Name:       name,
-		ConfigPath: configPath,
-		BinaryName: binaryName,
-		Template:   template,
-	}
-	st.CustomTools = append(st.CustomTools, def)
-	if err := s.store.Save(st); err != nil {
-		return ToolView{}, err
-	}
-	a := custom.New(def, s.r, s.e)
-	s.reg.Register(a)
-	var p core.Profile
-	if st.ActiveProfile != nil {
-		p = *st.ActiveProfile
-	}
-	return s.viewFor(a, p), nil
-}
 
-// RemoveCustomTool detaches and forgets a previously added custom tool. Built-in
-// tools cannot be removed. An unknown id is an error.
-func (s *Service) RemoveCustomTool(id string) error {
-	if builtinIDs[id] {
-		return fmt.Errorf("service: %q is a built-in tool and cannot be removed", id)
-	}
-	st, err := s.store.Load()
-	if err != nil {
-		return err
-	}
-	idx := -1
-	for i, def := range st.CustomTools {
-		if def.ID == id {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		return fmt.Errorf("service: unknown custom tool %q", id)
-	}
-	st.CustomTools = append(st.CustomTools[:idx], st.CustomTools[idx+1:]...)
-	if err := s.store.Save(st); err != nil {
-		return err
-	}
-	s.reg.Unregister(id)
-	return nil
-}
-
-// validateTemplate reports whether t parses as a JSON object (the only valid
-// custom-tool template root).
-func validateTemplate(t string) error {
-	var root any
-	if err := json.Unmarshal([]byte(t), &root); err != nil {
-		return fmt.Errorf("service: custom tool template is not valid JSON: %w", err)
-	}
-	if _, ok := root.(map[string]any); !ok {
-		return errors.New("service: custom tool template must be a JSON object")
-	}
-	return nil
-}
-
-// slugID derives a stable, lower-case, hyphen-separated identifier from name.
-// Runs of non-alphanumeric characters collapse to a single hyphen and leading/
-// trailing hyphens are trimmed.
-func slugID(name string) string {
-	var b strings.Builder
-	prevDash := false
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			prevDash = false
-		default:
-			if !prevDash && b.Len() > 0 {
-				b.WriteByte('-')
-				prevDash = true
-			}
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}

@@ -55,8 +55,8 @@ const npmPackages: Record<string, { pkg: string; installFlags?: string[] }> = {
   "claude-code": { pkg: "@anthropic-ai/claude-code" },
   codex: { pkg: "@openai/codex" },
   opencode: { pkg: "opencode-ai" },
-  "factory-droid": { pkg: "droid" },
-  pi: { pkg: "@earendil-works/pi-coding-agent", installFlags: ["--ignore-scripts"] },
+  droid: { pkg: "droid" },
+  kilo: { pkg: "@kilocode/cli" },
 };
 
 /**
@@ -73,20 +73,20 @@ export function npmCommand(action: "install" | "uninstall", toolID: string): str
 
 /**
  * builtinLogoIds is the set of tool IDs that ship a bundled app-icon SVG under
- * /logos/<id>.svg. User-defined custom tools have no preset icon, so they are
- * intentionally absent here and fall back to the neutral monogram tile.
+ * /logos/<id>.svg.
  */
 export const builtinLogoIds = new Set<string>([
   "claude-code",
   "codex",
   "opencode",
-  "antigravity",
+  "droid",
+  "zed",
+  "kilo",
 ]);
 
 /**
  * toolLogoSrc returns the bundled logo path for a built-in tool, or null when
- * the tool has no preset icon (custom providers) so the card renders a monogram
- * fallback instead.
+ * the tool has no preset icon so the card renders a monogram fallback instead.
  */
 export function toolLogoSrc(id: string): string | null {
   return builtinLogoIds.has(id) ? `/logos/${id}.svg` : null;

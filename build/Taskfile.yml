@@ -230,6 +230,23 @@ tasks:
     cmds:
       - bun run dev --port {{.VITE_PORT}} --strictPort
 
+  dev:frontend:wait:
+    summary: Polls the frontend dev server until it accepts HTTP connections (used by `wails3 dev` so the app doesn't start before vite is ready)
+    cmds:
+      - |
+        URL="${FRONTEND_DEVSERVER_URL:-http://localhost:{{.VITE_PORT}}}"
+        echo "Waiting for frontend dev server at ${URL} (timeout 60s)..."
+        i=0
+        until curl -skf --max-time 2 -o /dev/null "${URL}"; do
+          i=$((i+1))
+          if [ "$i" -ge 120 ]; then
+            echo "Timed out waiting for frontend dev server at ${URL} after 60s" >&2
+            exit 1
+          fi
+          sleep 0.5
+        done
+        echo "Frontend dev server is up at ${URL}"
+
   update:build-assets:
     summary: Updates the build assets
     dir: build

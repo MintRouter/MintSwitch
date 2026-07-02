@@ -3,7 +3,6 @@
   import { Service } from "../bindings/mintswitch/internal/service";
   import type {
     ToolView,
-    ToolOpResult,
     ProfileView,
     InstallResult,
     MCPState,
@@ -13,10 +12,10 @@
   import ProfileForm from "./lib/ProfileForm.svelte";
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
-  import AddProviderForm from "./lib/AddProviderForm.svelte";
+  import PromoBanner from "./lib/PromoBanner.svelte";
 
   const emptyProfile: ProfileView = {
-    label: "", base_url: "", models: [], model: "", small_fast_model: "", has_key: false,
+    label: "", base_url: "", models: [], model_names: {}, model: "", small_fast_model: "", has_key: false,
   };
 
   let tools = $state<ToolView[]>([]);
@@ -27,21 +26,14 @@
   let refreshing = $state(false);
   let busyIds = $state<string[]>([]);
   let mcpState = $state<MCPState | null>(null);
-  let opResults = $state<ToolOpResult[] | null>(null);
   let installLog = $state<InstallResult | null>(null);
-  let toast = $state<{ msg: string; kind: "success" | "error" } | null>(null);
+  let toast = $state<{ msg: string } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout>;
 
   let confirm = $state<{
     open: boolean; title: string; message: string; confirmLabel: string;
     danger: boolean; busy: boolean; action: () => Promise<void>;
   }>({ open: false, title: "", message: "", confirmLabel: "Confirm", danger: false, busy: false, action: async () => {} });
-
-  // Add-custom-provider modal state. backendError holds the (secret-free) error
-  // returned by AddCustomTool so the form can surface it without closing.
-  let addOpen = $state(false);
-  let addBusy = $state(false);
-  let addError = $state("");
 
   // Theme is applied to <html data-theme> by an inline head script before first
   // paint (no flash). Mirror that into reactive state so the toggle stays in sync.
@@ -67,17 +59,14 @@
     !!(profile.base_url && profile.model && profile.has_key),
   );
 
-  // MCP state lives here (App is the single source) so the left panel and the
-  // per-tool card controls stay in sync from one GetMCPState() fetch. The map is
-  // keyed by tool id; a tool is MCP-capable only when it appears in it.
-  const mcpToolMap = $derived(
-    new Map((mcpState?.tools ?? []).map((t) => [t.id, t])),
-  );
+  // MCP state lives here (App is the single source) so the left panel's master
+  // toggle stays in sync from one GetMCPState() fetch. Per-tool Context Engine
+  // wiring is handled by the backend via Apply/Restore, not in the UI.
   const mcpEnabled = $derived(!!mcpState?.enabled);
   const hasMcpKey = $derived(!!mcpState?.has_key);
 
-  function flash(msg: string, kind: "success" | "error"): void {
-    toast = { msg, kind };
+  function flash(msg: string): void {
+    toast = { msg };
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (toast = null), 5000);
   }
@@ -115,7 +104,7 @@
     try {
       await refresh();
     } catch (e) {
-      if (!silent) flash(errMsg(e), "error");
+      if (!silent) flash(errMsg(e));
     } finally {
       refreshing = false;
     }
@@ -135,11 +124,27 @@
     try {
       await Service.SaveProfile(p);
       await refresh();
-      flash("Profile saved.", "success");
       return true;
     } catch (e) {
-      flash(errMsg(e), "error");
+      flash(errMsg(e));
       return false;
+    } finally {
+      saving = false;
+    }
+  }
+
+  // Auto-save from the Models dialog (add/remove/default change). Unlike
+  // saveProfile it returns the error message instead of flashing a toast so
+  // the dialog can show the failure inline; it still refreshes so the tool
+  // cards' model dropdowns pick up the change immediately.
+  async function saveProfileQuiet(p: Profile): Promise<string | null> {
+    saving = true;
+    try {
+      await Service.SaveProfile(p);
+      await refresh();
+      return null;
+    } catch (e) {
+      return errMsg(e);
     } finally {
       saving = false;
     }
@@ -163,12 +168,23 @@
     }
   }
 
+  // Safety valve: if an operation never settles, unlock the UI after 10 minutes
+  // and tell the user. The underlying backend call may still complete later.
+  const BUSY_TIMEOUT_MS = 10 * 60 * 1000;
+
   async function withBusy(id: string, fn: () => Promise<void>): Promise<void> {
     busyIds = [...busyIds, id];
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      busyIds = busyIds.filter((x) => x !== id);
+      flash("Operation timed out. Please try again.");
+    }, BUSY_TIMEOUT_MS);
     try {
       await fn();
     } finally {
-      busyIds = busyIds.filter((x) => x !== id);
+      clearTimeout(timer);
+      if (!timedOut) busyIds = busyIds.filter((x) => x !== id);
     }
   }
 
@@ -177,33 +193,10 @@
   async function toggleMcpEnabled(enabled: boolean): Promise<void> {
     try {
       await Service.SetMCPEnabled(enabled);
-      flash(enabled ? "Context Engine enabled." : "Context Engine disabled.", "success");
     } catch (e) {
-      flash(errMsg(e), "error");
+      flash(errMsg(e));
     }
     await refresh();
-  }
-
-  // Per-tool inject control (right, inside each ToolCard). Checked injects the
-  // MintRouter MCP server into that tool; unchecked removes it. Shares busyIds
-  // so the card shows a per-row busy state, then refresh re-syncs status.
-  function onMcpToggle(id: string, checked: boolean): void {
-    const name = tools.find((t) => t.id === id)?.name ?? id;
-    void withBusy(id, async () => {
-      try {
-        const r = checked ? await Service.InjectMCPOne(id) : await Service.RemoveMCPOne(id);
-        flash(
-          r.message ||
-            (checked
-              ? `Enabled Context Engine for ${name}.`
-              : `Disabled Context Engine for ${name}.`),
-          "success",
-        );
-      } catch (e) {
-        flash(errMsg(e), "error");
-      }
-      await refresh();
-    });
   }
 
   function applyOne(id: string): void {
@@ -214,10 +207,9 @@
       confirmLabel: "Apply",
       action: () => withBusy(id, async () => {
         try {
-          const r = await Service.ApplyOne(id);
-          flash(r.message || `Applied to ${name}.`, "success");
+          await Service.ApplyOne(id);
         } catch (e) {
-          flash(errMsg(e), "error");
+          flash(errMsg(e));
         }
         await refresh();
       }),
@@ -232,10 +224,9 @@
       confirmLabel: "Restore", danger: true,
       action: () => withBusy(id, async () => {
         try {
-          const r = await Service.RestoreOne(id);
-          flash(r.message || `Restored ${name}.`, "success");
+          await Service.RestoreOne(id);
         } catch (e) {
-          flash(errMsg(e), "error");
+          flash(errMsg(e));
         }
         await refresh();
       }),
@@ -253,9 +244,9 @@
         try {
           const r = await Service.Install(id);
           installLog = r;
-          flash(r.ok ? `Installed ${name}.` : (r.error || `Couldn't install ${name}.`), r.ok ? "success" : "error");
+          if (!r.ok) flash(r.error || `Couldn't install ${name}.`);
         } catch (e) {
-          flash(errMsg(e), "error");
+          flash(errMsg(e));
         }
         await refresh();
       }),
@@ -273,46 +264,12 @@
         try {
           const r = await Service.Uninstall(id);
           installLog = r;
-          flash(r.ok ? `Uninstalled ${name}.` : (r.error || `Couldn't uninstall ${name}.`), r.ok ? "success" : "error");
+          if (!r.ok) flash(r.error || `Couldn't uninstall ${name}.`);
         } catch (e) {
-          flash(errMsg(e), "error");
+          flash(errMsg(e));
         }
         await refresh();
       }),
-    });
-  }
-
-  function applyAll(): void {
-    ask({
-      title: "Apply profile to all tools?",
-      message: "This writes your profile to every installed tool's real config (backups are created first).",
-      confirmLabel: "Apply to all",
-      action: async () => {
-        try {
-          opResults = await Service.ApplyAll();
-          flash("Apply to all finished.", "success");
-        } catch (e) {
-          flash(errMsg(e), "error");
-        }
-        await refresh();
-      },
-    });
-  }
-
-  function restoreAll(): void {
-    ask({
-      title: "Restore all tools to default?",
-      message: "This reverts every tool's config to its pre-apply state from backups.",
-      confirmLabel: "Restore all", danger: true,
-      action: async () => {
-        try {
-          opResults = await Service.RestoreAll();
-          flash("Restore all finished.", "success");
-        } catch (e) {
-          flash(errMsg(e), "error");
-        }
-        await refresh();
-      },
     });
   }
 
@@ -324,99 +281,101 @@
     try {
       await Service.SetToolModel(id, model);
     } catch (e) {
-      flash(errMsg(e), "error");
+      flash(errMsg(e));
     }
     await refresh();
   }
 
-  function openAddProvider(): void {
-    addError = "";
-    addOpen = true;
-  }
-
-  // Add a user-defined provider via the backend, then refresh so the new card
-  // appears. On failure the modal stays open and shows the backend error.
-  async function submitAddProvider(data: {
-    name: string; configPath: string; binaryName: string; template: string;
-  }): Promise<void> {
-    addBusy = true;
-    addError = "";
-    try {
-      await Service.AddCustomTool(data.name, data.configPath, data.binaryName, data.template);
-      addOpen = false;
-      await refresh();
-      flash(`Added provider “${data.name}”.`, "success");
-    } catch (e) {
-      addError = errMsg(e);
-    } finally {
-      addBusy = false;
-    }
-  }
-
-  function removeProvider(id: string): void {
-    const name = tools.find((t) => t.id === id)?.name ?? id;
-    ask({
-      title: `Remove provider ${name}?`,
-      message: "This removes the custom provider from MintSwitch. The config file on disk is left as-is — restore it to default first if you applied it.",
-      confirmLabel: "Remove provider", danger: true,
-      action: () => withBusy(id, async () => {
-        try {
-          await Service.RemoveCustomTool(id);
-          flash(`Removed provider ${name}.`, "success");
-        } catch (e) {
-          flash(errMsg(e), "error");
-        }
-        await refresh();
-      }),
-    });
-  }
 </script>
 
 <svelte:window onfocus={onWindowFocus} />
 <svelte:document onvisibilitychange={onVisibility} />
 
 <div class="app">
+  <div class="titlebar" aria-hidden="true">
+    <span class="titlebar-title">MintSwitch</span>
+  </div>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <svg class="logo-mark" viewBox="0 0 48 48" width="26" height="26" fill="none" aria-hidden="true" focusable="false">
+        <rect width="48" height="48" rx="10" fill="var(--surface)" />
+        <g transform="translate(24 24) scale(0.8) translate(-24 -24)">
+          <g stroke="var(--accent)" stroke-width="3" stroke-linecap="round">
+            <line x1="24" y1="24" x2="31.5" y2="11" />
+            <line x1="24" y1="24" x2="39" y2="24" />
+            <line x1="24" y1="24" x2="31.5" y2="37" />
+            <line x1="24" y1="24" x2="16.5" y2="37" />
+            <line x1="24" y1="24" x2="9" y2="24" />
+            <line x1="24" y1="24" x2="16.5" y2="11" />
+          </g>
+          <circle cx="31.5" cy="11" r="3.5" fill="var(--accent)" />
+          <circle cx="39" cy="24" r="3.5" fill="var(--accent)" />
+          <circle cx="31.5" cy="37" r="3.5" fill="var(--accent)" />
+          <circle cx="16.5" cy="37" r="3.5" fill="var(--accent)" />
+          <circle cx="9" cy="24" r="3.5" fill="var(--accent)" />
+          <circle cx="16.5" cy="11" r="3.5" fill="var(--accent)" />
+          <circle cx="24" cy="24" r="5.5" fill="var(--accent)" />
+        </g>
+      </svg>
+      <span class="wordmark">MintSwitch</span>
+      <span class="topbar-sep" aria-hidden="true"></span>
+      <!-- Icon-only Re-detect (feedback #19, Multilogin-style): the circular
+           two-arrow refresh glyph replaces the label; the icon itself spins
+           while re-detecting. Tooltip + aria-label carry the lost text. -->
+      <button class="btn-ghost sm refresh" type="button" onclick={() => redetect(false)}
+        disabled={refreshing} aria-label="Re-detect tools" title="Re-detect tools">
+        <svg class="refresh-icon" class:spin={refreshing} viewBox="0 0 24 24" width="19" height="19"
+          fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+          stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+          <path d="M21 3v5h-5" />
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+          <path d="M8 16H3v5" />
+        </svg>
+      </button>
+      <span class="sr-only" role="status" aria-live="polite">
+        {refreshing ? "Re-detecting tools" : ""}
+      </span>
+    </div>
+    <!-- Promo banner (user feedback #9/#10/#15/#16 + bulk-button removal):
+         compact two-line navy banner sized to its content + Telegram tile,
+         sitting on the right just before the utility cluster (Multilogin-style);
+         the flexible free space sits between the brand block and the banner. -->
+    <PromoBanner compact />
+    <div class="topbar-cluster">
+      <button
+        class="btn-ghost sm theme-toggle"
+        type="button"
+        onclick={toggleTheme}
+        aria-pressed={theme === "dark"}
+        aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      >
+        {#if theme === "dark"}
+          <svg class="theme-icon" viewBox="0 0 24 24" width="20" height="20" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+          </svg>
+        {:else}
+          <svg class="theme-icon" viewBox="0 0 24 24" width="20" height="20" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true" focusable="false">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+          </svg>
+        {/if}
+      </button>
+    </div>
+  </header>
+
   <div class="layout">
     <section class="col-form" aria-label="Profile">
-      <header class="brand">
-        <h1 class="app-title">MintSwitch</h1>
-      </header>
       <div class="col-scroll">
-        <ProfileForm {profile} {saving} onSave={saveProfile} {mcpEnabled} {hasMcpKey} onToggleEnabled={toggleMcpEnabled} />
+        <ProfileForm {profile} {saving} onSave={saveProfile} onAutoSave={saveProfileQuiet} {mcpEnabled} {hasMcpKey} onToggleEnabled={toggleMcpEnabled} />
       </div>
     </section>
 
     <section class="col-tools" aria-label="Tools">
-      <header class="tools-head">
-        <div class="tools-head-left">
-          <button class="btn-ghost sm refresh" type="button" onclick={() => redetect(false)}
-            disabled={refreshing} aria-label="Re-detect installed tools">
-            <span class="spinner" class:spin={refreshing} aria-hidden="true"></span>
-            {refreshing ? "Detecting…" : "Re-detect"}
-          </button>
-          <span class="sr-only" role="status" aria-live="polite">
-            {refreshing ? "Re-detecting tools" : ""}
-          </span>
-        </div>
-        <div class="global-actions">
-          <button class="btn-ghost sm" type="button" onclick={openAddProvider}>+ Add provider</button>
-          <button class="btn-primary sm" type="button" onclick={applyAll} disabled={!hasSavedProfile}>
-            Apply to all
-          </button>
-          <button class="btn-ghost sm" type="button" onclick={restoreAll}>Restore all</button>
-          <button
-            class="btn-ghost sm theme-toggle"
-            type="button"
-            onclick={toggleTheme}
-            aria-pressed={theme === "dark"}
-            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          >
-            <span class="theme-glyph" aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
-            {theme === "dark" ? "Light" : "Dark"}
-          </button>
-        </div>
-      </header>
-
       {#if loading}
         <div class="state" role="status" aria-live="polite">Loading tools…</div>
       {:else if loadError}
@@ -425,18 +384,6 @@
           <button class="btn-primary sm" type="button" onclick={load}>Retry</button>
         </div>
       {:else}
-        {#if opResults}
-          <ul class="results" aria-label="Last bulk operation results">
-            {#each opResults as r (r.id)}
-              <li class="result" class:ok={r.ok}>
-                <span class="result-mark" aria-hidden="true">{r.ok ? "✓" : "✕"}</span>
-                <span class="result-id">{tools.find((t) => t.id === r.id)?.name ?? r.id}</span>
-                <span class="result-msg">{r.ok ? (r.message || "OK") : (r.error || "Failed")}</span>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-
         {#if installLog}
           <div class="install-log" class:ok={installLog.ok} aria-label="Last install/uninstall result">
             <div class="install-log-head">
@@ -460,11 +407,8 @@
           <div class="tool-grid">
             {#each tools as t (t.id)}
               <ToolCard tool={t} {hasSavedProfile} busy={busyIds.includes(t.id)}
-                {mcpEnabled} {hasMcpKey} mcpCapable={mcpToolMap.has(t.id)}
-                mcpStatus={mcpToolMap.get(t.id)?.status} mcpBusy={busyIds.includes(t.id)}
-                {onMcpToggle}
                 onApply={applyOne} onRestore={restoreOne}
-                onInstall={installOne} onUninstall={uninstallOne} onRemove={removeProvider}
+                onInstall={installOne} onUninstall={uninstallOne}
                 onModelChange={changeToolModel} />
             {/each}
           </div>
@@ -475,8 +419,7 @@
 </div>
 
 {#if toast}
-  <div class={`toast ${toast.kind}`} role={toast.kind === "error" ? "alert" : "status"}
-    aria-live={toast.kind === "error" ? "assertive" : "polite"}>
+  <div class="toast error" role="alert" aria-live="assertive">
     {toast.msg}
   </div>
 {/if}
@@ -485,21 +428,24 @@
   confirmLabel={confirm.confirmLabel} danger={confirm.danger} busy={confirm.busy}
   onConfirm={runConfirm} onCancel={() => (confirm = { ...confirm, open: false })} />
 
-<AddProviderForm open={addOpen} busy={addBusy} backendError={addError}
-  onSubmit={submitAddProvider} onCancel={() => (addOpen = false)} />
-
 <style>
   /* Two columns: Profile (left, inspector) + Tools (right). The shell fills
      100dvh; only the tool list scrolls if it overflows — never the page. */
   .layout {
     flex: 1 1 auto;
     min-height: 0;
+    /* The body is frameless (feedback #21): the panel area carries its own
+       side/bottom margins so the gray window bg frames the white panels. */
+    margin: 0 var(--s-3) var(--s-3);
     display: grid;
     /* Left profile column is a compact inspector — kept noticeably narrower than
        the tools area so the form fields/dropdowns sit at a natural width rather
        than stretching full-bleed. The right column keeps a comfortable 2+ cols. */
     grid-template-columns: minmax(280px, 320px) 1fr;
-    gap: var(--s-4);
+    /* The two white blocks sit almost flush (user feedback #5/#5b): the whole
+       visual seam is the 3px scrollbar-gutter reserved by .col-scroll (stable,
+       so no shift when its scrollbar shows) — grid gap adds nothing on top. */
+    gap: 0;
     align-items: stretch;
   }
   /* Left column: the brand title stays pinned while the profile form scrolls
@@ -519,11 +465,15 @@
     flex-direction: column;
     gap: var(--s-3);
     overflow-y: auto;
-    scrollbar-gutter: stable both-edges;
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+    /* This gutter IS the whole seam between the two white blocks (feedback
+       #5b), so it must stay exactly 3px: don't set the standard
+       scrollbar-width/color here — they'd disable the ::-webkit-scrollbar
+       rules below and widen the reserved gutter to the UA "thin" width
+       (11px). The 3px rail is still draggable and wheel/trackpad scrolling is
+       unaffected; being gutter-reserved, its appearance never shifts layout. */
+    scrollbar-gutter: stable;
   }
-  .col-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .col-scroll::-webkit-scrollbar { width: 3px; height: 3px; }
   .col-scroll::-webkit-scrollbar-track { background: transparent; }
   .col-scroll::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--muted) 55%, transparent);
@@ -532,35 +482,37 @@
   .col-scroll::-webkit-scrollbar-thumb:hover {
     background: color-mix(in srgb, var(--muted) 70%, transparent);
   }
-  .col-tools { display: flex; flex-direction: column; min-height: 0; }
-  /* Only this region scrolls if the cards overflow. The grid is locked to show
-     exactly two rows (a 2×2 default), so a 5th tool never peeks half-visible at
-     the bottom — you scroll down to reveal its whole card. */
+  /* The whole tools column is ONE rounded surface panel (Multilogin content
+     area): tool cards nest inside it. Padding keeps the internal scrollbar of
+     .tool-grid clear of the panel's border and rounded corners. */
+  .col-tools {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  /* Responsive card grid in left→right reading order. Rows split the panel
+     height evenly (feedback #33): 1fr auto-rows + stretch fill the panel to
+     its bottom padding — no dead strip under the last row; cards stay tidy
+     because .tool-actions anchors to each card's bottom (margin-top auto),
+     mirroring the left card's #32 pattern. With many cards the rows floor at
+     their content height and only this region scrolls, as before. */
   .tool-grid {
-    /* Uniform row height so rows are predictable; sized to comfortably hold the
-       tallest built-in card (paths + action buttons) without clipping. */
-    --tool-row-h: 250px;
     flex: 1 1 auto;
     min-height: 0;
-    /* Cap the scroll viewport to 2 rows + 1 gap: the 3rd row (5th tool) stays
-       fully below the fold rather than peeking. Very tall windows leave empty
-       space below the grid — an accepted trade-off for the clean 2×2 default. */
-    max-height: calc(var(--tool-row-h) * 2 + var(--s-2));
     overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    grid-auto-rows: var(--tool-row-h);
-    gap: var(--s-2);
-    align-content: start;
-    /* Snap to row tops so scrolling lands on a whole card, never mid-card. */
-    scroll-snap-type: y proximity;
-    scrollbar-gutter: stable both-edges;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-auto-rows: 1fr;
+    gap: 12px;
+    align-items: stretch;
+    align-content: stretch;
+    scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
-  }
-  .tool-grid :global(.tool) {
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
   }
   .tool-grid::-webkit-scrollbar { width: 8px; height: 8px; }
   .tool-grid::-webkit-scrollbar-track { background: transparent; }
@@ -572,49 +524,172 @@
     background: color-mix(in srgb, var(--muted) 70%, transparent);
   }
   @media (max-width: 860px), (max-height: 600px) {
-    .layout { grid-template-columns: 1fr; min-height: 0; }
+    /* Stacked: no scrollbar gutter sits between sections, so restore the full
+       12px row gap. */
+    .layout { grid-template-columns: 1fr; min-height: 0; gap: 12px; }
     .col-tools { min-height: 0; }
-    /* Stacked: drop the 2-row cap and fixed row height so the whole page scrolls
-       normally and cards size to their content. */
+    /* Stacked: single column so the whole page scrolls normally and cards size
+       to their content (no 1fr stretch — the panel has no fixed height here). */
     .tool-grid {
       overflow: visible;
       flex: none;
       min-height: 0;
       max-height: none;
+      grid-template-columns: 1fr;
       grid-auto-rows: auto;
-      scroll-snap-type: none;
+      align-content: start;
+      align-items: start;
     }
     /* Stacked: let the whole page scroll instead of the column scrolling on its own. */
     .col-scroll { overflow: visible; flex: none; }
   }
 
-  .theme-toggle { flex: 0 0 auto; }
-  .theme-glyph { font-size: 0.95rem; line-height: 1; }
-
-  .refresh { gap: 0.45rem; }
-  .spinner {
-    width: 13px;
-    height: 13px;
-    border-radius: 50%;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    opacity: 0.85;
+  /* Titlebar strip (feedback #21 → #25 FINAL): a WHITE --surface band flush
+     with the window top (traffic lights + centered bold title), exactly
+     like Multilogin's titlebar. Below it the topbar row sits on the GRAY
+     window bg — no hard hairline between them, the surface change itself
+     is the seam. Reserves the frameless macOS traffic-light zone and acts
+     as the window drag handle. */
+  .titlebar {
+    flex: 0 0 auto;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    --wails-draggable: drag;
   }
-  .spinner.spin { animation: spin 0.7s linear infinite; }
+  .titlebar-title {
+    font-size: 15px;
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--tracking-tight);
+    color: var(--text);
+  }
+
+  /* Real app top bar (feedback #21 → #24 FINAL): a quiet strip on the GRAY
+     window bg, exactly like Multilogin's chrome — the white blocks (brand
+     pill, navy banner, Telegram/theme tiles) float on it by contrast; the
+     same gray then reads as a 6px breathing gap before the white panels.
+     Left: the brand pill (logo + wordmark + hairline + Re-detect); right:
+     the compact MintRouter.AI promo + Telegram + theme toggle tiles. */
+  .topbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+    /* Even vertical rhythm (feedback #26 → #16 tightened to half): the gray
+       breathing space ABOVE the row (titlebar → pill/tiles) and BELOW it
+       (row → white panels) is the same 6px. The row itself is exactly the
+       40px pill/banner/tile height — no vertical padding or border to skew
+       the two gaps. */
+    margin: 6px 0;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 0;
+  }
+  /* Brand pill (feedback #24, Multilogin's left pill): logo + wordmark +
+     vertical hairline + icon-only Re-detect live inside one WHITE rounded
+     card (--surface, 12px radius, whisper of card shadow, no border) that
+     floats on the gray chrome, height-matched to the 40px banner/tiles. */
+  .topbar-brand {
+    display: flex;
+    align-items: center;
+    /* Tight logo ↔ wordmark rhythm (feedback #26): 7px, like the crop's
+       logo↔MULTILOGIN spacing; the hairline keeps its wider 14px/side
+       breathing room via its own margins below. */
+    gap: 7px;
+    min-width: 0;
+    height: 40px;
+    padding: 0 12px;
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+  }
+  .logo-mark { flex: 0 0 auto; width: 26px; height: 26px; }
+  .wordmark {
+    font-size: var(--fs-title);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--tracking-tight);
+    color: var(--text);
+  }
+  /* Vertical hairline between the brand block and the Re-detect action
+     (Multilogin-style logo | icons divider): ~x-height of the wordmark, with
+     breathing room on both sides (7px flex gap + 7px margin = 14px/side). */
+  .topbar-sep {
+    flex: 0 0 auto;
+    width: 1px;
+    height: 19px;
+    margin: 0 7px;
+    background: var(--border-strong);
+  }
+
+  /* Quiet icon-only Re-detect (feedback #19, Multilogin icon-button style):
+     a compact 34px square, fully transparent at rest — no border, no fill —
+     only surfacing the soft inset fill on hover (W9-I standard; reads
+     clearly against the white chrome). The glyph uses the full --text ink
+     (not muted) so it reads clearly without its label. The global
+     focus-visible ring is untouched. */
+  .topbar-brand .refresh {
+    flex: 0 0 auto;
+    width: 34px;
+    min-height: 34px;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    color: var(--text);
+  }
+  .topbar-brand .refresh:hover:not(:disabled) {
+    background: var(--surface-2);
+    border-color: transparent;
+  }
+
+  /* Theme toggle (feedback #18 → #24 FINAL): a 40×40 --surface tile matching
+     the Telegram tile — WHITE floating on the gray chrome by pure contrast,
+     border dropped per the Multilogin crop (no visible outline). 20px
+     sun/moon glyph in the --text ink; hover darkens the tile slightly; the
+     global focus ring is untouched. */
+  .topbar-cluster {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .topbar-cluster .btn-ghost.theme-toggle {
+    flex: 0 0 auto;
+    width: 40px;
+    min-height: 40px;
+    padding: 0;
+    background: var(--surface);
+    border-color: transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+  }
+  .topbar-cluster .btn-ghost.theme-toggle:hover:not(:disabled) {
+    filter: brightness(0.96);
+    background: var(--surface);
+    border-color: transparent;
+  }
+  .theme-icon { display: block; flex: 0 0 auto; }
+
+  .refresh-icon { display: block; flex: 0 0 auto; }
+  .refresh-icon.spin { animation: spin 0.7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) {
-    .spinner.spin { animation: none; }
+    .refresh-icon.spin { animation: none; }
   }
 
   .install-log {
     margin-bottom: var(--s-2);
     padding: 0.75rem 0.85rem;
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface-2);
   }
   .install-log.ok {
-    border-color: var(--border-strong);
+    border-color: var(--border);
     background: var(--surface-2);
   }
   .install-log-head {

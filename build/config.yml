@@ -56,6 +56,11 @@ dev_mode:
       type: blocking
     - cmd: wails3 task common:dev:frontend
       type: background
+    # Wait for the vite dev server to accept connections before starting the app.
+    # The app binary only retries for ~5s (hardcoded in wails3) and dies with a
+    # FATAL if vite isn't up yet, leaving an orphaned vite process.
+    - cmd: wails3 task common:dev:frontend:wait
+      type: blocking
     - cmd: wails3 task run
       type: primary
 
