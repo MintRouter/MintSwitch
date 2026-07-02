@@ -40,13 +40,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Wails v3 on Linux needs GTK3 + WebKit2GTK 4.1 dev headers (CGO).
-      # Same package set as wails' own CI for ubuntu-latest (24.04).
+      # Wails v3 on Linux needs GTK4 + WebKitGTK 6.0 dev headers (CGO):
+      # the wails3 CLI checks pkg-config for gtk4 and webkitgtk-6.0.
+      # Package names verified on packages.ubuntu.com for noble (24.04):
+      # libgtk-4-dev, libwebkitgtk-6.0-dev (universe, source: webkit2gtk).
       - name: Install Linux system dependencies
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev build-essential pkg-config
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev build-essential pkg-config
 
       - name: Set up Go
         uses: actions/setup-go@v5
