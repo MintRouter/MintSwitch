@@ -287,6 +287,15 @@
     {/if}
   </div>
 
+  <div class="ce-intro">
+    <span class="micro-label">Context Engine</span>
+    <p class="ce-intro-text">
+      MintRouter.AI's MCP server helps your AI coding tools understand your
+      codebase — semantic code search on a real-time index. Enable the toggle
+      below to inject it into your tools when you Apply.
+    </p>
+  </div>
+
   <div class="profile-footer">
     <label class="mcp-switch" class:is-disabled={!hasMcpKey}
       title={hasMcpKey ? undefined : "Save your MintRouter API key in the profile first"}>
@@ -463,6 +472,25 @@
     .mcp-switch-track,
     .mcp-switch-thumb { transition: none; }
   }
+  /* Context Engine intro (feedback #34): fills the card's former dead zone
+     between the Models row and the anchored footer. A hairline (same separator
+     language as the footer's) sits right under Models/Manage, then a
+     micro-heading + short muted marketing blurb. Small type + roomy leading so
+     it reads as supporting copy, not a field. */
+  .ce-intro {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  .ce-intro-text {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
   .field-notice { margin: 0; font-size: 0.78rem; color: var(--warn); }
   .field-notice code {
     font-size: 0.74rem;
