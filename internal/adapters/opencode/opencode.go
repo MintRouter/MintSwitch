@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"strings"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -126,10 +127,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 // (or absent) file, so the pristine pre-MintSwitch snapshot is what Restore
 // reverts to even after repeated Applies. Backing up an already-managed file
 // would snapshot a managed state (prior profile's key) and hide the pristine
-// original. Limitation: if the file is already managed but no backup exists
-// (e.g. the backups dir was deleted), no new backup is taken and Restore is a
-// no-op — we cannot safely snapshot a managed file, and without the original we
-// cannot distinguish our injected keys from the user's own to strip them.
+// original. If the file is already managed but no backup exists (e.g. the
+// backups dir was deleted), no new backup is taken — we cannot safely snapshot
+// a managed file; Restore then falls back to stripping the managed provider.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -187,23 +187,68 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts the config to its pre-apply state via the backup engine and
-// removes the tool's entry from the sidecar marker store. It is a safe no-op
-// when nothing was applied.
+// Restore reverts the config to its pristine pre-MintSwitch state via the
+// backup engine (oldest snapshot; all entries are pruned after a successful
+// restore) and removes the tool's entry from the sidecar marker store. When
+// no backup exists but the file is still MintSwitch-managed (marker in store
+// and provider.mintrouter present), it falls back to stripping the managed
+// provider, preserving every other key. It is a safe no-op when nothing was
+// applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
-	restored, entry, err := a.e.RestoreLatest(path)
+	_, inStore, err := a.m.Get(id)
 	if err != nil {
 		return core.RestoreResult{}, err
+	}
+	restored, entry, err := a.e.RestorePristine(path)
+	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	stripped := false
+	if !restored && inStore {
+		stripped, err = a.stripManaged(path)
+		if err != nil {
+			return core.RestoreResult{}, err
+		}
 	}
 	if err := a.m.Delete(id); err != nil {
 		return core.RestoreResult{}, err
 	}
 	msg := "No backup found; nothing to restore."
-	if restored {
+	switch {
+	case restored:
 		msg = "Restored OpenCode config to its pre-apply state."
+	case stripped:
+		msg = "No backup found; removed the MintSwitch provider from OpenCode config."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// stripManaged removes the MintSwitch provider block (provider.mintrouter)
+// from opencode.json, dropping the "provider" object when it becomes empty,
+// and clears the default "model" when it still points at the removed
+// provider. It is the Restore fallback when no pristine backup exists. Gated
+// on the managed signal (provider.mintrouter present) so an unmanaged file is
+// never rewritten; it never creates the file.
+func (a *Adapter) stripManaged(path string) (bool, error) {
+	root, err := readConfig(path)
+	if err != nil {
+		return false, err
+	}
+	provider, _ := root["provider"].(map[string]any)
+	if _, present := provider[providerID]; !present {
+		return false, nil
+	}
+	delete(provider, providerID)
+	if len(provider) == 0 {
+		delete(root, "provider")
+	} else {
+		root["provider"] = provider
+	}
+	if m, _ := root["model"].(string); strings.HasPrefix(m, providerID+"/") {
+		delete(root, "model")
+	}
+	return true, writeConfig(path, root)
 }
 
 // StripLegacyMarker removes the legacy top-level marker key from opencode.json,

@@ -16,7 +16,7 @@ func newInjector(t *testing.T) (*Injector, *paths.Resolver) {
 	t.Helper()
 	home := t.TempDir()
 	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
-	i := New(r, backup.NewEngine(r.BackupsDir()))
+	i := New(r, backup.NewEngine(r.MCPBackupsDir()))
 	i.lookPath = func(string) (string, error) { return "", errors.New("not found") }
 	return i, r
 }

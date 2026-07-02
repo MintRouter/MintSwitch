@@ -225,23 +225,84 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts the settings to their pre-apply state via the backup engine
-// and removes the tool's entry from the sidecar marker store. It is a safe
-// no-op when nothing was applied.
+// Restore reverts the settings to their pristine pre-MintSwitch state via the
+// backup engine (oldest snapshot; all entries are pruned after a successful
+// restore) and removes the tool's entry from the sidecar marker store. When
+// no backup exists but the file is still MintSwitch-managed (marker in store
+// and the managed provider block present), it falls back to stripping the
+// managed provider and agent default model, preserving every other setting.
+// It is a safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
-	restored, entry, err := a.e.RestoreLatest(path)
+	_, inStore, err := a.m.Get(a.ID())
 	if err != nil {
 		return core.RestoreResult{}, err
+	}
+	restored, entry, err := a.e.RestorePristine(path)
+	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	stripped := false
+	if !restored && inStore {
+		stripped, err = a.stripManaged(path)
+		if err != nil {
+			return core.RestoreResult{}, err
+		}
 	}
 	if err := a.m.Delete(a.ID()); err != nil {
 		return core.RestoreResult{}, err
 	}
 	msg := "No backup found; nothing to restore."
-	if restored {
+	switch {
+	case restored:
 		msg = "Restored Zed settings to their pre-apply state."
+	case stripped:
+		msg = "No backup found; removed the MintSwitch provider from Zed settings."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// stripManaged removes the MintSwitch openai_compatible provider block from
+// settings.json (dropping emptied parent objects) and the agent default_model
+// when it still points at the removed provider, preserving every other
+// setting. It is the Restore fallback when no pristine backup exists. Gated
+// on the managed signal (the provider block being present) so an unmanaged
+// file is never rewritten; it never creates the file. Like Apply, it rewrites
+// the file as plain JSON, so JSONC comments are not preserved.
+func (a *Adapter) stripManaged(path string) (bool, error) {
+	root, err := readConfig(path)
+	if err != nil {
+		return false, err
+	}
+	if root == nil || !hasManagedProvider(root) {
+		return false, nil
+	}
+	languageModels, _ := root["language_models"].(map[string]any)
+	compatible, _ := languageModels["openai_compatible"].(map[string]any)
+	delete(compatible, providerID)
+	if len(compatible) == 0 {
+		delete(languageModels, "openai_compatible")
+	} else {
+		languageModels["openai_compatible"] = compatible
+	}
+	if len(languageModels) == 0 {
+		delete(root, "language_models")
+	} else {
+		root["language_models"] = languageModels
+	}
+	if agent, _ := root["agent"].(map[string]any); agent != nil {
+		if dm, _ := agent["default_model"].(map[string]any); dm != nil {
+			if pid, _ := dm["provider"].(string); pid == providerID {
+				delete(agent, "default_model")
+				if len(agent) == 0 {
+					delete(root, "agent")
+				} else {
+					root["agent"] = agent
+				}
+			}
+		}
+	}
+	return true, writeConfig(path, root)
 }
 
 // StripLegacyMarker removes the legacy top-level marker key from

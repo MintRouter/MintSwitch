@@ -138,9 +138,18 @@ func (r *Resolver) DataJoin(elem ...string) string {
 	return filepath.Join(append([]string{r.DataDir}, elem...)...)
 }
 
-// BackupsDir returns MintSwitch's backups root (DataDir/backups).
+// BackupsDir returns MintSwitch's backups root for the endpoint tool adapters
+// (DataDir/backups).
 func (r *Resolver) BackupsDir() string {
 	return r.DataJoin("backups")
+}
+
+// MCPBackupsDir returns MintSwitch's backups root for the MCP injectors
+// (DataDir/backups-mcp). It is deliberately separate from [Resolver.BackupsDir]
+// so an adapter and an injector touching the same config file never mix their
+// snapshots: each component's oldest entry stays its own pristine original.
+func (r *Resolver) MCPBackupsDir() string {
+	return r.DataJoin("backups-mcp")
 }
 
 // SettingsPath returns the path to MintSwitch's own settings file

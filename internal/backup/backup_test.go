@@ -97,6 +97,87 @@ func TestRestoreNoBackupIsNoOp(t *testing.T) {
 	}
 }
 
+func TestRestorePristinePicksOldestAndPrunes(t *testing.T) {
+	root := t.TempDir()
+	work := t.TempDir()
+	e := NewEngine(root)
+	src := filepath.Join(work, "c.json")
+
+	for i, content := range []string{"pristine", "contaminated-v2", "contaminated-v3"} {
+		if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Backup(src); err != nil {
+			t.Fatalf("backup %d: %v", i, err)
+		}
+	}
+	if err := os.WriteFile(src, []byte("current"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, used, err := e.RestorePristine(src)
+	if err != nil {
+		t.Fatalf("RestorePristine: %v", err)
+	}
+	if !restored || used == "" {
+		t.Fatalf("expected restore, got restored=%v used=%q", restored, used)
+	}
+	got, _ := os.ReadFile(src)
+	if string(got) != "pristine" {
+		t.Fatalf("expected oldest pristine content, got %q", got)
+	}
+
+	// All entries for src must be pruned after a successful restore.
+	has, err := e.HasBackup(src)
+	if err != nil || has {
+		t.Fatalf("expected backups pruned, HasBackup = %v, %v", has, err)
+	}
+}
+
+func TestRestorePristineAbsentMarkerDeletesAndPrunes(t *testing.T) {
+	root := t.TempDir()
+	work := t.TempDir()
+	e := NewEngine(root)
+	src := filepath.Join(work, "created.json")
+
+	if _, err := e.Backup(src); err != nil { // missing -> oldest is .absent
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Backup(src); err != nil { // contaminated later snapshot
+		t.Fatal(err)
+	}
+
+	restored, _, err := e.RestorePristine(src)
+	if err != nil {
+		t.Fatalf("RestorePristine: %v", err)
+	}
+	if !restored {
+		t.Fatal("expected restored=true for absent marker")
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("expected file removed, stat err = %v", err)
+	}
+	has, err := e.HasBackup(src)
+	if err != nil || has {
+		t.Fatalf("expected backups pruned, HasBackup = %v, %v", has, err)
+	}
+}
+
+func TestRestorePristineNoBackupIsNoOp(t *testing.T) {
+	e := NewEngine(t.TempDir())
+	src := filepath.Join(t.TempDir(), "never.json")
+	restored, used, err := e.RestorePristine(src)
+	if err != nil {
+		t.Fatalf("RestorePristine: %v", err)
+	}
+	if restored || used != "" {
+		t.Fatalf("expected no-op, got restored=%v used=%q", restored, used)
+	}
+}
+
 func TestLatestPicksMostRecent(t *testing.T) {
 	root := t.TempDir()
 	work := t.TempDir()

@@ -155,15 +155,19 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	s := NewWithInstaller(reg, store, inst)
 	// Register the MCP injectors. This is a distinct registry from the endpoint
 	// tool adapters above: MCP injection is independent of the active profile.
+	// The injectors get their OWN backup engine (rooted at r.MCPBackupsDir())
+	// so their snapshots never mix with the adapters' — an adapter and an
+	// injector touching the same file each keep their own pristine original.
 	// Zed deliberately has NO injector: its context_servers settings schema is
 	// not yet verified, and Zed forbids writing secrets (the API key) into
 	// settings.json, so there is no safe place to inject the MCP entry.
+	me := backup.NewEngine(r.MCPBackupsDir())
 	s.mcp = []core.MCPInjector{
-		mcpclaudecode.New(r, e),
-		mcpopencode.New(r, e),
-		mcpcodex.New(r, e),
-		mcpdroid.New(r, e),
-		mcpkilo.New(r, e),
+		mcpclaudecode.New(r, me),
+		mcpopencode.New(r, me),
+		mcpcodex.New(r, me),
+		mcpdroid.New(r, me),
+		mcpkilo.New(r, me),
 	}
 	s.SweepLegacyMarkers()
 	return s

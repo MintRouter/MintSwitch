@@ -128,10 +128,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 // carries no marker but is gated by the same check so both files snapshot the
 // same pre-MintSwitch point in time. Backing up an already-managed config
 // would snapshot a managed state (prior profile's key) and hide the pristine
-// original. Limitation: if config.toml is already managed but no backup exists
-// (e.g. the backups dir was deleted), no new backup is taken and Restore is a
-// no-op — we cannot safely snapshot a managed file, and without the original
-// we cannot distinguish our injected keys from the user's own to strip them.
+// original. If config.toml is already managed but no backup exists (e.g. the
+// backups dir was deleted), no new backup is taken — we cannot safely snapshot
+// a managed file; Restore then falls back to stripping the managed keys.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -185,17 +184,23 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts both config.toml and auth.json from their latest backups.
-// Both restores are attempted best-effort even when one fails, so an error on
-// config.toml never silently skips auth.json (or vice versa); failures are
-// joined into a single error naming each file. When config.toml is restored
-// but auth.json has no backup, the message states that the MintSwitch API key
-// may still be present in auth.json rather than reporting an unqualified
-// success.
+// Restore reverts config.toml and auth.json to their pristine pre-MintSwitch
+// state via the backup engine (oldest snapshots; all entries are pruned after
+// a successful restore). Both restores are attempted best-effort even when one
+// fails, so an error on config.toml never silently skips auth.json (or vice
+// versa); failures are joined into a single error naming each file. When a
+// file has no backup but Codex is still MintSwitch-managed (marker in store),
+// Restore falls back to stripping the managed keys from it — openai_base_url
+// and model in config.toml, OPENAI_API_KEY and auth_mode in auth.json —
+// preserving every other key.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	cfgPath, authPath := a.configPath(), a.authPath()
-	cfgRestored, cfgEntry, cfgErr := a.e.RestoreLatest(cfgPath)
-	authRestored, _, authErr := a.e.RestoreLatest(authPath)
+	_, inStore, err := a.m.Get(a.ID())
+	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	cfgRestored, cfgEntry, cfgErr := a.e.RestorePristine(cfgPath)
+	authRestored, _, authErr := a.e.RestorePristine(authPath)
 	if cfgErr != nil {
 		cfgErr = fmt.Errorf("restore config.toml: %w", cfgErr)
 	}
@@ -205,6 +210,19 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 	if err := errors.Join(cfgErr, authErr); err != nil {
 		return core.RestoreResult{}, err
 	}
+	var cfgStripped, authStripped bool
+	if !cfgRestored && inStore {
+		cfgStripped, err = stripManagedConfig(cfgPath)
+		if err != nil {
+			return core.RestoreResult{}, err
+		}
+	}
+	if !authRestored && inStore {
+		authStripped, err = stripManagedAuth(authPath)
+		if err != nil {
+			return core.RestoreResult{}, err
+		}
+	}
 	if err := a.m.Delete(a.ID()); err != nil {
 		return core.RestoreResult{}, err
 	}
@@ -212,10 +230,16 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 	switch {
 	case cfgRestored && authRestored:
 		msg = "Restored Codex config.toml and auth.json from backup."
+	case cfgRestored && authStripped:
+		msg = "Restored Codex config.toml from backup; no backup found for auth.json, so the MintSwitch API key was removed from it."
 	case cfgRestored:
 		msg = "Restored Codex config.toml from backup; no backup found for auth.json, so the MintSwitch API key may still be present there."
+	case authRestored && cfgStripped:
+		msg = "Restored Codex auth.json from backup; no backup found for config.toml, so the MintSwitch-managed keys were removed from it."
 	case authRestored:
 		msg = "Restored Codex auth.json from backup; no backup found for config.toml."
+	case cfgStripped || authStripped:
+		msg = "No backup found; removed the MintSwitch-managed keys from the Codex config files."
 	default:
 		msg = "No backup found; nothing to restore."
 	}
@@ -224,6 +248,42 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		BackupPath:  cfgEntry,
 		Message:     msg,
 	}, nil
+}
+
+// stripManagedConfig removes the MintSwitch-managed keys (openai_base_url and
+// model) from config.toml, preserving every other key. It is the Restore
+// fallback when no pristine backup exists. Gated on the managed signal
+// (openai_base_url present) so an unmanaged file is never rewritten; it never
+// creates the file.
+func stripManagedConfig(path string) (bool, error) {
+	cfg, err := readTOML(path)
+	if err != nil {
+		return false, err
+	}
+	if _, present := cfg["openai_base_url"]; !present {
+		return false, nil
+	}
+	delete(cfg, "openai_base_url")
+	delete(cfg, "model")
+	return true, writeTOML(path, cfg)
+}
+
+// stripManagedAuth removes OPENAI_API_KEY and auth_mode from auth.json,
+// preserving every other key. Apply always overwrites both, so with the
+// managed marker still in the store the current values are MintSwitch's.
+// Gated on OPENAI_API_KEY being present so an unmanaged file is never
+// rewritten; it never creates the file.
+func stripManagedAuth(path string) (bool, error) {
+	auth, err := readJSON(path)
+	if err != nil {
+		return false, err
+	}
+	if _, present := auth[authKeyName]; !present {
+		return false, nil
+	}
+	delete(auth, authKeyName)
+	delete(auth, authModeKey)
+	return true, writeJSON(path, auth)
 }
 
 // StripLegacyMarker removes the legacy [mintswitchManaged] table from

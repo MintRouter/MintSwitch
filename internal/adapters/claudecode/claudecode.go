@@ -3,8 +3,21 @@
 // Claude Code (both the CLI and the VS Code extension, which share config) reads
 // environment overrides from the top-level "env" object of ~/.claude/settings.json.
 // The adapter injects the active profile's endpoint into that object as the
-// ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL and (optionally)
+// ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL and
 // ANTHROPIC_SMALL_FAST_MODEL variables, preserving every other key in the file.
+//
+// Two values diverge from the profile as stored (Claude Code specifics; other
+// adapters keep the profile verbatim):
+//
+//   - ANTHROPIC_BASE_URL: Claude Code appends "/v1/messages" to the base URL
+//     itself, so a single trailing "/v1" path segment is stripped before the
+//     write ("https://host/v1" → "https://host", "https://host/api/v1" →
+//     "https://host/api"). URLs without the suffix — including "/v1beta" or a
+//     mid-path "v1" — are written unchanged.
+//   - ANTHROPIC_SMALL_FAST_MODEL: when the profile leaves it empty, it is set
+//     to the profile's main model. If the key were absent, Claude Code's
+//     background requests would fall back to its default Haiku model, which
+//     fails on gateways that do not serve it.
 //
 // Schema reference (verified 2026-06-30): https://code.claude.com/docs/en/env-vars
 // and https://code.claude.com/docs/en/llm-gateway-connect.
@@ -17,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -119,10 +133,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 // (or absent) file, so the pristine pre-MintSwitch snapshot is what Restore
 // reverts to even after repeated Applies. Backing up an already-managed file
 // would snapshot a managed state (prior profile's token) and hide the pristine
-// original. Limitation: if the file is already managed but no backup exists
-// (e.g. the backups dir was deleted), no new backup is taken and Restore is a
-// no-op — we cannot safely snapshot a managed file, and without the original we
-// cannot distinguish our injected keys from the user's own to strip them.
+// original. If the file is already managed but no backup exists (e.g. the
+// backups dir was deleted), no new backup is taken — we cannot safely snapshot
+// a managed file; Restore then falls back to stripping the managed env keys.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -146,13 +159,13 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}
 
 	env := asObject(m[envKey])
-	env[envBaseURL] = p.BaseURL
+	env[envBaseURL] = stripV1Suffix(p.BaseURL)
 	env[envAuthToken] = p.APIKey
 	env[envModel] = p.Model
 	if p.SmallFastModel != "" {
 		env[envSmallFastModel] = p.SmallFastModel
 	} else {
-		delete(env, envSmallFastModel)
+		env[envSmallFastModel] = p.Model
 	}
 	m[envKey] = env
 	delete(m, core.MarkerKey)
@@ -170,23 +183,67 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts settings.json to its pre-apply state via the backup engine
-// and removes the tool's entry from the sidecar marker store. It is a safe
-// no-op when nothing was applied.
+// Restore reverts settings.json to its pristine pre-MintSwitch state via the
+// backup engine (oldest snapshot; all entries are pruned after a successful
+// restore) and removes the tool's entry from the sidecar marker store. When
+// no backup exists but the file is still MintSwitch-managed (marker in store
+// and env.ANTHROPIC_BASE_URL present), it falls back to stripping the managed
+// env keys, preserving every other setting. It is a safe no-op when nothing
+// was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.settingsPath()
-	restored, entry, err := a.e.RestoreLatest(path)
+	_, inStore, err := a.m.Get(id)
 	if err != nil {
 		return core.RestoreResult{}, err
+	}
+	restored, entry, err := a.e.RestorePristine(path)
+	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	stripped := false
+	if !restored && inStore {
+		stripped, err = a.stripManaged(path)
+		if err != nil {
+			return core.RestoreResult{}, err
+		}
 	}
 	if err := a.m.Delete(id); err != nil {
 		return core.RestoreResult{}, err
 	}
 	msg := "No backup found; nothing to restore."
-	if restored {
+	switch {
+	case restored:
 		msg = "Restored Claude Code settings.json to its pre-apply state."
+	case stripped:
+		msg = "No backup found; removed the MintSwitch-managed env keys from Claude Code settings.json."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// stripManaged removes the MintSwitch-managed env keys from settings.json,
+// preserving every other key (the "env" object itself is dropped when it
+// becomes empty). It is the Restore fallback when no pristine backup exists:
+// the user's own prior values are unrecoverable, but what Apply injected can
+// be surgically dropped. Gated on the managed signal (env.ANTHROPIC_BASE_URL
+// present) so an unmanaged file is never rewritten; it never creates the file.
+func (a *Adapter) stripManaged(path string) (bool, error) {
+	m, err := readJSON(path)
+	if err != nil {
+		return false, err
+	}
+	env := asObject(m[envKey])
+	if _, present := env[envBaseURL]; !present {
+		return false, nil
+	}
+	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
+		delete(env, k)
+	}
+	if len(env) == 0 {
+		delete(m, envKey)
+	} else {
+		m[envKey] = env
+	}
+	return true, writeJSON(path, m)
 }
 
 // StripLegacyMarker removes the legacy top-level marker key from settings.json,
@@ -248,6 +305,18 @@ func readJSON(path string) (map[string]any, error) {
 // auth token.
 func writeJSON(path string, m map[string]any) error {
 	return core.WriteJSONObjectAtomic(path, m)
+}
+
+// stripV1Suffix removes exactly one trailing "/v1" path segment from baseURL
+// (ignoring a trailing slash), since Claude Code appends "/v1/messages" to
+// ANTHROPIC_BASE_URL itself. URLs without the suffix are returned unchanged;
+// "/v1beta" or a "v1" segment mid-path is never stripped.
+func stripV1Suffix(baseURL string) string {
+	trimmed := strings.TrimSuffix(baseURL, "/")
+	if strings.HasSuffix(trimmed, "/v1") {
+		return strings.TrimSuffix(trimmed, "/v1")
+	}
+	return baseURL
 }
 
 // asObject returns v as a JSON object, or a fresh object if v is not one.

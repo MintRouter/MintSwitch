@@ -136,12 +136,31 @@ func itoa(i int) string {
 
 // latest returns the most recent backup entry in dir, or "" if none exist.
 func latest(dir string) (string, error) {
+	names, err := sortedEntries(dir)
+	if err != nil || len(names) == 0 {
+		return "", err
+	}
+	return filepath.Join(dir, names[len(names)-1]), nil
+}
+
+// oldest returns the oldest backup entry in dir, or "" if none exist.
+func oldest(dir string) (string, error) {
+	names, err := sortedEntries(dir)
+	if err != nil || len(names) == 0 {
+		return "", err
+	}
+	return filepath.Join(dir, names[0]), nil
+}
+
+// sortedEntries lists the backup entry names in dir sorted ascending by name
+// (timestamped names, so oldest first). A missing dir yields an empty list.
+func sortedEntries(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", nil
+			return nil, nil
 		}
-		return "", err
+		return nil, err
 	}
 	names := make([]string, 0, len(entries))
 	for _, en := range entries {
@@ -153,9 +172,6 @@ func latest(dir string) (string, error) {
 			names = append(names, n)
 		}
 	}
-	if len(names) == 0 {
-		return "", nil
-	}
 	sort.Strings(names)
-	return filepath.Join(dir, names[len(names)-1]), nil
+	return names, nil
 }

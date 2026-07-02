@@ -175,7 +175,11 @@ func TestApplyNewFile(t *testing.T) {
 	}
 }
 
-func TestApplyOmitsEmptySmallFastModel(t *testing.T) {
+// TestApplyDefaultsEmptySmallFastModel proves an empty SmallFastModel is
+// written as the profile's main model: without the key, Claude Code's
+// background requests fall back to its default Haiku model, which fails on
+// gateways that do not serve it.
+func TestApplyDefaultsEmptySmallFastModel(t *testing.T) {
 	a, _ := newAdapter(t)
 	p := sampleProfile()
 	p.SmallFastModel = ""
@@ -184,8 +188,49 @@ func TestApplyOmitsEmptySmallFastModel(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	env := envOf(t, readSettings(t, res.ChangedPath))
-	if _, ok := env[envSmallFastModel]; ok {
-		t.Fatalf("small fast model should be omitted: %+v", env)
+	if env[envSmallFastModel] != p.Model {
+		t.Fatalf("small fast model should default to main model %q: %+v", p.Model, env)
+	}
+}
+
+// TestApplyStripsV1Suffix proves exactly one trailing "/v1" path segment is
+// stripped from the base URL before the write (Claude Code appends
+// "/v1/messages" itself), while all other URLs are written verbatim.
+func TestApplyStripsV1Suffix(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{"strips trailing /v1", "https://api.mintrouter.ai/v1", "https://api.mintrouter.ai"},
+		{"strips trailing /v1 with slash", "https://api.mintrouter.ai/v1/", "https://api.mintrouter.ai"},
+		{"strips only last /v1 segment", "https://host/api/v1", "https://host/api"},
+		{"no suffix unchanged", "https://api.mintrouter.ai", "https://api.mintrouter.ai"},
+		{"v1beta unchanged", "https://host/v1beta", "https://host/v1beta"},
+		{"mid-path v1 unchanged", "https://host/v1/proxy", "https://host/v1/proxy"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := newAdapter(t)
+			p := sampleProfile()
+			p.BaseURL = tc.baseURL
+			res, err := a.Apply(p)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			env := envOf(t, readSettings(t, res.ChangedPath))
+			if env[envBaseURL] != tc.want {
+				t.Fatalf("base url = %q, want %q", env[envBaseURL], tc.want)
+			}
+			// Fingerprint stays derived from the original profile value.
+			marker, ok, err := a.m.Get(id)
+			if err != nil || !ok {
+				t.Fatalf("store marker ok=%v err=%v", ok, err)
+			}
+			if marker.Fingerprint != core.Fingerprint(p) {
+				t.Fatalf("fingerprint must come from unmodified profile: %q", marker.Fingerprint)
+			}
+		})
 	}
 }
 
@@ -459,3 +504,89 @@ func TestStripLegacyMarkerNoOp(t *testing.T) {
 		t.Fatalf("clean file rewritten: %q", got)
 	}
 }
+
+// TestRestoreIgnoresContaminatedNewerBackup is the regression for dirty
+// backups: a snapshot taken AFTER the file was already MintSwitch-managed
+// (e.g. by another component sharing the backup namespace before the split)
+// must be ignored — Restore reverts to the oldest, pristine entry and prunes
+// every backup so the contaminated one can never resurface.
+func TestRestoreIgnoresContaminatedNewerBackup(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := []byte("{\n  \"permissions\": {\n    \"allow\": [\"Bash\"]\n  }\n}\n")
+	if err := os.WriteFile(path, orig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	// Contaminated snapshot of the now-managed file.
+	if _, err := a.e.Backup(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != string(orig) {
+		t.Fatalf("restore used contaminated backup: %q", got)
+	}
+	has, err := a.e.HasBackup(path)
+	if err != nil || has {
+		t.Fatalf("backups must be pruned after restore, HasBackup = %v, %v", has, err)
+	}
+}
+
+// TestRestoreNoBackupStripsManagedKeys is the regression for the missing
+// backup fallback: with the backups dir deleted, Restore must surgically strip
+// the MintSwitch-managed env keys while preserving the user's own settings.
+func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
+	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := `{"permissions":{"allow":["Bash"]},"env":{"FOO":"bar"}}`
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := readJSON(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := asObject(m[envKey])
+	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
+		if _, present := env[k]; present {
+			t.Fatalf("managed key %s must be stripped: %v", k, env)
+		}
+	}
+	if env["FOO"] != "bar" {
+		t.Fatalf("user env key must be preserved: %v", env)
+	}
+	if _, present := m["permissions"]; !present {
+		t.Fatalf("user settings must be preserved: %v", m)
+	}
+	want := "No backup found; removed the MintSwitch-managed env keys from Claude Code settings.json."
+	if res.Message != want {
+		t.Fatalf("message = %q, want %q", res.Message, want)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+

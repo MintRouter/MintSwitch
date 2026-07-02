@@ -171,23 +171,56 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts the config to its pre-apply state via the backup engine and
-// removes the tool's entry from the sidecar marker store. It is a safe no-op
-// when nothing was applied.
+// Restore reverts the config to its pristine pre-MintSwitch state via the
+// backup engine (oldest snapshot; all entries are pruned after a successful
+// restore) and removes the tool's entry from the sidecar marker store. When
+// no backup exists but the file is still MintSwitch-managed (marker in store
+// and the MintSwitch customModels entry present), it falls back to stripping
+// the managed entry, preserving every other setting. It is a safe no-op when
+// nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
-	restored, entry, err := a.e.RestoreLatest(path)
+	_, inStore, err := a.m.Get(a.ID())
 	if err != nil {
 		return core.RestoreResult{}, err
+	}
+	restored, entry, err := a.e.RestorePristine(path)
+	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	stripped := false
+	if !restored && inStore {
+		stripped, err = a.stripManaged(path)
+		if err != nil {
+			return core.RestoreResult{}, err
+		}
 	}
 	if err := a.m.Delete(a.ID()); err != nil {
 		return core.RestoreResult{}, err
 	}
 	msg := "No backup found; nothing to restore."
-	if restored {
+	switch {
+	case restored:
 		msg = "Restored Factory Droid settings to their pre-apply state."
+	case stripped:
+		msg = "No backup found; removed the MintSwitch custom model from Factory Droid settings."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// stripManaged removes the MintSwitch-owned customModels entry from
+// settings.json, preserving every other setting. It is the Restore fallback
+// when no pristine backup exists. Gated on the managed entry being present so
+// an unmanaged file is never rewritten; it never creates the file.
+func (a *Adapter) stripManaged(path string) (bool, error) {
+	root, err := core.ReadJSONObject(path)
+	if err != nil {
+		return false, err
+	}
+	if !removeManagedEntry(root) {
+		return false, nil
+	}
+	return true, core.WriteJSONObjectAtomic(path, root)
 }
 
 // StripLegacyMarker removes the legacy top-level marker key from

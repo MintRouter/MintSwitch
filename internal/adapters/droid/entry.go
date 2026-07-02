@@ -46,6 +46,39 @@ func isOurEntry(v any) bool {
 	return name == entryDisplayName
 }
 
+// removeManagedEntry deletes the MintSwitch-owned customModels entry from
+// root, dropping the array when it becomes empty and clearing the top-level
+// "model" when it still points at the removed entry's model. Every other
+// entry and key is preserved. It reports whether root was modified.
+func removeManagedEntry(root map[string]any) bool {
+	models, _ := root[customModelsKey].([]any)
+	kept := make([]any, 0, len(models))
+	ourModel := ""
+	found := false
+	for _, v := range models {
+		if isOurEntry(v) {
+			found = true
+			if obj, ok := v.(map[string]any); ok {
+				ourModel, _ = obj["model"].(string)
+			}
+			continue
+		}
+		kept = append(kept, v)
+	}
+	if !found {
+		return false
+	}
+	if len(kept) == 0 {
+		delete(root, customModelsKey)
+	} else {
+		root[customModelsKey] = kept
+	}
+	if m, _ := root["model"].(string); m != "" && m == ourModel {
+		delete(root, "model")
+	}
+	return true
+}
+
 // hasManagedEntry reports whether root's customModels array still contains
 // the MintSwitch-owned entry that Apply writes.
 func hasManagedEntry(root map[string]any) bool {

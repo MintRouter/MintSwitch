@@ -214,21 +214,32 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts the config to its pre-apply state via the backup engine and
-// removes the tool's entry from the sidecar marker store. It checks both
-// candidate files (kilo.jsonc and kilo.json) since the active file may have
-// changed since Apply. It is a safe no-op when nothing was applied.
+// Restore reverts the config to its pristine pre-MintSwitch state via the
+// backup engine (oldest snapshots; all entries are pruned after a successful
+// restore) and removes the tool's entry from the sidecar marker store. It
+// checks both candidate files (kilo.jsonc and kilo.json) since the active
+// file may have changed since Apply. When no backup exists but a file is
+// still MintSwitch-managed (marker in store and the managed provider block
+// present), it falls back to stripping the managed provider, preserving every
+// other key (a comment-carrying kilo.jsonc is skipped, matching the errJSONC
+// contract). It is a safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
+	_, inStore, err := a.m.Get(id)
+	if err != nil {
+		return core.RestoreResult{}, err
+	}
 	res := core.RestoreResult{
 		ChangedPath: a.configPath(),
 		Message:     "No backup found; nothing to restore.",
 	}
+	restoredAny := false
 	for _, path := range []string{a.jsoncPath(), a.jsonPath()} {
-		restored, entry, err := a.e.RestoreLatest(path)
+		restored, entry, err := a.e.RestorePristine(path)
 		if err != nil {
 			return core.RestoreResult{}, err
 		}
 		if restored {
+			restoredAny = true
 			res = core.RestoreResult{
 				ChangedPath: path,
 				BackupPath:  entry,
@@ -236,10 +247,59 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 			}
 		}
 	}
+	if !restoredAny && inStore {
+		for _, path := range []string{a.jsoncPath(), a.jsonPath()} {
+			stripped, err := a.stripManaged(path)
+			if err != nil {
+				return core.RestoreResult{}, err
+			}
+			if stripped {
+				res = core.RestoreResult{
+					ChangedPath: path,
+					Message:     "No backup found; removed the MintSwitch-managed provider from Kilo Code config.",
+				}
+			}
+		}
+	}
 	if err := a.m.Delete(id); err != nil {
 		return core.RestoreResult{}, err
 	}
 	return res, nil
+}
+
+// stripManaged removes the MintSwitch-managed provider block
+// (provider."openai-compatible") from the given config file, dropping the
+// "provider" object when it becomes empty, and clears the default "model"
+// when it still points at the removed provider. It is the Restore fallback
+// when no pristine backup exists. Gated on the managed signal (the provider
+// block being present) so an unmanaged file is never rewritten; a missing
+// file or a comment-carrying kilo.jsonc is a no-op, and it never creates the
+// file.
+func (a *Adapter) stripManaged(path string) (bool, error) {
+	if !fileExists(path) {
+		return false, nil
+	}
+	root, strict, err := readConfig(path)
+	if err != nil {
+		return false, err
+	}
+	if !strict || root == nil {
+		return false, nil
+	}
+	provider, _ := root["provider"].(map[string]any)
+	if _, present := provider[providerID]; !present {
+		return false, nil
+	}
+	delete(provider, providerID)
+	if len(provider) == 0 {
+		delete(root, "provider")
+	} else {
+		root["provider"] = provider
+	}
+	if m, _ := root["model"].(string); strings.HasPrefix(m, providerID+"/") {
+		delete(root, "model")
+	}
+	return true, writeConfig(path, root)
 }
 
 // StripLegacyMarker removes the legacy top-level marker key from both candidate

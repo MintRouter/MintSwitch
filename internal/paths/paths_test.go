@@ -21,6 +21,9 @@ func TestResolverJoinAndData(t *testing.T) {
 	if got, want := r.BackupsDir(), filepath.Join(data, "backups"); got != want {
 		t.Errorf("BackupsDir = %q, want %q", got, want)
 	}
+	if got, want := r.MCPBackupsDir(), filepath.Join(data, "backups-mcp"); got != want {
+		t.Errorf("MCPBackupsDir = %q, want %q", got, want)
+	}
 	if got, want := r.SettingsPath(), filepath.Join(data, "settings.json"); got != want {
 		t.Errorf("SettingsPath = %q, want %q", got, want)
 	}

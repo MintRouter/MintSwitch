@@ -380,3 +380,85 @@ func TestStripLegacyMarkerNoOp(t *testing.T) {
 		t.Fatalf("clean file rewritten: %q", got)
 	}
 }
+
+// TestRestoreIgnoresContaminatedNewerBackup is the regression for dirty
+// backups: a snapshot taken AFTER the file was already MintSwitch-managed
+// must be ignored — Restore reverts to the oldest, pristine entry and prunes
+// every backup so the contaminated one can never resurface.
+func TestRestoreIgnoresContaminatedNewerBackup(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := []byte("{\n  \"theme\": \"dark\"\n}\n")
+	if err := os.WriteFile(path, orig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	// Contaminated snapshot of the now-managed file.
+	if _, err := a.e.Backup(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != string(orig) {
+		t.Fatalf("restore used contaminated backup: %q", got)
+	}
+	has, err := a.e.HasBackup(path)
+	if err != nil || has {
+		t.Fatalf("backups must be pruned after restore, HasBackup = %v, %v", has, err)
+	}
+}
+
+// TestRestoreNoBackupStripsManagedProvider is the regression for the missing
+// backup fallback: with the backups dir deleted, Restore must surgically
+// strip the MintSwitch provider and default model while preserving the user's
+// own settings.
+func TestRestoreNoBackupStripsManagedProvider(t *testing.T) {
+	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := readConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := root["provider"]; present {
+		t.Fatalf("provider must be stripped: %v", root)
+	}
+	if _, present := root["model"]; present {
+		t.Fatalf("model must be stripped: %v", root)
+	}
+	if root["theme"] != "dark" {
+		t.Fatalf("user settings must be preserved: %v", root)
+	}
+	want := "No backup found; removed the MintSwitch provider from OpenCode config."
+	if res.Message != want {
+		t.Fatalf("message = %q, want %q", res.Message, want)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+

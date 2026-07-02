@@ -212,3 +212,112 @@ func TestApplyInvalidProfile(t *testing.T) {
 		t.Fatal("expected validation error for empty profile")
 	}
 }
+
+// TestRestoreIgnoresContaminatedNewerBackup is the regression for dirty
+// backups: snapshots taken AFTER the files were already MintSwitch-managed
+// must be ignored — Restore reverts both files to their oldest, pristine
+// entries and prunes every backup so the contaminated ones never resurface.
+func TestRestoreIgnoresContaminatedNewerBackup(t *testing.T) {
+	a, home := newAdapter(t)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath, authPath := a.configPath(), a.authPath()
+	origCfg := []byte("model = \"original\"\n")
+	origAuth := []byte("{\"OPENAI_API_KEY\":\"sk-original\"}")
+	if err := os.WriteFile(cfgPath, origCfg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, origAuth, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	// Contaminated snapshots of the now-managed files.
+	if _, err := a.e.Backup(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.e.Backup(authPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	gotCfg, _ := os.ReadFile(cfgPath)
+	gotAuth, _ := os.ReadFile(authPath)
+	if string(gotCfg) != string(origCfg) {
+		t.Fatalf("config.toml restore used contaminated backup: %q", gotCfg)
+	}
+	if string(gotAuth) != string(origAuth) {
+		t.Fatalf("auth.json restore used contaminated backup: %q", gotAuth)
+	}
+	for _, p := range []string{cfgPath, authPath} {
+		if has, err := a.e.HasBackup(p); err != nil || has {
+			t.Fatalf("backups for %s must be pruned after restore, HasBackup = %v, %v", p, has, err)
+		}
+	}
+}
+
+// TestRestoreNoBackupStripsManagedKeys is the regression for the missing
+// backup fallback: with the backups dir deleted, Restore must surgically
+// strip the MintSwitch-managed keys from both files while preserving the
+// user's own keys.
+func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath, authPath := a.configPath(), a.authPath()
+	if err := os.WriteFile(cfgPath, []byte("other = \"keep\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, []byte("{\"OTHER\":\"keep\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(home, "data", "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg["openai_base_url"]; present {
+		t.Fatalf("openai_base_url must be stripped: %v", cfg)
+	}
+	if _, present := cfg["model"]; present {
+		t.Fatalf("model must be stripped: %v", cfg)
+	}
+	if cfg["other"] != "keep" {
+		t.Fatalf("user config key must be preserved: %v", cfg)
+	}
+	auth, err := readJSON(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := auth[authKeyName]; present {
+		t.Fatalf("OPENAI_API_KEY must be stripped: %v", auth)
+	}
+	if _, present := auth[authModeKey]; present {
+		t.Fatalf("auth_mode must be stripped: %v", auth)
+	}
+	if auth["OTHER"] != "keep" {
+		t.Fatalf("user auth key must be preserved: %v", auth)
+	}
+	if !strings.Contains(res.Message, "removed") {
+		t.Fatalf("message must report the strip, got %q", res.Message)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+
