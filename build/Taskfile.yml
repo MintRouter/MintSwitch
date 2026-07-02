@@ -192,14 +192,20 @@ tasks:
 
   generate:icons:
     summary: Generates Windows `.ico` and Mac `.icns` from an image; on macOS, `-iconcomposerinput appicon.icon -macassetdir darwin` also produces `Assets.car` from a `.icon` file (skipped on other platforms).
+    desc: |
+      The committed icon artifacts (darwin/icons.icns, darwin/Assets.car,
+      windows/icon.ico) are canonical: this task is skipped while they exist,
+      so CI ships them as-is instead of regenerating with the runner's
+      toolchain (fresh checkouts have no .task fingerprint cache, which used
+      to force a regeneration that produced a broken icns/Assets.car).
+      To regenerate after changing appicon.png/appicon.icon, delete the three
+      output files and rerun (Assets.car requires macOS).
     run: once
     dir: build
-    sources:
-      - "appicon.png"
-      - "appicon.icon"
-    generates:
-      - "darwin/icons.icns"
-      - "windows/icon.ico"
+    status:
+      - test -f darwin/icons.icns
+      - test -f darwin/Assets.car
+      - test -f windows/icon.ico
     cmds:
       - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico -iconcomposerinput appicon.icon -macassetdir darwin
 

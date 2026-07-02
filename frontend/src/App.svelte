@@ -327,31 +327,35 @@
     <!-- Promo banner (user feedback #9/#10/#15/#16 + bulk-button removal):
          compact two-line navy banner sized to its content + Telegram tile,
          sitting on the right just before the utility cluster (Multilogin-style);
-         the flexible free space sits between the brand block and the banner. -->
-    <PromoBanner compact />
-    <div class="topbar-cluster">
-      <button
-        class="btn-ghost sm theme-toggle"
-        type="button"
-        onclick={toggleTheme}
-        aria-pressed={theme === "dark"}
-        aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-      >
-        {#if theme === "dark"}
-          <svg class="theme-icon" viewBox="0 0 24 24" width="20" height="20" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-            aria-hidden="true" focusable="false">
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-          </svg>
-        {:else}
-          <svg class="theme-icon" viewBox="0 0 24 24" width="20" height="20" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-            aria-hidden="true" focusable="false">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
-          </svg>
-        {/if}
-      </button>
+         the flexible free space sits between the brand block and the banner.
+         HOTFIX-PILL: banner + cluster live in one right-side wrapper occupying
+         the topbar grid's second column, so the brand pill can span column 1. -->
+    <div class="topbar-right">
+      <PromoBanner compact />
+      <div class="topbar-cluster">
+        <button
+          class="btn-ghost sm theme-toggle"
+          type="button"
+          onclick={toggleTheme}
+          aria-pressed={theme === "dark"}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        >
+          {#if theme === "dark"}
+            <svg class="theme-icon" viewBox="0 0 24 24" width="20" height="20" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+            </svg>
+          {:else}
+            <svg class="theme-icon" viewBox="0 0 24 24" width="20" height="20" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+            </svg>
+          {/if}
+        </button>
+      </div>
     </div>
   </header>
 
@@ -562,20 +566,33 @@
      the compact MintRouter.AI promo + Telegram + theme toggle tiles. */
   .topbar {
     flex: 0 0 auto;
-    display: flex;
+    /* HOTFIX-PILL: the topbar mirrors .layout's grid (same template columns;
+       side padding = .layout's var(--s-3) side margins) so the brand pill
+       spans exactly the left Endpoint-profile column and its right edge
+       lines up with the card's. */
+    display: grid;
+    grid-template-columns: minmax(280px, 320px) 1fr;
+    gap: 0;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--s-2);
-    flex-wrap: wrap;
     /* Even vertical rhythm (feedback #26 → #16 tightened to half): the gray
        breathing space ABOVE the row (titlebar → pill/tiles) and BELOW it
        (row → white panels) is the same 6px. The row itself is exactly the
        40px pill/banner/tile height — no vertical padding or border to skew
        the two gaps. */
     margin: 6px 0;
-    padding: 0 16px;
+    padding: 0 var(--s-3);
     border: 0;
     border-radius: 0;
+  }
+  /* Right side of the topbar (grid column 2): promo banner + utility tiles
+     pinned to the right edge, keeping the old var(--s-2) rhythm between them. */
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    min-width: 0;
   }
   /* Brand pill (feedback #24, Multilogin's left pill): logo + wordmark +
      vertical hairline + icon-only Re-detect live inside one WHITE rounded
@@ -593,9 +610,28 @@
     min-width: 0;
     height: 40px;
     padding: 0 12px;
+    /* HOTFIX-PILL: the left card ends 3px short of its grid column — the
+       stable 3px scrollbar gutter reserved by .col-scroll — so the pill
+       (which stretches to the column edge) insets the same 3px to keep the
+       right edges pixel-aligned. */
+    margin-right: 3px;
     background: var(--surface);
     border-radius: var(--radius-sm);
     box-shadow: var(--shadow-card);
+  }
+  /* Stacked breakpoint (must come AFTER the base .topbar rules to win the
+     cascade): .layout is one column, so the pill has no card column to
+     mirror — fall back to the previous flex row (content-sized pill,
+     banner + cluster on the right, wrapping when tight). */
+  @media (max-width: 860px), (max-height: 600px) {
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--s-2);
+    }
+    .topbar-brand { margin-right: 0; }
   }
   /* 16px box = the mark's ink size; the SVG viewBox is cropped to the ink so
      the flex gap is the real visual whitespace (feedback #39). */
