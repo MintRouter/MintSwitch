@@ -147,7 +147,7 @@ func TestApplyNewFiles(t *testing.T) {
 		t.Fatalf("store marker fingerprint mismatch: %+v ok=%v", marker, ok)
 	}
 
-	auth, err := readJSON(filepath.Join(home, ".codex", "auth.json"))
+	auth, err := core.ReadJSONObject(filepath.Join(home, ".codex", "auth.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestApplyPreservesExistingKeys(t *testing.T) {
 		t.Fatalf("expected openai_base_url in output:\n%s", roundTrip)
 	}
 
-	auth, err := readJSON(authPath)
+	auth, err := core.ReadJSONObject(authPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestOrphanRestoreNoBackupStrips(t *testing.T) {
 	if cfg["approval_policy"] != "never" {
 		t.Fatalf("user config keys must be preserved: %v", cfg)
 	}
-	auth, err := readJSON(authPath)
+	auth, err := core.ReadJSONObject(authPath)
 	if err != nil {
 		t.Fatal(err)
 	}

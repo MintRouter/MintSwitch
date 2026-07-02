@@ -160,7 +160,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 	var cfgBackup string
-	legacy, hasLegacy := extractLegacyMarker(cfg)
+	legacy, hasLegacy := core.ExtractLegacyMarker(cfg)
 	if !inStore && !(hasLegacy && legacy.Managed) {
 		cfgBackup, err = a.e.Backup(cfgPath)
 		if err != nil {
@@ -193,14 +193,14 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		}
 	}
 
-	auth, err := readJSON(authPath)
+	auth, err := core.ReadJSONObject(authPath)
 	if err != nil {
 		rollbackCfg()
 		return core.ApplyResult{}, err
 	}
 	auth[authKeyName] = p.APIKey
 	auth[authModeKey] = authModeAPIKey
-	if err := writeJSON(authPath, auth); err != nil {
+	if err := core.WriteJSONObjectAtomic(authPath, auth); err != nil {
 		rollbackCfg()
 		return core.ApplyResult{}, err
 	}
@@ -303,7 +303,7 @@ func (a *Adapter) orphanRemnant() bool {
 	if _, ok := cfg["model"]; !ok {
 		return false
 	}
-	auth, err := readJSON(a.authPath())
+	auth, err := core.ReadJSONObject(a.authPath())
 	if err != nil {
 		return false
 	}
@@ -338,7 +338,7 @@ func stripManagedConfig(path string) (bool, error) {
 // Gated on OPENAI_API_KEY being present so an unmanaged file is never
 // rewritten; it never creates the file.
 func stripManagedAuth(path string) (bool, error) {
-	auth, err := readJSON(path)
+	auth, err := core.ReadJSONObject(path)
 	if err != nil {
 		return false, err
 	}
@@ -347,7 +347,7 @@ func stripManagedAuth(path string) (bool, error) {
 	}
 	delete(auth, authKeyName)
 	delete(auth, authModeKey)
-	return true, writeJSON(path, auth)
+	return true, core.WriteJSONObjectAtomic(path, auth)
 }
 
 // StripLegacyMarker removes the legacy [mintswitchManaged] table from
@@ -361,7 +361,7 @@ func (a *Adapter) StripLegacyMarker() error {
 	if err != nil {
 		return err
 	}
-	legacy, ok := extractLegacyMarker(cfg)
+	legacy, ok := core.ExtractLegacyMarker(cfg)
 	if !ok {
 		if _, present := cfg[core.MarkerKey]; !present {
 			return nil

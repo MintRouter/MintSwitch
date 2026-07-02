@@ -1,8 +1,6 @@
 package droid
 
 import (
-	"encoding/json"
-
 	"mintswitch/internal/core"
 )
 
@@ -89,24 +87,4 @@ func hasManagedEntry(root map[string]any) bool {
 		}
 	}
 	return false
-}
-
-// extractMarker decodes the MintSwitch marker from the parsed config, if present.
-func extractMarker(root map[string]any) (core.Marker, bool) {
-	raw, ok := root[core.MarkerKey]
-	if !ok {
-		return core.Marker{}, false
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return core.Marker{}, false
-	}
-	var m core.Marker
-	if err := json.Unmarshal(b, &m); err != nil {
-		return core.Marker{}, false
-	}
-	if !m.Managed {
-		return core.Marker{}, false
-	}
-	return m, true
 }

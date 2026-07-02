@@ -10,10 +10,6 @@
 package opencode
 
 import (
-	"encoding/json"
-	"errors"
-	"io/fs"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -113,7 +109,7 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
-	root, err := readConfig(path)
+	root, err := core.ReadJSONObject(path)
 	if err != nil {
 		return core.StatusDefault, "", err
 	}
@@ -147,19 +143,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 	path := a.configPath()
-	root, err := readConfig(path)
+	root, err := core.ReadJSONObject(path)
 	if err != nil {
 		return core.ApplyResult{}, err
-	}
-	if root == nil {
-		root = map[string]any{}
 	}
 	_, inStore, err := a.m.Get(id)
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
 	var backupPath string
-	legacy, hasLegacy := extractLegacyMarker(root)
+	legacy, hasLegacy := core.ExtractLegacyMarker(root)
 	if !inStore && !(hasLegacy && legacy.Managed) {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
@@ -186,7 +179,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	root["model"] = providerID + "/" + p.Model
 	delete(root, core.MarkerKey)
 
-	if err := writeConfig(path, root); err != nil {
+	if err := core.WriteJSONObjectAtomic(path, root); err != nil {
 		return core.ApplyResult{}, err
 	}
 	if err := a.m.Put(id, core.NewMarker(p, p.Label)); err != nil {
@@ -208,33 +201,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // the managed provider, preserving every other key. It is a safe no-op when
 // nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
-	path := a.configPath()
-	_, inStore, err := a.m.Get(id)
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	restored, entry, err := a.e.RestorePristine(path)
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	stripped := false
-	if !restored && (inStore || a.orphanRemnantAt(path)) {
-		stripped, err = a.stripManaged(path)
-		if err != nil {
-			return core.RestoreResult{}, err
-		}
-	}
-	if err := a.m.Delete(id); err != nil {
-		return core.RestoreResult{}, err
-	}
-	msg := "No backup found; nothing to restore."
-	switch {
-	case restored:
-		msg = "Restored OpenCode config to its pre-apply state."
-	case stripped:
-		msg = "No backup found; removed the MintSwitch provider from OpenCode config."
-	}
-	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+	return core.RestoreSingleFile(core.SingleFileRestore{
+		ToolID:          id,
+		Path:            a.configPath(),
+		Store:           a.m,
+		RestorePristine: a.e.RestorePristine,
+		OrphanRemnantAt: a.orphanRemnantAt,
+		StripManaged:    a.stripManaged,
+		RestoredMessage: "Restored OpenCode config to its pre-apply state.",
+		StrippedMessage: "No backup found; removed the MintSwitch provider from OpenCode config.",
+	})
 }
 
 // orphanRemnantAt reports whether the config file at path still carries the
@@ -245,7 +221,7 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 // never make Status error or Restore touch a file it could not safely
 // rewrite.
 func (a *Adapter) orphanRemnantAt(path string) bool {
-	root, err := readConfig(path)
+	root, err := core.ReadJSONObject(path)
 	if err != nil {
 		return false
 	}
@@ -261,7 +237,7 @@ func (a *Adapter) orphanRemnantAt(path string) bool {
 // on the managed signal (provider.mintrouter present) so an unmanaged file is
 // never rewritten; it never creates the file.
 func (a *Adapter) stripManaged(path string) (bool, error) {
-	root, err := readConfig(path)
+	root, err := core.ReadJSONObject(path)
 	if err != nil {
 		return false, err
 	}
@@ -278,7 +254,7 @@ func (a *Adapter) stripManaged(path string) (bool, error) {
 	if m, _ := root["model"].(string); strings.HasPrefix(m, providerID+"/") {
 		delete(root, "model")
 	}
-	return true, writeConfig(path, root)
+	return true, core.WriteJSONObjectAtomic(path, root)
 }
 
 // StripLegacyMarker removes the legacy top-level marker key from opencode.json,
@@ -287,17 +263,14 @@ func (a *Adapter) stripManaged(path string) (bool, error) {
 // marker; it never creates the file.
 func (a *Adapter) StripLegacyMarker() error {
 	path := a.configPath()
-	root, err := readConfig(path)
+	root, err := core.ReadJSONObject(path)
 	if err != nil {
 		return err
-	}
-	if root == nil {
-		return nil
 	}
 	if _, present := root[core.MarkerKey]; !present {
 		return nil
 	}
-	if legacy, ok := extractLegacyMarker(root); ok && legacy.Managed {
+	if legacy, ok := core.ExtractLegacyMarker(root); ok && legacy.Managed {
 		if _, inStore, err := a.m.Get(id); err == nil && !inStore {
 			if err := a.m.Put(id, legacy); err != nil {
 				return err
@@ -305,53 +278,5 @@ func (a *Adapter) StripLegacyMarker() error {
 		}
 	}
 	delete(root, core.MarkerKey)
-	return writeConfig(path, root)
-}
-
-// readConfig reads and parses the JSON config file. A missing file returns a
-// nil map and no error.
-func readConfig(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if len(data) == 0 {
-		return map[string]any{}, nil
-	}
-	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
-		return nil, err
-	}
-	if root == nil {
-		root = map[string]any{}
-	}
-	return root, nil
-}
-
-// writeConfig writes the config as indented JSON, atomically and with
-// restrictive permissions, creating parent directories as needed.
-func writeConfig(path string, root map[string]any) error {
 	return core.WriteJSONObjectAtomic(path, root)
-}
-
-// extractLegacyMarker pulls a legacy in-file MintSwitch marker out of the
-// parsed config. It reports false when the key is absent or its value does not
-// decode as a [core.Marker].
-func extractLegacyMarker(root map[string]any) (core.Marker, bool) {
-	raw, ok := root[core.MarkerKey]
-	if !ok {
-		return core.Marker{}, false
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return core.Marker{}, false
-	}
-	var m core.Marker
-	if err := json.Unmarshal(b, &m); err != nil {
-		return core.Marker{}, false
-	}
-	return m, true
 }

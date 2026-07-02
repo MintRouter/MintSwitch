@@ -24,10 +24,6 @@
 package claudecode
 
 import (
-	"encoding/json"
-	"errors"
-	"io/fs"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -120,11 +116,11 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
-	m, err := readJSON(path)
+	m, err := core.ReadJSONObject(path)
 	if err != nil {
 		return core.StatusDefault, "", err
 	}
-	if _, present := asObject(m[envKey])[envBaseURL]; !present {
+	if _, present := core.AsJSONObject(m[envKey])[envBaseURL]; !present {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
@@ -153,7 +149,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 	path := a.settingsPath()
-	m, err := readJSON(path)
+	m, err := core.ReadJSONObject(path)
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
@@ -162,7 +158,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 	var backupPath string
-	legacy, hasLegacy := extractLegacyMarker(m)
+	legacy, hasLegacy := core.ExtractLegacyMarker(m)
 	if !inStore && !(hasLegacy && legacy.Managed) {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
@@ -170,7 +166,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		}
 	}
 
-	env := asObject(m[envKey])
+	env := core.AsJSONObject(m[envKey])
 	env[envBaseURL] = stripV1Suffix(p.BaseURL)
 	env[envAuthToken] = p.APIKey
 	env[envModel] = p.Model
@@ -182,7 +178,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	m[envKey] = env
 	delete(m, core.MarkerKey)
 
-	if err := writeJSON(path, m); err != nil {
+	if err := core.WriteJSONObjectAtomic(path, m); err != nil {
 		return core.ApplyResult{}, err
 	}
 	if err := a.m.Put(id, core.NewMarker(p, p.Label)); err != nil {
@@ -204,33 +200,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // to stripping the managed env keys, preserving every other setting. It is a
 // safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
-	path := a.settingsPath()
-	_, inStore, err := a.m.Get(id)
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	restored, entry, err := a.e.RestorePristine(path)
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	stripped := false
-	if !restored && (inStore || a.orphanRemnantAt(path)) {
-		stripped, err = a.stripManaged(path)
-		if err != nil {
-			return core.RestoreResult{}, err
-		}
-	}
-	if err := a.m.Delete(id); err != nil {
-		return core.RestoreResult{}, err
-	}
-	msg := "No backup found; nothing to restore."
-	switch {
-	case restored:
-		msg = "Restored Claude Code settings.json to its pre-apply state."
-	case stripped:
-		msg = "No backup found; removed the MintSwitch-managed env keys from Claude Code settings.json."
-	}
-	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+	return core.RestoreSingleFile(core.SingleFileRestore{
+		ToolID:          id,
+		Path:            a.settingsPath(),
+		Store:           a.m,
+		RestorePristine: a.e.RestorePristine,
+		OrphanRemnantAt: a.orphanRemnantAt,
+		StripManaged:    a.stripManaged,
+		RestoredMessage: "Restored Claude Code settings.json to its pre-apply state.",
+		StrippedMessage: "No backup found; removed the MintSwitch-managed env keys from Claude Code settings.json.",
+	})
 }
 
 // orphanRemnantAt reports whether the settings file at path still carries the
@@ -244,11 +223,11 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 // never shows Restore or gets stripped by mistake. A missing or corrupt file
 // is never a remnant.
 func (a *Adapter) orphanRemnantAt(path string) bool {
-	m, err := readJSON(path)
+	m, err := core.ReadJSONObject(path)
 	if err != nil {
 		return false
 	}
-	env := asObject(m[envKey])
+	env := core.AsJSONObject(m[envKey])
 	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
 		if _, ok := env[k]; !ok {
 			return false
@@ -264,11 +243,11 @@ func (a *Adapter) orphanRemnantAt(path string) bool {
 // be surgically dropped. Gated on the managed signal (env.ANTHROPIC_BASE_URL
 // present) so an unmanaged file is never rewritten; it never creates the file.
 func (a *Adapter) stripManaged(path string) (bool, error) {
-	m, err := readJSON(path)
+	m, err := core.ReadJSONObject(path)
 	if err != nil {
 		return false, err
 	}
-	env := asObject(m[envKey])
+	env := core.AsJSONObject(m[envKey])
 	if _, present := env[envBaseURL]; !present {
 		return false, nil
 	}
@@ -280,7 +259,7 @@ func (a *Adapter) stripManaged(path string) (bool, error) {
 	} else {
 		m[envKey] = env
 	}
-	return true, writeJSON(path, m)
+	return true, core.WriteJSONObjectAtomic(path, m)
 }
 
 // StripLegacyMarker removes the legacy top-level marker key from settings.json,
@@ -289,11 +268,11 @@ func (a *Adapter) stripManaged(path string) (bool, error) {
 // marker; it never creates the file.
 func (a *Adapter) StripLegacyMarker() error {
 	path := a.settingsPath()
-	m, err := readJSON(path)
+	m, err := core.ReadJSONObject(path)
 	if err != nil {
 		return err
 	}
-	legacy, ok := extractLegacyMarker(m)
+	legacy, ok := core.ExtractLegacyMarker(m)
 	if !ok {
 		if _, present := m[core.MarkerKey]; !present {
 			return nil
@@ -307,42 +286,13 @@ func (a *Adapter) StripLegacyMarker() error {
 		}
 	}
 	delete(m, core.MarkerKey)
-	return writeJSON(path, m)
+	return core.WriteJSONObjectAtomic(path, m)
 }
 
 var (
 	_ core.ToolAdapter          = (*Adapter)(nil)
 	_ core.LegacyMarkerStripper = (*Adapter)(nil)
 )
-
-// readJSON reads path as a JSON object. A missing file yields an empty object.
-func readJSON(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return map[string]any{}, nil
-		}
-		return nil, err
-	}
-	if len(data) == 0 {
-		return map[string]any{}, nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-	if m == nil {
-		m = map[string]any{}
-	}
-	return m, nil
-}
-
-// writeJSON writes m as indented JSON to path atomically, creating parent
-// dirs. The file is written with 0600 perms since it contains the profile's
-// auth token.
-func writeJSON(path string, m map[string]any) error {
-	return core.WriteJSONObjectAtomic(path, m)
-}
 
 // stripV1Suffix removes exactly one trailing "/v1" path segment from baseURL
 // (ignoring a trailing slash), since Claude Code appends "/v1/messages" to
@@ -354,31 +304,4 @@ func stripV1Suffix(baseURL string) string {
 		return strings.TrimSuffix(trimmed, "/v1")
 	}
 	return baseURL
-}
-
-// asObject returns v as a JSON object, or a fresh object if v is not one.
-func asObject(v any) map[string]any {
-	if obj, ok := v.(map[string]any); ok {
-		return obj
-	}
-	return map[string]any{}
-}
-
-// extractLegacyMarker pulls a legacy in-file MintSwitch marker out of a parsed
-// settings object. It reports false when the key is absent or its value does
-// not decode as a [core.Marker].
-func extractLegacyMarker(m map[string]any) (core.Marker, bool) {
-	raw, ok := m[core.MarkerKey]
-	if !ok {
-		return core.Marker{}, false
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return core.Marker{}, false
-	}
-	var marker core.Marker
-	if err := json.Unmarshal(b, &marker); err != nil {
-		return core.Marker{}, false
-	}
-	return marker, true
 }

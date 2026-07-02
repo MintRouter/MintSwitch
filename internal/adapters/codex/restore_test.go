@@ -300,7 +300,7 @@ func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
 	if cfg["other"] != "keep" {
 		t.Fatalf("user config key must be preserved: %v", cfg)
 	}
-	auth, err := readJSON(authPath)
+	auth, err := core.ReadJSONObject(authPath)
 	if err != nil {
 		t.Fatal(err)
 	}

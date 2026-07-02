@@ -440,7 +440,7 @@ func TestRestoreNoBackupStripsManagedProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := readConfig(path)
+	root, err := core.ReadJSONObject(path)
 	if err != nil {
 		t.Fatal(err)
 	}

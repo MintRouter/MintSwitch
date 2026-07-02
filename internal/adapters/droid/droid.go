@@ -159,7 +159,8 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 	var backupPath string
-	if _, hasLegacy := extractMarker(root); !inStore && !hasLegacy {
+	legacy, hasLegacy := core.ExtractLegacyMarker(root)
+	if !inStore && !(hasLegacy && legacy.Managed) {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
 			return core.ApplyResult{}, err
@@ -192,33 +193,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // stripping the managed entry, preserving every other setting. It is a safe
 // no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
-	path := a.configPath()
-	_, inStore, err := a.m.Get(a.ID())
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	restored, entry, err := a.e.RestorePristine(path)
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	stripped := false
-	if !restored && (inStore || a.orphanRemnantAt(path)) {
-		stripped, err = a.stripManaged(path)
-		if err != nil {
-			return core.RestoreResult{}, err
-		}
-	}
-	if err := a.m.Delete(a.ID()); err != nil {
-		return core.RestoreResult{}, err
-	}
-	msg := "No backup found; nothing to restore."
-	switch {
-	case restored:
-		msg = "Restored Factory Droid settings to their pre-apply state."
-	case stripped:
-		msg = "No backup found; removed the MintSwitch custom model from Factory Droid settings."
-	}
-	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+	return core.RestoreSingleFile(core.SingleFileRestore{
+		ToolID:          a.ID(),
+		Path:            a.configPath(),
+		Store:           a.m,
+		RestorePristine: a.e.RestorePristine,
+		OrphanRemnantAt: a.orphanRemnantAt,
+		StripManaged:    a.stripManaged,
+		RestoredMessage: "Restored Factory Droid settings to their pre-apply state.",
+		StrippedMessage: "No backup found; removed the MintSwitch custom model from Factory Droid settings.",
+	})
 }
 
 // orphanRemnantAt reports whether the settings file at path still carries the
@@ -260,13 +244,13 @@ func (a *Adapter) StripLegacyMarker() error {
 	if err != nil {
 		return err
 	}
-	legacy, ok := extractMarker(root)
+	legacy, ok := core.ExtractLegacyMarker(root)
 	if !ok {
 		if _, present := root[core.MarkerKey]; !present {
 			return nil
 		}
 	}
-	if ok {
+	if ok && legacy.Managed {
 		if _, inStore, err := a.m.Get(a.ID()); err == nil && !inStore {
 			if err := a.m.Put(a.ID(), legacy); err != nil {
 				return err

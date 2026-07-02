@@ -565,11 +565,11 @@ func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := readJSON(path)
+	m, err := core.ReadJSONObject(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := asObject(m[envKey])
+	env := core.AsJSONObject(m[envKey])
 	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
 		if _, present := env[k]; present {
 			t.Fatalf("managed key %s must be stripped: %v", k, env)

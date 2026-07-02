@@ -695,3 +695,32 @@ func TestPureUserConfigNeverOrphan(t *testing.T) {
 		t.Fatalf("pure user config rewritten (comments lost): %q", got)
 	}
 }
+
+// TestFingerprintProfileIgnoresOnlyAPIKey is the anti-drift guard for Zed's
+// deliberate fingerprint divergence: the API key (never written to
+// settings.json; provided via MINTROUTER_API_KEY) must not affect the
+// fingerprint, while every other managed field still must. If this fails,
+// fingerprintProfile drifted from the contract documented on it.
+func TestFingerprintProfileIgnoresOnlyAPIKey(t *testing.T) {
+	p := sampleProfile()
+	if fp := fingerprintProfile(p); fp.APIKey != "" {
+		t.Fatalf("fingerprintProfile must clear APIKey, got %q", fp.APIKey)
+	}
+	base := core.Fingerprint(fingerprintProfile(p))
+	rotated := p
+	rotated.APIKey = "sk-rotated-456"
+	if core.Fingerprint(fingerprintProfile(rotated)) != base {
+		t.Fatal("fingerprint must not change on API key rotation")
+	}
+	for name, mutate := range map[string]func(*core.Profile){
+		"BaseURL":        func(q *core.Profile) { q.BaseURL = "https://other.example.com/v1" },
+		"Model":          func(q *core.Profile) { q.Model = "other-model" },
+		"SmallFastModel": func(q *core.Profile) { q.SmallFastModel = "other-small" },
+	} {
+		q := p
+		mutate(&q)
+		if core.Fingerprint(fingerprintProfile(q)) == base {
+			t.Fatalf("fingerprint must change when %s changes", name)
+		}
+	}
+}

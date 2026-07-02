@@ -185,7 +185,8 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 	var backupPath string
-	if _, hasLegacy := extractMarker(root); !inStore && !hasLegacy {
+	legacy, hasLegacy := core.ExtractLegacyMarker(root)
+	if !inStore && !(hasLegacy && legacy.Managed) {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
 			return core.ApplyResult{}, err
@@ -246,33 +247,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // stripping the managed provider and agent default model, preserving every
 // other setting. It is a safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
-	path := a.configPath()
-	_, inStore, err := a.m.Get(a.ID())
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	restored, entry, err := a.e.RestorePristine(path)
-	if err != nil {
-		return core.RestoreResult{}, err
-	}
-	stripped := false
-	if !restored && (inStore || a.orphanRemnantAt(path)) {
-		stripped, err = a.stripManaged(path)
-		if err != nil {
-			return core.RestoreResult{}, err
-		}
-	}
-	if err := a.m.Delete(a.ID()); err != nil {
-		return core.RestoreResult{}, err
-	}
-	msg := "No backup found; nothing to restore."
-	switch {
-	case restored:
-		msg = "Restored Zed settings to their pre-apply state."
-	case stripped:
-		msg = "No backup found; removed the MintSwitch provider from Zed settings."
-	}
-	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+	return core.RestoreSingleFile(core.SingleFileRestore{
+		ToolID:          a.ID(),
+		Path:            a.configPath(),
+		Store:           a.m,
+		RestorePristine: a.e.RestorePristine,
+		OrphanRemnantAt: a.orphanRemnantAt,
+		StripManaged:    a.stripManaged,
+		RestoredMessage: "Restored Zed settings to their pre-apply state.",
+		StrippedMessage: "No backup found; removed the MintSwitch provider from Zed settings.",
+	})
 }
 
 // orphanRemnantAt reports whether the settings file at path still carries the
@@ -346,13 +330,13 @@ func (a *Adapter) StripLegacyMarker() error {
 	if root == nil {
 		return nil
 	}
-	legacy, ok := extractMarker(root)
+	legacy, ok := core.ExtractLegacyMarker(root)
 	if !ok {
 		if _, present := root[core.MarkerKey]; !present {
 			return nil
 		}
 	}
-	if ok {
+	if ok && legacy.Managed {
 		if _, inStore, err := a.m.Get(a.ID()); err == nil && !inStore {
 			if err := a.m.Put(a.ID(), legacy); err != nil {
 				return err
@@ -390,19 +374,16 @@ func readConfig(path string) (map[string]any, error) {
 // writeConfig writes the settings as indented JSON, atomically and with
 // restrictive permissions, creating parent directories as needed.
 func writeConfig(path string, root map[string]any) error {
-	data, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return core.WriteFileAtomic(path, data, 0o600)
+	return core.WriteJSONObjectAtomic(path, root)
 }
 
 // fingerprintProfile returns a copy of the profile with the APIKey cleared,
 // for fingerprinting only. Zed never writes the API key to settings.json (it
 // is provided via MINTROUTER_API_KEY), so including it in the fingerprint
 // would make Status report ModifiedExternally after a key rotation even
-// though the managed file is unchanged.
+// though the managed file is unchanged. This deliberately diverges from the
+// other adapters, which fingerprint the full profile via core.Fingerprint;
+// TestFingerprintProfileIgnoresOnlyAPIKey guards against drift.
 func fingerprintProfile(p core.Profile) core.Profile {
 	p.APIKey = ""
 	return p
@@ -415,24 +396,4 @@ func hasManagedProvider(root map[string]any) bool {
 	compatible, _ := languageModels["openai_compatible"].(map[string]any)
 	_, ok := compatible[providerID]
 	return ok
-}
-
-// extractMarker decodes the MintSwitch marker from the parsed settings, if present.
-func extractMarker(root map[string]any) (core.Marker, bool) {
-	raw, ok := root[core.MarkerKey]
-	if !ok {
-		return core.Marker{}, false
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return core.Marker{}, false
-	}
-	var m core.Marker
-	if err := json.Unmarshal(b, &m); err != nil {
-		return core.Marker{}, false
-	}
-	if !m.Managed {
-		return core.Marker{}, false
-	}
-	return m, true
 }
