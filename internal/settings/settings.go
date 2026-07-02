@@ -9,8 +9,11 @@ package settings
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"mintswitch/internal/core"
 )
@@ -42,10 +45,32 @@ type State struct {
 // It defaults to true when unset (see [State.ContextEngineDisabled]).
 func (s *State) ContextEngineEnabled() bool { return !s.ContextEngineDisabled }
 
+// SecretStore stores the active profile's API key outside the settings file
+// (in the OS keychain). Get returns ("", false, nil) when no key is stored;
+// any other error means the backing keychain is unavailable, in which case
+// the Store falls back to keeping the key in the settings file as before.
+type SecretStore interface {
+	Get() (value string, found bool, err error)
+	Set(value string) error
+}
+
 // Store loads and saves a [State] from a single JSON file.
 type Store struct {
 	// Path is the settings file location (e.g. DataDir/settings.json).
 	Path string
+	// Secrets, when non-nil, holds the active profile's API key in the OS
+	// keychain: Save moves a non-empty key there (clearing it from the file
+	// only after the keychain write succeeded) and Load re-populates it into
+	// the returned State. When nil (the default, and in tests), the key is
+	// kept in the file exactly as before.
+	Secrets SecretStore
+
+	// secMu guards the key cache below. The cache avoids re-reading the
+	// keychain (a subprocess on macOS) on every Load; only successful reads
+	// and writes are cached.
+	secMu     sync.Mutex
+	secKey    string
+	secCached bool
 }
 
 // NewStore returns a Store backed by the given file path.
@@ -53,6 +78,11 @@ func NewStore(path string) *Store { return &Store{Path: path} }
 
 // Load reads the persisted state. A missing file is not an error: an empty
 // State is returned so first-run callers need no special handling.
+//
+// When Secrets is set and the file carries no api_key, the active profile's
+// key is filled in from the keychain, so callers always see a complete State.
+// A key still present in the file (keychain unavailable, or not yet migrated)
+// is used as-is.
 func (s *Store) Load() (*State, error) {
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
@@ -65,14 +95,90 @@ func (s *Store) Load() (*State, error) {
 	if err := json.Unmarshal(data, &st); err != nil {
 		return nil, err
 	}
+	if s.Secrets != nil && st.ActiveProfile != nil && strings.TrimSpace(st.ActiveProfile.APIKey) == "" {
+		if v, ok, err := s.getSecret(); err == nil && ok {
+			st.ActiveProfile.APIKey = v
+		}
+	}
 	return &st, nil
+}
+
+// MigrateAPIKey moves an api_key found in the settings file into the keychain
+// and rewrites the file without it. It is idempotent: once the file carries no
+// key it is a no-op, so it is safe to call on every startup. When the keychain
+// write fails the file is left carrying the key exactly as before (Save's
+// fallback), so the key is never lost. It is a no-op when Secrets is nil.
+func (s *Store) MigrateAPIKey() error {
+	if s.Secrets == nil {
+		return nil
+	}
+	data, err := os.ReadFile(s.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var st State
+	if err := json.Unmarshal(data, &st); err != nil {
+		return err
+	}
+	if st.ActiveProfile == nil || strings.TrimSpace(st.ActiveProfile.APIKey) == "" {
+		return nil
+	}
+	return s.Save(&st)
+}
+
+// getSecret reads the API key from the keychain, serving repeat calls from
+// the in-memory cache. Only successful, found reads are cached.
+func (s *Store) getSecret() (string, bool, error) {
+	s.secMu.Lock()
+	defer s.secMu.Unlock()
+	if s.secCached {
+		return s.secKey, true, nil
+	}
+	v, ok, err := s.Secrets.Get()
+	if err != nil || !ok {
+		return "", false, err
+	}
+	s.secKey, s.secCached = v, true
+	return v, true, nil
+}
+
+// setSecret writes the API key to the keychain and updates the cache on
+// success. The key value itself must never be logged by callers.
+func (s *Store) setSecret(v string) error {
+	s.secMu.Lock()
+	defer s.secMu.Unlock()
+	if err := s.Secrets.Set(v); err != nil {
+		return err
+	}
+	s.secKey, s.secCached = v, true
+	return nil
 }
 
 // Save writes the state atomically: it marshals to JSON, writes a sibling temp
 // file with 0600 permissions, then renames it over the target path.
+//
+// When Secrets is set and st carries a non-empty profile API key, the key is
+// first written to the keychain; only after that write succeeds is the file
+// persisted with an empty api_key (the caller's st is never mutated). If the
+// keychain write fails, a warning is logged (never the value) and the key is
+// kept in the file as before, so it is never lost.
 func (s *Store) Save(st *State) error {
 	if st == nil {
 		st = &State{}
+	}
+	if s.Secrets != nil && st.ActiveProfile != nil && strings.TrimSpace(st.ActiveProfile.APIKey) != "" {
+		if err := s.setSecret(st.ActiveProfile.APIKey); err != nil {
+			log.Printf("settings: OS keychain unavailable, keeping api_key in settings file: %v", err)
+		} else {
+			cp := *st
+			p := *st.ActiveProfile
+			p.APIKey = ""
+			cp.ActiveProfile = &p
+			st = &cp
+		}
 	}
 	dir := filepath.Dir(s.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

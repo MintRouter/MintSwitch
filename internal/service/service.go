@@ -42,6 +42,7 @@ import (
 	"mintswitch/internal/installer"
 	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
+	"mintswitch/internal/secrets"
 	"mintswitch/internal/settings"
 )
 
@@ -133,7 +134,17 @@ func New() (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewWithDeps(r, backup.NewEngine(r.BackupsDir())), nil
+	s := NewWithDeps(r, backup.NewEngine(r.BackupsDir()))
+	// Store the profile API key in the OS keychain (real environment only —
+	// NewWithDeps stays file-only so tests never touch the user's keychain).
+	// Migration is idempotent and never deletes the key from the file before
+	// the keychain write succeeded; a failure just keeps the old plaintext
+	// behaviour, so it must not abort startup.
+	s.store.Secrets = secrets.New()
+	if err := s.store.MigrateAPIKey(); err != nil {
+		log.Printf("settings: api_key keychain migration skipped: %v", err)
+	}
+	return s, nil
 }
 
 // NewWithDeps builds a Service from an injected Resolver and backup Engine,

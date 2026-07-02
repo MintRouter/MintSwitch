@@ -1,10 +1,12 @@
 package settings
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"mintswitch/internal/core"
@@ -155,5 +157,156 @@ func TestSaveNilState(t *testing.T) {
 	}
 	if st.ActiveProfile != nil {
 		t.Fatal("expected empty state from nil save")
+	}
+}
+
+// fakeSecrets is an in-memory SecretStore. A non-nil setErr makes Set fail,
+// simulating an unavailable keychain (e.g. headless Linux).
+type fakeSecrets struct {
+	key    string
+	has    bool
+	sets   int
+	setErr error
+}
+
+func (f *fakeSecrets) Get() (string, bool, error) { return f.key, f.has, nil }
+func (f *fakeSecrets) Set(v string) error {
+	f.sets++
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.key, f.has = v, true
+	return nil
+}
+
+// mustNotContain fails the test when the raw settings file contains the
+// secret value.
+func mustNotContain(t *testing.T, path, secret string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read settings file: %v", err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatal("settings file still contains the api_key value")
+	}
+}
+
+// TestSaveMovesAPIKeyToSecrets proves Save routes the profile key to the
+// SecretStore, keeps it out of the file, does not mutate the caller's state,
+// and Load returns a State with the key filled back in from the keychain.
+func TestSaveMovesAPIKeyToSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s := NewStore(path)
+	fs := &fakeSecrets{}
+	s.Secrets = fs
+
+	in := &State{ActiveProfile: &core.Profile{
+		Label: "work", APIKey: "sk-secret", BaseURL: "https://h", Model: "m",
+	}}
+	if err := s.Save(in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if in.ActiveProfile.APIKey != "sk-secret" {
+		t.Fatal("Save mutated the caller's state")
+	}
+	if fs.key != "sk-secret" {
+		t.Fatalf("secret store key = %q, want sk-secret", fs.key)
+	}
+	mustNotContain(t, path, "sk-secret")
+
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if out.ActiveProfile == nil || out.ActiveProfile.APIKey != "sk-secret" {
+		t.Fatalf("Load did not restore key from secrets: %+v", out.ActiveProfile)
+	}
+}
+
+// TestMigrateAPIKey proves the startup migration: a key sitting in the file
+// moves into the SecretStore and the file is rewritten without it, and a
+// second run is an idempotent no-op (no extra keychain writes).
+func TestMigrateAPIKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := NewStore(path).Save(&State{ActiveProfile: &core.Profile{
+		Label: "work", APIKey: "sk-secret", BaseURL: "https://h", Model: "m",
+	}}); err != nil {
+		t.Fatalf("seed plaintext settings: %v", err)
+	}
+
+	s := NewStore(path)
+	fs := &fakeSecrets{}
+	s.Secrets = fs
+	if err := s.MigrateAPIKey(); err != nil {
+		t.Fatalf("MigrateAPIKey: %v", err)
+	}
+	if fs.key != "sk-secret" {
+		t.Fatalf("secret store key = %q, want sk-secret", fs.key)
+	}
+	mustNotContain(t, path, "sk-secret")
+
+	// Second run: file carries no key, so nothing is written again.
+	if err := s.MigrateAPIKey(); err != nil {
+		t.Fatalf("MigrateAPIKey (2nd run): %v", err)
+	}
+	if fs.sets != 1 {
+		t.Fatalf("keychain writes = %d, want 1 (idempotent)", fs.sets)
+	}
+	mustNotContain(t, path, "sk-secret")
+
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load after migration: %v", err)
+	}
+	if out.ActiveProfile == nil || out.ActiveProfile.APIKey != "sk-secret" {
+		t.Fatalf("key not readable after migration: %+v", out.ActiveProfile)
+	}
+}
+
+// TestSaveKeepsKeyInFileWhenKeychainFails proves the fallback: when the
+// SecretStore write fails, the key stays in the file exactly as before (never
+// lost) and a plain round-trip still works.
+func TestSaveKeepsKeyInFileWhenKeychainFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s := NewStore(path)
+	s.Secrets = &fakeSecrets{setErr: errors.New("no secret service")}
+
+	in := &State{ActiveProfile: &core.Profile{
+		Label: "work", APIKey: "sk-secret", BaseURL: "https://h", Model: "m",
+	}}
+	if err := s.Save(in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "sk-secret") {
+		t.Fatal("fallback should keep the api_key in the file when the keychain fails")
+	}
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if out.ActiveProfile == nil || out.ActiveProfile.APIKey != "sk-secret" {
+		t.Fatalf("key lost on keychain failure: %+v", out.ActiveProfile)
+	}
+	if err := s.MigrateAPIKey(); err != nil {
+		t.Fatalf("MigrateAPIKey with failing keychain: %v", err)
+	}
+	mustContainAfterFailedMigration(t, path)
+}
+
+// mustContainAfterFailedMigration asserts the key survived a migration whose
+// keychain write failed.
+func mustContainAfterFailedMigration(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "sk-secret") {
+		t.Fatal("failed migration must leave the api_key in the file")
 	}
 }
