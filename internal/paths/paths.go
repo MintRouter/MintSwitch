@@ -17,7 +17,8 @@ type Resolver struct {
 	// Home is the user's home directory (e.g. "/Users/alice").
 	Home string
 	// DataDir is MintSwitch's own data directory where backups and settings
-	// live (e.g. "~/Library/Application Support/mintswitch").
+	// live (e.g. "~/Library/Application Support/mintswitch" in production
+	// builds, ".../mintswitch-dev" in dev builds; see dataDirName).
 	DataDir string
 	// ConfigHome, when non-empty, overrides the XDG config base directory. When
 	// empty, [Resolver.ConfigDir] falls back to Home/.config.
@@ -41,8 +42,9 @@ type Resolver struct {
 }
 
 // NewResolver builds a Resolver from the current environment. Home defaults to
-// os.UserHomeDir, DataDir to os.UserConfigDir()+"/mintswitch", and ConfigHome
-// to the XDG_CONFIG_HOME environment variable (if set).
+// os.UserHomeDir, DataDir to os.UserConfigDir()+"/"+dataDirName ("mintswitch"
+// in production builds, "mintswitch-dev" otherwise), and ConfigHome to the
+// XDG_CONFIG_HOME environment variable (if set).
 func NewResolver() (*Resolver, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -54,7 +56,7 @@ func NewResolver() (*Resolver, error) {
 	}
 	return &Resolver{
 		Home:            home,
-		DataDir:         filepath.Join(cfg, "mintswitch"),
+		DataDir:         filepath.Join(cfg, dataDirName),
 		ConfigHome:      os.Getenv("XDG_CONFIG_HOME"),
 		NativeConfigDir: cfg,
 		CodexHome:       os.Getenv("CODEX_HOME"),

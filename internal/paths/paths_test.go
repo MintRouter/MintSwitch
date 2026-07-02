@@ -63,8 +63,8 @@ func TestNewResolverUsesXDGEnv(t *testing.T) {
 	if r.ConfigHome != xdg {
 		t.Errorf("ConfigHome = %q, want %q", r.ConfigHome, xdg)
 	}
-	if filepath.Base(r.DataDir) != "mintswitch" {
-		t.Errorf("DataDir base = %q, want mintswitch", filepath.Base(r.DataDir))
+	if filepath.Base(r.DataDir) != dataDirName {
+		t.Errorf("DataDir base = %q, want %q", filepath.Base(r.DataDir), dataDirName)
 	}
 	if r.NativeConfigDir == "" {
 		t.Error("NativeConfigDir empty; want os.UserConfigDir value")
