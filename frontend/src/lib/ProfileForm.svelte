@@ -509,8 +509,12 @@
   }
 
   /* Add row: Model ID + optional Display name inputs side by side, each with a
-     small sub-label; the Add button aligns with the input boxes' bottom edge. */
+     small sub-label. All three controls pin one explicit height so the Add
+     button's box exactly equals the input boxes (same px, same bottom edge);
+     both already share the 8px --radius-sm corner language. */
   .model-add { display: flex; gap: var(--s-1); align-items: flex-end; }
+  .model-add .field-input,
+  .model-add .btn-primary { height: 36px; }
   .model-add-field {
     flex: 1 1 0;
     min-width: 0;
@@ -550,7 +554,7 @@
     align-items: stretch;
     min-width: 0;
     max-width: 100%;
-    min-height: 36.5px; /* matches .field-input box height so add-row + chips read level */
+    min-height: 36px; /* matches the pinned add-row control height so chips read level */
     border: 1px solid transparent; /* reserves ring space; shown only on unselected hover */
     border-radius: 7px;
     background: transparent;
