@@ -83,6 +83,8 @@ var packages = map[string]Package{
 	"claude-code": {NpmPackage: "@anthropic-ai/claude-code"},
 	"codex":       {NpmPackage: "@openai/codex"},
 	"opencode":    {NpmPackage: "opencode-ai"},
+	"droid":       {NpmPackage: "droid"},
+	"kilo":        {NpmPackage: "@kilocode/cli"},
 }
 
 // Spec returns the whitelisted package for toolID and whether it is known.
