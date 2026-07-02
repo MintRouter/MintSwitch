@@ -1,0 +1,289 @@
+package zed
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"mintswitch/internal/backup"
+	"mintswitch/internal/core"
+	"mintswitch/internal/paths"
+)
+
+func newAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
+	t.Helper()
+	home := t.TempDir()
+	data := t.TempDir()
+	r := &paths.Resolver{Home: home, DataDir: data}
+	a := New(r, backup.NewEngine(r.BackupsDir()))
+	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	a.appBundles = []string{r.Join("Applications", "Zed.app")}
+	return a, r
+}
+
+func sampleProfile() core.Profile {
+	return core.Profile{
+		Label:   "work",
+		APIKey:  "sk-secret-123",
+		BaseURL: "https://router.example.com/v1",
+		Model:   "gpt-mint",
+	}
+}
+
+func readJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal %s: %v", path, err)
+	}
+	return m
+}
+
+func TestIDName(t *testing.T) {
+	a, _ := newAdapter(t)
+	if a.ID() != "zed" || a.Name() != "Zed" {
+		t.Fatalf("unexpected id/name: %q %q", a.ID(), a.Name())
+	}
+}
+
+// TestDetect proves the contract: a leftover settings dir is NOT an installed
+// signal; only a resolvable "zed" binary or a Zed.app bundle is.
+func TestDetect(t *testing.T) {
+	a, r := newAdapter(t)
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("expected not installed with empty home")
+	}
+	if err := os.MkdirAll(filepath.Dir(a.configPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("settings dir present + binary/bundle absent must be NOT installed")
+	}
+
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	if installed, path := a.Detect(); !installed || path != r.ConfigJoin("zed", "settings.json") {
+		t.Fatalf("expected installed via PATH binary, got %v %q", installed, path)
+	}
+}
+
+func TestDetectAppBundle(t *testing.T) {
+	a, r := newAdapter(t)
+	if err := os.MkdirAll(r.Join("Applications", "Zed.app"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if installed, _ := a.Detect(); !installed {
+		t.Fatal("expected installed via app bundle")
+	}
+}
+
+func TestApplyNewFileAndStatus(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	if st, _, _ := a.Status(p); st != core.StatusNotInstalled {
+		t.Fatalf("expected NotInstalled, got %v", st)
+	}
+	// Binary resolvable from here so Status reaches the settings-reading branch.
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !strings.Contains(res.Message, "MINTROUTER_API_KEY") {
+		t.Fatalf("apply message must mention MINTROUTER_API_KEY: %q", res.Message)
+	}
+	root := readJSON(t, res.ChangedPath)
+	lm := root["language_models"].(map[string]any)
+	prov := lm["openai_compatible"].(map[string]any)[providerID].(map[string]any)
+	if prov["api_url"] != p.BaseURL {
+		t.Fatalf("api_url = %v", prov["api_url"])
+	}
+	models := prov["available_models"].([]any)
+	if len(models) != 1 {
+		t.Fatalf("expected one model, got %v", models)
+	}
+	m := models[0].(map[string]any)
+	if m["name"] != p.Model || m["display_name"] != p.Model || m["max_tokens"] != float64(modelMaxTokens) {
+		t.Fatalf("model entry wrong: %v", m)
+	}
+	dm := root["agent"].(map[string]any)["default_model"].(map[string]any)
+	if dm["provider"] != providerID || dm["model"] != p.Model {
+		t.Fatalf("default_model wrong: %v", dm)
+	}
+	if st, detail, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("expected AppliedByMintSwitch, got %v", st)
+	} else if !strings.Contains(detail, "MINTROUTER_API_KEY") {
+		t.Fatalf("applied detail must mention MINTROUTER_API_KEY: %q", detail)
+	}
+	other := sampleProfile()
+	other.Model = "different"
+	if st, _, _ := a.Status(other); st != core.StatusModifiedExternally {
+		t.Fatalf("expected ModifiedExternally, got %v", st)
+	}
+}
+
+// TestApplyNeverWritesAPIKey is the Zed-specific safety contract: the profile
+// API key must never appear anywhere in settings.json.
+func TestApplyNeverWritesAPIKey(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	data, err := os.ReadFile(res.ChangedPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(data), p.APIKey) {
+		t.Fatal("API key must not be written to settings.json")
+	}
+}
+
+// TestApplyPreservesExistingKeys covers Zed's JSONC dialect: comments and
+// trailing commas must parse, and unrelated settings must survive Apply.
+func TestApplyPreservesExistingKeys(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{
+  // Zed settings with a comment
+  "theme": "One Dark", /* block comment */
+  "vim_mode": true,
+  "language_models": {
+    "anthropic": {"api_url": "https://api.anthropic.com"},
+  },
+  "agent": {"always_allow_tool_actions": false,},
+}`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	root := readJSON(t, path)
+	if root["theme"] != "One Dark" || root["vim_mode"] != true {
+		t.Fatalf("unrelated top-level keys not preserved: %v", root)
+	}
+	lm := root["language_models"].(map[string]any)
+	if _, ok := lm["anthropic"]; !ok {
+		t.Fatalf("existing provider not preserved: %v", lm)
+	}
+	if _, ok := lm["openai_compatible"].(map[string]any)[providerID]; !ok {
+		t.Fatalf("mintrouter provider missing: %v", lm)
+	}
+	agent := root["agent"].(map[string]any)
+	if agent["always_allow_tool_actions"] != false {
+		t.Fatalf("existing agent keys not preserved: %v", agent)
+	}
+	if _, ok := agent["default_model"]; !ok {
+		t.Fatalf("default_model missing: %v", agent)
+	}
+}
+
+func TestRestoreDeletesCreatedFile(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected file created: %v", err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected file removed, got err=%v", err)
+	}
+}
+
+// TestRestoreRevertsExisting proves comments survive the round trip via the
+// backup, even though the applied file is rewritten as plain JSON.
+func TestRestoreRevertsExisting(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("{\n  // keep me\n  \"vim_mode\": true,\n}\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("not byte-for-byte restored: %q", got)
+	}
+}
+
+func TestReApplyIdempotent(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	p := sampleProfile()
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply1: %v", err)
+	}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply2: %v", err)
+	}
+	root := readJSON(t, a.configPath())
+	compatible := root["language_models"].(map[string]any)["openai_compatible"].(map[string]any)
+	if len(compatible) != 1 {
+		t.Fatalf("expected single openai_compatible provider after re-apply, got %v", compatible)
+	}
+	models := compatible[providerID].(map[string]any)["available_models"].([]any)
+	if len(models) != 1 {
+		t.Fatalf("expected single model after re-apply, got %v", models)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("expected AppliedByMintSwitch after re-apply, got %v", st)
+	}
+}
+
+func TestRestoreNoBackupNoOp(t *testing.T) {
+	a, _ := newAdapter(t)
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if res.BackupPath != "" {
+		t.Fatalf("expected no backup path, got %q", res.BackupPath)
+	}
+}
+
+func TestStripJSONC(t *testing.T) {
+	in := `{
+  // line comment
+  "a": "with // not a comment and \" escape", /* block
+  spanning lines */
+  "b": [1, 2,],
+  "c": {"d": true,},
+}`
+	var m map[string]any
+	if err := json.Unmarshal(stripJSONC([]byte(in)), &m); err != nil {
+		t.Fatalf("unmarshal stripped: %v", err)
+	}
+	if m["a"] != `with // not a comment and " escape` {
+		t.Fatalf("string mangled: %v", m["a"])
+	}
+	if len(m["b"].([]any)) != 2 || m["c"].(map[string]any)["d"] != true {
+		t.Fatalf("structure wrong: %v", m)
+	}
+}
