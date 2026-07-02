@@ -45,12 +45,12 @@
     --text: #1a1a1c;           /* cool near-black */
     --muted: #6e6e73;          /* cool secondary text (AA on all light surfaces) */
 
-    /* Mint is the brand + primary accent (retires system blue). */
-    --accent: #0a7d57;         /* deep mint — 5.14:1 with white text (AA) */
+    /* MintRouter brand blue is the primary accent. */
+    --accent: #135bec;         /* brand blue — 5.62:1 with white text (AA) */
     --accent-text: #ffffff;
-    --brand: #0e8f63;          /* slightly brighter mint for identity moments */
+    --brand: #2f6ff2;          /* slightly brighter blue for identity moments */
     --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--surface));
-    --accent-soft-text: #096a4a; /* 5.60:1 on --accent-soft (AA) */
+    --accent-soft-text: #0f4fd6; /* 5.65:1 on --accent-soft (AA) */
 
     --border: rgba(22, 24, 31, 0.10);      /* cool hairline */
     --border-strong: rgba(22, 24, 31, 0.16);
@@ -60,14 +60,14 @@
     /* Low-saturation status tones. */
     --ok: #1e7d42;
     --warn: #995610;
-    --info: #1667c1;
+    --info: #0e7490;           /* cyan — distinct from blue accent; 4.96:1 on --surface-2 */
 
     /* Soft, layered, real depth — kept flat/modern (light cards sit nearly flush). */
     --shadow-card: 0 1px 2px rgba(15, 17, 23, 0.045), 0 3px 9px rgba(15, 17, 23, 0.045),
         0 0 0 0.5px rgba(15, 17, 23, 0.04);
     --shadow-pop: 0 8px 30px rgba(15, 17, 23, 0.16), 0 2px 8px rgba(15, 17, 23, 0.10),
         0 0 0 0.5px rgba(15, 17, 23, 0.06);
-    --focus: 0 0 0 2px rgba(10, 125, 87, 0.38);
+    --focus: 0 0 0 2px rgba(19, 91, 236, 0.38);
 
     color-scheme: light;
 }
@@ -80,11 +80,11 @@
     --text: #f2f2f4;
     --muted: #a0a0a8;          /* cool secondary text (AA on all dark surfaces) */
 
-    --accent: #2fbf8f;         /* measured mint on dark — 6.75:1 with ink text */
-    --accent-text: #06281d;    /* deep ink for crisp text on mint */
-    --brand: #46d6a0;          /* luminous mint for identity moments */
+    --accent: #4d8dff;         /* brand blue on dark — 5.38:1 with ink text (AA) */
+    --accent-text: #0a1a3a;    /* deep navy ink for crisp text on blue */
+    --brand: #7ab3ff;          /* luminous blue for identity moments */
     --accent-soft: color-mix(in srgb, var(--accent) 14%, var(--surface));
-    --accent-soft-text: #45d19e; /* 6.52:1 on --accent-soft (AA) */
+    --accent-soft-text: #82b4ff; /* 6.24:1 on --accent-soft (AA) */
 
     --border: rgba(240, 240, 245, 0.10);
     --border-strong: rgba(240, 240, 245, 0.18);
@@ -93,13 +93,13 @@
 
     --ok: #44c878;
     --warn: #eda23f;
-    --info: #7cc3f2;
+    --info: #4dd0e1;           /* cyan — distinct from blue accent; 7.78:1 on --surface-2 */
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.40), 0 4px 14px rgba(0, 0, 0, 0.35),
         0 0 0 0.5px rgba(0, 0, 0, 0.50);
     --shadow-pop: 0 12px 38px rgba(0, 0, 0, 0.60), 0 2px 10px rgba(0, 0, 0, 0.40),
         0 0 0 0.5px rgba(0, 0, 0, 0.60);
-    --focus: 0 0 0 2px rgba(47, 191, 143, 0.48);
+    --focus: 0 0 0 2px rgba(77, 141, 255, 0.48);
 
     color-scheme: dark;
 }
