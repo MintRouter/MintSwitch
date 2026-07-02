@@ -73,6 +73,10 @@ type Profile struct {
 	// currently selected one is Model, which must be a member when Models is
 	// non-empty. Adapters never read Models; they consume only Model.
 	Models []string `json:"models,omitempty"`
+	// ModelNames optionally maps a member of Models to a human-friendly display
+	// name shown by the UI. Adapters never read it; tool configs always receive
+	// the canonical model identifier. Missing entries fall back to the ID.
+	ModelNames map[string]string `json:"model_names,omitempty"`
 	// Model is the currently selected model identifier and the single value
 	// adapters write to tool configs. Required.
 	Model string `json:"model"`

@@ -302,6 +302,31 @@ func TestSaveProfileNormalizesModels(t *testing.T) {
 	}
 }
 
+// TestSaveProfileNormalizesModelNames: display names are trimmed, and entries
+// that are blank or reference a model absent from Models are dropped. The kept
+// names round-trip through GetProfile.
+func TestSaveProfileNormalizesModelNames(t *testing.T) {
+	svc := newTestService(t)
+	p := validProfile()
+	p.Model = "a"
+	p.Models = []string{"a", "b"}
+	p.ModelNames = map[string]string{
+		"a":     "  opus4.8  ",
+		"b":     "   ",
+		"ghost": "gone",
+	}
+	if err := svc.SaveProfile(p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if len(view.ModelNames) != 1 || view.ModelNames["a"] != "opus4.8" {
+		t.Fatalf("ModelNames = %v, want map[a:opus4.8]", view.ModelNames)
+	}
+}
+
 // TestSaveProfileModelAlreadyInModels: when the selected model is already a
 // member it is not duplicated and order is preserved.
 func TestSaveProfileModelAlreadyInModels(t *testing.T) {

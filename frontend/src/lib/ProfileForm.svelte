@@ -17,8 +17,10 @@
   let baseUrl = $state("");
   let apiKey = $state("");
   let models = $state<string[]>([]);
+  let modelNames = $state<Record<string, string>>({});
   let model = $state("");
   let newModel = $state("");
+  let newModelName = $state("");
   let errors = $state<Record<string, string>>({});
 
   // Seed the editable fields from the saved (non-secret) profile. Re-runs only
@@ -30,20 +32,39 @@
     label = profile.label ?? "";
     baseUrl = profile.base_url ?? "";
     models = profile.models ? [...profile.models] : [];
+    const seeded: Record<string, string> = {};
+    for (const [id, name] of Object.entries(profile.model_names ?? {})) {
+      if (name) seeded[id] = name;
+    }
+    modelNames = seeded;
     model = profile.model ?? "";
     apiKey = "";
   });
 
-  // Add the typed model to the list (trimmed, deduped). The first model added
-  // becomes the default automatically so a valid default is always present.
+  // What the UI shows for a model: its optional display name, falling back to
+  // the canonical ID (also for pre-display-name profiles with no names saved).
+  function displayName(m: string): string {
+    return modelNames[m] || m;
+  }
+
+  // Add the typed model to the list (trimmed, deduped by ID). The optional
+  // display name is stored alongside; re-adding an existing ID never duplicates
+  // it but a newly typed name updates its alias. The first model added becomes
+  // the default automatically so a valid default is always present.
   function addModel(): void {
-    const m = newModel.trim();
-    if (!m) return;
-    if (!models.includes(m)) {
-      models = [...models, m];
-      if (!model) model = m;
+    const id = newModel.trim();
+    if (!id) return;
+    const name = newModelName.trim();
+    if (!models.includes(id)) {
+      models = [...models, id];
+      if (!model) model = id;
+    }
+    if (name) {
+      modelNames = { ...modelNames, [id]: name };
     }
     newModel = "";
+    newModelName = "";
+    modelInputEl?.focus();
   }
 
   function onModelKeydown(e: KeyboardEvent): void {
@@ -53,10 +74,16 @@
     }
   }
 
-  // Remove a model; if it was the default, fall back to the first remaining
-  // model (or clear the default when none are left) so it's never orphaned.
+  // Remove a model (and its display name); if it was the default, fall back to
+  // the first remaining model (or clear the default when none are left) so it's
+  // never orphaned.
   function removeModel(m: string): void {
     models = models.filter((x) => x !== m);
+    if (m in modelNames) {
+      const next = { ...modelNames };
+      delete next[m];
+      modelNames = next;
+    }
     if (model === m) {
       model = models[0] ?? "";
     }
@@ -134,6 +161,7 @@
       api_key: apiKey,
       base_url: normalizedBase.url,
       models: models,
+      model_names: modelNames,
       model: model,
       // The Small / fast model field was removed from the UI; always send "" so
       // the Profile/binding shape stays unchanged (equivalent to the old "None").
@@ -153,11 +181,12 @@
   const normalizedBase = $derived(normalizeBaseUrl(baseUrl));
 
   // One-line description of the model list shown in the card: count (with
-  // correct plural) plus the current default, or an empty-state message.
+  // correct plural) plus the current default (by display name), or an
+  // empty-state message.
   const modelsSummary = $derived(
     models.length === 0
       ? "No models yet"
-      : `${models.length} model${models.length > 1 ? "s" : ""}${model ? ` · default ${model}` : ""}`,
+      : `${models.length} model${models.length > 1 ? "s" : ""}${model ? ` · default ${displayName(model)}` : ""}`,
   );
 </script>
 
@@ -244,14 +273,23 @@
       <h2 class="title" id="pf-models-title">Models</h2>
       <div class="add-body">
         <div class="field">
-          <label class="micro-label" for="pf-model-add">Add a model</label>
+          <span class="micro-label">Add a model</span>
           <div class="model-add">
-            <input class="field-input" id="pf-model-add" type="text" bind:value={newModel}
-              bind:this={modelInputEl}
-              placeholder="gpt-5.5" autocomplete="off" spellcheck="false"
-              onkeydown={onModelKeydown}
-              aria-invalid={!!errors.models}
-              aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : undefined} />
+            <div class="model-add-field">
+              <label class="model-add-label" for="pf-model-add">Model ID</label>
+              <input class="field-input" id="pf-model-add" type="text" bind:value={newModel}
+                bind:this={modelInputEl}
+                placeholder="anthropic/claude-opus-4.8" autocomplete="off" spellcheck="false"
+                onkeydown={onModelKeydown}
+                aria-invalid={!!errors.models}
+                aria-describedby={errors.models ? "err-models" : errors.model ? "err-model" : undefined} />
+            </div>
+            <div class="model-add-field">
+              <label class="model-add-label" for="pf-model-add-name">Display name <span class="opt">Optional</span></label>
+              <input class="field-input" id="pf-model-add-name" type="text" bind:value={newModelName}
+                placeholder="opus4.8" autocomplete="off" spellcheck="false"
+                onkeydown={onModelKeydown} />
+            </div>
             <button class="btn-primary sm" type="button" onclick={addModel} disabled={!newModel.trim()}>Add</button>
           </div>
         </div>
@@ -260,12 +298,15 @@
             {#each models as m (m)}
               <div class="seg" class:selected={m === model}>
                 <button class="seg-select" type="button" aria-pressed={m === model}
-                  onclick={() => (model = m)} title={`Set ${m} as default`}>
-                  <span class="seg-name">{m}</span>
+                  onclick={() => (model = m)} title={`Set ${displayName(m)} as default`}>
+                  <span class="seg-name">{displayName(m)}</span>
+                  {#if modelNames[m]}
+                    <span class="seg-id">{m}</span>
+                  {/if}
                 </button>
                 <button class="seg-remove" type="button"
                   onclick={(e) => { e.preventDefault(); e.stopPropagation(); removeModel(m); }}
-                  aria-label={`Remove ${m}`} title={`Remove ${m}`}>×</button>
+                  aria-label={`Remove ${displayName(m)}`} title={`Remove ${displayName(m)}`}>×</button>
               </div>
             {/each}
           </div>
@@ -467,8 +508,23 @@
     margin-top: var(--s-2);
   }
 
-  .model-add { display: flex; gap: var(--s-1); align-items: stretch; }
-  .model-add .field-input { flex: 1 1 auto; }
+  /* Add row: Model ID + optional Display name inputs side by side, each with a
+     small sub-label; the Add button aligns with the input boxes' bottom edge. */
+  .model-add { display: flex; gap: var(--s-1); align-items: flex-end; }
+  .model-add-field {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .model-add-label {
+    font-size: 0.72rem;
+    font-weight: var(--fw-medium);
+    color: var(--muted);
+    line-height: var(--lh-tight);
+  }
+  .model-add .field-input { width: 100%; }
   .model-add .btn-primary { flex: 0 0 auto; }
 
   /* Segmented default picker: models render as connected segments inside a
@@ -505,7 +561,10 @@
   .seg:not(.selected):hover { border-color: var(--muted); }
   .seg-select {
     display: inline-flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 1px;
     min-width: 0;
     padding: 0.32rem 0.4rem 0.32rem 0.6rem;
     font-size: var(--fs-sm);
@@ -518,7 +577,20 @@
     transition: color 0.15s ease;
   }
   .seg.selected .seg-select { color: var(--accent-text); }
-  .seg-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .seg-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Muted canonical model ID shown under the display name (only when an alias
+     exists); inherits the accent text color on the selected segment. */
+  .seg-id {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.68rem;
+    font-weight: var(--fw-medium);
+    line-height: 1.15;
+    color: var(--muted);
+  }
+  .seg.selected .seg-id { color: var(--accent-text); opacity: 0.75; }
   .seg-remove {
     flex: 0 0 auto;
     display: inline-flex;
