@@ -297,7 +297,12 @@
   </div>
   <header class="topbar">
     <div class="topbar-brand">
-      <svg class="logo-mark" viewBox="0 0 48 48" width="26" height="26" fill="none" aria-hidden="true" focusable="false">
+      <!-- viewBox cropped to the hub mark's ink bounds (feedback #39): the old
+           0 0 48 48 box carried ~5px of transparent padding per side, so the
+           visual logo ↔ wordmark whitespace read ~13px despite the 7px flex
+           gap. The 9 9 30 30 crop keeps the mark's rendered size (~16px ink)
+           while making the 7px gap real. -->
+      <svg class="logo-mark" viewBox="9 9 30 30" width="16" height="16" fill="none" aria-hidden="true" focusable="false">
         <rect width="48" height="48" rx="10" fill="var(--surface)" />
         <g transform="translate(24 24) scale(0.8) translate(-24 -24)">
           <g stroke="var(--accent)" stroke-width="3" stroke-linecap="round">
@@ -592,8 +597,10 @@
   }
   /* Brand pill (feedback #24, Multilogin's left pill): logo + wordmark +
      vertical hairline + icon-only Re-detect live inside one WHITE rounded
-     card (--surface, 12px radius, whisper of card shadow, no border) that
-     floats on the gray chrome, height-matched to the 40px banner/tiles. */
+     card (--surface, whisper of card shadow, no border) that floats on the
+     gray chrome, height-matched to the 40px banner/tiles. Corner radius is
+     --radius-sm (8px) to match the COMPACT promo banner/Telegram tile beside
+     it (feedback #39: the old 12px read visibly rounder than the banner). */
   .topbar-brand {
     display: flex;
     align-items: center;
@@ -605,10 +612,12 @@
     height: 40px;
     padding: 0 12px;
     background: var(--surface);
-    border-radius: var(--radius);
+    border-radius: var(--radius-sm);
     box-shadow: var(--shadow-card);
   }
-  .logo-mark { flex: 0 0 auto; width: 26px; height: 26px; }
+  /* 16px box = the mark's ink size; the SVG viewBox is cropped to the ink so
+     the flex gap is the real visual whitespace (feedback #39). */
+  .logo-mark { flex: 0 0 auto; width: 16px; height: 16px; }
   .wordmark {
     font-size: var(--fs-title);
     font-weight: var(--fw-bold);
