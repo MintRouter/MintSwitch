@@ -23,11 +23,6 @@ jobs:
   build:
     name: Build (${{ matrix.platform }}-${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
-    # Linux builds run inside a clean ubuntu:24.04 container on the
-    # self-hosted runners: apt-get runs as root (no sudo required on the
-    # host) and the environment matches the previous ubuntu-latest setup
-    # regardless of the host distro. Empty for macOS/Windows (no container).
-    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,35 +30,27 @@ jobs:
           - os: macos-latest
             platform: darwin
             arch: arm64
-          # Pinned to the dind-labelled runner: this job runs in a container,
-          # so it must land on a host with Docker (the other self-hosted
-          # runner is not guaranteed to have it).
-          - os: [self-hosted, Linux, X64, dind]
-            container: ubuntu:24.04
+          - os: ubuntu-latest
             platform: linux
             arch: amd64
           - os: windows-latest
             platform: windows
             arch: amd64
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       # Wails v3 on Linux needs GTK4 + WebKitGTK 6.0 dev headers (CGO):
       # the wails3 CLI checks pkg-config for gtk4 and webkitgtk-6.0.
       # Package names verified on packages.ubuntu.com for noble (24.04):
       # libgtk-4-dev, libwebkitgtk-6.0-dev (universe, source: webkit2gtk).
-      #
-      # Runs before checkout so git is available inside the bare container
-      # (actions/checkout falls back to a tarball download without it).
-      # Extra packages vs the old hosted job (which preinstalls them):
-      # git (checkout), ca-certificates (TLS for go install/module fetch),
-      # zstd (actions/cache compression used by setup-go/setup-node).
+      # Build tooling (gcc, pkg-config, git, etc.) is preinstalled on the
+      # hosted ubuntu-latest image.
       - name: Install Linux system dependencies
         if: matrix.platform == 'linux'
         run: |
-          apt-get update
-          apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev build-essential pkg-config git ca-certificates zstd
-
-      - name: Checkout
-        uses: actions/checkout@v4
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -130,16 +117,8 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
-    # Also self-hosted: this job only downloads artifacts and calls the
-    # GitHub API, so it has no OS dependencies and needs no container —
-    # generic labels are fine (no dind pin needed), any idle runner works.
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
-      # The self-hosted workspace persists between runs; remove any stale
-      # dist/ so old artifacts can't leak into the release assets.
-      - name: Clean stale artifacts
-        run: rm -rf dist
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
