@@ -55,10 +55,12 @@
     --border: rgba(22, 24, 31, 0.10);      /* cool hairline */
     --border-strong: rgba(22, 24, 31, 0.16);
     --danger: #d70015;
+    --danger-strong: #bb0013;  /* danger-hover text — 5.21:1 on the tinted hover bg (AA) */
     --muted-danger: #825b60;   /* quiet destructive rest state — 5.38:1 on --surface-2 */
 
     /* Low-saturation status tones. */
     --ok: #1e7d42;
+    --ok-strong: #15703a;      /* success badge text — 5.00:1 on the tinted badge bg (AA) */
     --warn: #995610;
     --info: #0e7490;           /* cyan — distinct from blue accent; 4.96:1 on --surface-2 */
 
@@ -89,9 +91,11 @@
     --border: rgba(240, 240, 245, 0.10);
     --border-strong: rgba(240, 240, 245, 0.18);
     --danger: #ff453a;
+    --danger-strong: #ff7a70;  /* danger-hover text — 5.09:1 on the tinted hover bg (AA) */
     --muted-danger: #c99a9a;   /* quiet destructive rest state — 5.83:1 on --surface-2 */
 
     --ok: #44c878;
+    --ok-strong: #44c878;      /* success badge text — 5.55:1 on the tinted badge bg (AA) */
     --warn: #eda23f;
     --info: #4dd0e1;           /* cyan — distinct from blue accent; 7.78:1 on --surface-2 */
 
@@ -323,7 +327,7 @@ body {
 .btn-primary.danger:hover:not(:disabled),
 .btn-ghost.danger:hover:not(:disabled),
 .btn-soft.danger:hover:not(:disabled) {
-    color: var(--danger);
+    color: var(--danger-strong);
     border-color: var(--danger);
     background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
     filter: none;
@@ -354,7 +358,7 @@ body {
 /* Each tone carries a subtle tint of its own hue for clearer, calmer status. */
 .badge.install.on,
 .badge.tone-success {
-    color: var(--ok);
+    color: var(--ok-strong);
     background: color-mix(in srgb, var(--ok) 10%, var(--surface-2));
     border-color: color-mix(in srgb, var(--ok) 22%, var(--border));
 }
