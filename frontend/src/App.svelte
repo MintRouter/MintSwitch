@@ -296,33 +296,39 @@
     <span class="titlebar-title">MintSwitch</span>
   </div>
   <header class="topbar">
-    <div class="topbar-brand">
-      <!-- viewBox cropped to the hub mark's ink bounds (feedback #39): the old
-           0 0 48 48 box carried ~5px of transparent padding per side, so the
-           visual logo ↔ wordmark whitespace read ~13px despite the 7px flex
-           gap. The 9 9 30 30 crop keeps the mark's rendered size (~16px ink)
-           while making the 7px gap real. -->
-      <svg class="logo-mark" viewBox="9 9 30 30" width="16" height="16" fill="none" aria-hidden="true" focusable="false">
-        <rect width="48" height="48" rx="10" fill="var(--surface)" />
-        <g transform="translate(24 24) scale(0.8) translate(-24 -24)">
-          <g stroke="var(--accent)" stroke-width="3" stroke-linecap="round">
-            <line x1="24" y1="24" x2="31.5" y2="11" />
-            <line x1="24" y1="24" x2="39" y2="24" />
-            <line x1="24" y1="24" x2="31.5" y2="37" />
-            <line x1="24" y1="24" x2="16.5" y2="37" />
-            <line x1="24" y1="24" x2="9" y2="24" />
-            <line x1="24" y1="24" x2="16.5" y2="11" />
+    <!-- HOTFIX-PILL2: the wrapper mirrors .col-scroll's scroll-container CSS
+         (same overflow + scrollbar-gutter + 3px webkit scrollbar) so the
+         pill's right edge lands pixel-exact on the Endpoint card's — see the
+         .topbar-brand-col rules below. -->
+    <div class="topbar-brand-col">
+      <div class="topbar-brand">
+        <!-- viewBox cropped to the hub mark's ink bounds (feedback #39): the old
+             0 0 48 48 box carried ~5px of transparent padding per side, so the
+             visual logo ↔ wordmark whitespace read ~13px despite the 7px flex
+             gap. The 9 9 30 30 crop keeps the mark's rendered size (~16px ink)
+             while making the 7px gap real. -->
+        <svg class="logo-mark" viewBox="9 9 30 30" width="16" height="16" fill="none" aria-hidden="true" focusable="false">
+          <rect width="48" height="48" rx="10" fill="var(--surface)" />
+          <g transform="translate(24 24) scale(0.8) translate(-24 -24)">
+            <g stroke="var(--accent)" stroke-width="3" stroke-linecap="round">
+              <line x1="24" y1="24" x2="31.5" y2="11" />
+              <line x1="24" y1="24" x2="39" y2="24" />
+              <line x1="24" y1="24" x2="31.5" y2="37" />
+              <line x1="24" y1="24" x2="16.5" y2="37" />
+              <line x1="24" y1="24" x2="9" y2="24" />
+              <line x1="24" y1="24" x2="16.5" y2="11" />
+            </g>
+            <circle cx="31.5" cy="11" r="3.5" fill="var(--accent)" />
+            <circle cx="39" cy="24" r="3.5" fill="var(--accent)" />
+            <circle cx="31.5" cy="37" r="3.5" fill="var(--accent)" />
+            <circle cx="16.5" cy="37" r="3.5" fill="var(--accent)" />
+            <circle cx="9" cy="24" r="3.5" fill="var(--accent)" />
+            <circle cx="16.5" cy="11" r="3.5" fill="var(--accent)" />
+            <circle cx="24" cy="24" r="5.5" fill="var(--accent)" />
           </g>
-          <circle cx="31.5" cy="11" r="3.5" fill="var(--accent)" />
-          <circle cx="39" cy="24" r="3.5" fill="var(--accent)" />
-          <circle cx="31.5" cy="37" r="3.5" fill="var(--accent)" />
-          <circle cx="16.5" cy="37" r="3.5" fill="var(--accent)" />
-          <circle cx="9" cy="24" r="3.5" fill="var(--accent)" />
-          <circle cx="16.5" cy="11" r="3.5" fill="var(--accent)" />
-          <circle cx="24" cy="24" r="5.5" fill="var(--accent)" />
-        </g>
-      </svg>
-      <span class="wordmark">MintSwitch</span>
+        </svg>
+        <span class="wordmark">MintSwitch</span>
+      </div>
     </div>
     <!-- Promo banner (user feedback #9/#10/#15/#16 + bulk-button removal):
          compact two-line navy banner sized to its content + Telegram tile,
@@ -594,6 +600,29 @@
     gap: var(--s-2);
     min-width: 0;
   }
+  /* HOTFIX-PILL2 (supersedes HOTFIX-PILL's hard-coded 3px pill inset): the
+     Endpoint card's right edge sits at its grid column's right edge MINUS
+     whatever scrollbar gutter the engine reserves for .col-scroll — 3px in
+     Chromium (the styled ::-webkit-scrollbar), but 0 in WKWebView/Wails,
+     where overlay scrollbars reserve no gutter, so any fixed inset is wrong
+     somewhere. This wrapper occupies the topbar grid's column 1 and IS a
+     scroll container with the exact same overflow + scrollbar-gutter +
+     3px ::-webkit-scrollbar rules as .col-scroll: the engine reserves the
+     identical gutter here, and the pill (stretching to the wrapper's
+     content box) ends pixel-exact on the card's right edge in every engine.
+     It never actually scrolls (the content is the fixed 40px pill; the
+     padding below is included in the scroll height). The padding/negative-
+     margin pair keeps the pill's shadow unclipped on the top/left/bottom;
+     on the right it clips at the gutter — exactly like the card's own
+     shadow inside .col-scroll. */
+  .topbar-brand-col {
+    min-width: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding: 18px 0 18px 18px;
+    margin: -18px 0 -18px -18px;
+  }
+  .topbar-brand-col::-webkit-scrollbar { width: 3px; height: 3px; }
   /* Brand pill (feedback #24, Multilogin's left pill): logo + wordmark +
      vertical hairline + icon-only Re-detect live inside one WHITE rounded
      card (--surface, whisper of card shadow, no border) that floats on the
@@ -610,11 +639,6 @@
     min-width: 0;
     height: 40px;
     padding: 0 12px;
-    /* HOTFIX-PILL: the left card ends 3px short of its grid column — the
-       stable 3px scrollbar gutter reserved by .col-scroll — so the pill
-       (which stretches to the column edge) insets the same 3px to keep the
-       right edges pixel-aligned. */
-    margin-right: 3px;
     background: var(--surface);
     border-radius: var(--radius-sm);
     box-shadow: var(--shadow-card);
@@ -631,7 +655,10 @@
       flex-wrap: wrap;
       gap: var(--s-2);
     }
-    .topbar-brand { margin-right: 0; }
+    /* Stacked: .layout is one column, so there is no card column (and no
+       .col-scroll gutter) to mirror — the wrapper dissolves so the pill is a
+       plain content-sized flex item, as before. */
+    .topbar-brand-col { display: contents; }
   }
   /* 16px box = the mark's ink size; the SVG viewBox is cropped to the ink so
      the flex gap is the real visual whitespace (feedback #39). */

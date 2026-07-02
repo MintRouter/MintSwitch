@@ -24,12 +24,30 @@
   let newModelName = $state("");
   let errors = $state<Record<string, string>>({});
 
-  // Seed the editable fields from the saved (non-secret) profile. Re-runs only
-  // when the parent reassigns `profile` (initial load / post-save refresh), so
-  // in-progress edits are never clobbered. The API key is never seeded — the
-  // backend never sends it — so the field starts blank and an empty submit keeps
-  // the stored key.
+  // Seed the editable fields from the saved (non-secret) profile. The parent
+  // reassigns `profile` on every refresh — including the focus-driven redetect —
+  // so a reference change alone must NOT reseed or it would wipe in-progress
+  // edits (e.g. blur the window to copy an API key, focus back, form cleared).
+  // Instead we snapshot the seeded content and only reseed when the profile
+  // data actually changed (initial load / post-save refresh). The API key is
+  // never seeded — the backend never sends it — so the field starts blank and
+  // an empty submit keeps the stored key.
+  let seededSnapshot: string | null = null;
+
+  function profileSnapshot(p: ProfileView): string {
+    return JSON.stringify({
+      label: p.label ?? "",
+      base_url: p.base_url ?? "",
+      models: p.models ?? [],
+      model_names: p.model_names ?? {},
+      model: p.model ?? "",
+    });
+  }
+
   $effect(() => {
+    const snapshot = profileSnapshot(profile);
+    if (snapshot === seededSnapshot) return;
+    seededSnapshot = snapshot;
     label = profile.label ?? "";
     baseUrl = profile.base_url ?? "";
     models = profile.models ? [...profile.models] : [];
