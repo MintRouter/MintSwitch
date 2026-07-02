@@ -5,11 +5,10 @@ go 1.25.0
 require (
 	github.com/pelletier/go-toml/v2 v2.4.2
 	github.com/wailsapp/wails/v3 v3.0.0-alpha2.111
-	github.com/zalando/go-keyring v0.2.6
+	github.com/zalando/go-keyring v0.2.8
 )
 
 require (
-	al.essio.dev/pkg/shellescape v1.6.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
