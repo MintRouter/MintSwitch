@@ -189,6 +189,37 @@ func TestApplyPreservesExistingKeys(t *testing.T) {
 	}
 }
 
+// TestStatusIgnoresAPIKey proves the fingerprint excludes the API key: Zed
+// never writes it to settings.json (it lives in MINTROUTER_API_KEY), so
+// rotating the key must not flip Status to ModifiedExternally, while changes
+// to managed fields (Model, BaseURL) must still be detected.
+func TestStatusIgnoresAPIKey(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	p := sampleProfile()
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	rotated := sampleProfile()
+	rotated.APIKey = "sk-rotated-456"
+	if st, _, _ := a.Status(rotated); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("API key change must not affect status, got %v", st)
+	}
+
+	otherModel := sampleProfile()
+	otherModel.Model = "different-model"
+	if st, _, _ := a.Status(otherModel); st != core.StatusModifiedExternally {
+		t.Fatalf("model change must be detected, got %v", st)
+	}
+
+	otherURL := sampleProfile()
+	otherURL.BaseURL = "https://other.example.com/v1"
+	if st, _, _ := a.Status(otherURL); st != core.StatusModifiedExternally {
+		t.Fatalf("base URL change must be detected, got %v", st)
+	}
+}
+
 func TestRestoreDeletesCreatedFile(t *testing.T) {
 	a, _ := newAdapter(t)
 	path := a.configPath()
