@@ -589,3 +589,124 @@ func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
 		t.Fatalf("status after strip = %v, want Default", st)
 	}
 }
+
+// TestOrphanStatusAndRestoreWithBackup is the regression for the lost-marker
+// gap: with the sidecar marker gone but the pristine backup intact, Status
+// must report ModifiedExternally (so the UI offers Restore instead of treating
+// the tool as never applied) and Restore must still revert byte-for-byte.
+func TestOrphanStatusAndRestoreWithBackup(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"permissions":{"allow":["Bash(ls:*)"]},"theme":"dark"}` + "\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// Simulate the lost marker (e.g. an interrupted earlier restore).
+	if err := a.m.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+
+	st, detail, err := a.Status(sampleProfile())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st != core.StatusModifiedExternally || detail != orphanDetail {
+		t.Fatalf("orphan status = %v %q, want ModifiedExternally + orphanDetail", st, detail)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("not byte-for-byte restored: %q", got)
+	}
+}
+
+// TestOrphanRestoreNoBackupStrips covers the orphan-no-backup branch: marker
+// gone AND backups gone, but the file still carries the full MintSwitch env
+// signature — Restore must strip the managed env keys while preserving the
+// user's own settings, and Status must offer Restore beforehand.
+func TestOrphanRestoreNoBackupStrips(t *testing.T) {
+	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.RemoveAll(r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.m.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusModifiedExternally {
+		t.Fatalf("orphan status = %v, want ModifiedExternally", st)
+	}
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	want := "No backup found; removed the MintSwitch-managed env keys from Claude Code settings.json."
+	if res.Message != want {
+		t.Fatalf("message = %q, want %q", res.Message, want)
+	}
+	m := readSettings(t, path)
+	if _, present := m[envKey]; present {
+		t.Fatalf("env must be stripped: %v", m)
+	}
+	if m["theme"] != "dark" {
+		t.Fatalf("user settings must be preserved: %v", m)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+
+// TestPureUserConfigNeverOrphan proves the no-false-positive contract: a
+// hand-written settings.json that never saw Apply — even one pointing
+// ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN at the user's own gateway —
+// stays Default (no Restore button) and Restore leaves it byte-for-byte
+// untouched.
+func TestPureUserConfigNeverOrphan(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"env":{"ANTHROPIC_BASE_URL":"https://my-gateway.example.com","ANTHROPIC_AUTH_TOKEN":"sk-user"},"theme":"dark"}`
+	if err := os.WriteFile(path, []byte(user), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("pure user config status = %v, want Default", st)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != user {
+		t.Fatalf("pure user config rewritten: %q", got)
+	}
+}

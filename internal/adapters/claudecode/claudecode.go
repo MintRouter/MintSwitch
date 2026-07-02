@@ -49,6 +49,12 @@ const (
 	envSmallFastModel = "ANTHROPIC_SMALL_FAST_MODEL"
 )
 
+// orphanDetail explains the orphan-remnant state: settings.json still carries
+// the MintSwitch-injected env keys but the managed marker is gone (e.g. a
+// previous restore was interrupted after clearing the marker).
+const orphanDetail = "The MintSwitch env overrides are still present but the managed marker is missing " +
+	"(a previous restore may have been interrupted). Restore Default will remove them."
+
 // Adapter applies/restores a MintSwitch profile for Claude Code via its
 // ~/.claude/settings.json file. The managed marker lives in the sidecar
 // marker store, never in settings.json: Claude Code validates the file
@@ -91,7 +97,10 @@ func (a *Adapter) Detect() (bool, string) {
 }
 
 // Status inspects settings.json relative to profile p. The marker is read from
-// the sidecar store: no entry means Default; an entry whose managed env block
+// the sidecar store: no entry means Default — unless the file still carries
+// the full MintSwitch injection signature (see orphanRemnantAt), which
+// reports ModifiedExternally so the UI offers Restore even after the marker
+// was lost (e.g. an interrupted restore). An entry whose managed env block
 // (ANTHROPIC_BASE_URL) has been removed from the file also means Default (the
 // file is back to an unmanaged state, e.g. after an external restore/wipe);
 // otherwise the marker fingerprint decides Applied vs ModifiedExternally,
@@ -106,6 +115,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, "", err
 	}
 	if !ok || !marker.Managed {
+		if a.orphanRemnantAt(path) {
+			return core.StatusModifiedExternally, orphanDetail, nil
+		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	m, err := readJSON(path)
@@ -187,9 +199,10 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // backup engine (oldest snapshot; all entries are pruned after a successful
 // restore) and removes the tool's entry from the sidecar marker store. When
 // no backup exists but the file is still MintSwitch-managed (marker in store
-// and env.ANTHROPIC_BASE_URL present), it falls back to stripping the managed
-// env keys, preserving every other setting. It is a safe no-op when nothing
-// was applied.
+// and env.ANTHROPIC_BASE_URL present, or — with the marker lost — the full
+// injection signature still in the file, see orphanRemnantAt), it falls back
+// to stripping the managed env keys, preserving every other setting. It is a
+// safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.settingsPath()
 	_, inStore, err := a.m.Get(id)
@@ -201,7 +214,7 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		return core.RestoreResult{}, err
 	}
 	stripped := false
-	if !restored && inStore {
+	if !restored && (inStore || a.orphanRemnantAt(path)) {
 		stripped, err = a.stripManaged(path)
 		if err != nil {
 			return core.RestoreResult{}, err
@@ -218,6 +231,30 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		msg = "No backup found; removed the MintSwitch-managed env keys from Claude Code settings.json."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// orphanRemnantAt reports whether the settings file at path still carries the
+// FULL MintSwitch injection signature without requiring a marker: the "env"
+// object holding all four managed keys (ANTHROPIC_BASE_URL,
+// ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL, ANTHROPIC_SMALL_FAST_MODEL) —
+// exactly the shape Apply writes. It is deliberately stricter than
+// stripManaged's gate because a user could set ANTHROPIC_BASE_URL (or a
+// subset of these variables) for their own gateway: only the complete
+// signature is treated as a MintSwitch remnant, so a hand-written config
+// never shows Restore or gets stripped by mistake. A missing or corrupt file
+// is never a remnant.
+func (a *Adapter) orphanRemnantAt(path string) bool {
+	m, err := readJSON(path)
+	if err != nil {
+		return false
+	}
+	env := asObject(m[envKey])
+	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
+		if _, ok := env[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // stripManaged removes the MintSwitch-managed env keys from settings.json,

@@ -483,3 +483,129 @@ func TestRestoreNoBackupStripsManagedEntry(t *testing.T) {
 		t.Fatalf("status after strip = %v, want Default", st)
 	}
 }
+
+// TestOrphanStatusAndRestoreWithBackup is the regression for the lost-marker
+// gap: with the sidecar marker gone but the pristine backup intact, Status
+// must report ModifiedExternally (so the UI offers Restore instead of treating
+// the tool as never applied) and Restore must still revert byte-for-byte.
+func TestOrphanStatusAndRestoreWithBackup(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"model":"claude-opus"}` + "\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// Simulate the lost marker (e.g. an interrupted earlier restore).
+	if err := a.m.Delete(a.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	st, detail, err := a.Status(sampleProfile())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st != core.StatusModifiedExternally || detail != orphanDetail {
+		t.Fatalf("orphan status = %v %q, want ModifiedExternally + orphanDetail", st, detail)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("not byte-for-byte restored: %q", got)
+	}
+}
+
+// TestOrphanRestoreNoBackupStrips covers the orphan-no-backup branch: marker
+// gone AND backups gone, but the file still carries the MintSwitch
+// customModels entry — Restore must strip it and the managed model while
+// preserving the user's own entries and settings, and Status must offer
+// Restore beforehand.
+func TestOrphanRestoreNoBackupStrips(t *testing.T) {
+	a, r := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"customModels":[{"displayName":"My Model","model":"m1","baseUrl":"https://x.example.com","provider":"generic-chat-completion-api"}],"editor":"vim"}`
+	if err := os.WriteFile(path, []byte(user), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.RemoveAll(r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.m.Delete(a.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusModifiedExternally {
+		t.Fatalf("orphan status = %v, want ModifiedExternally", st)
+	}
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	want := "No backup found; removed the MintSwitch custom model from Factory Droid settings."
+	if res.Message != want {
+		t.Fatalf("message = %q, want %q", res.Message, want)
+	}
+	root := readJSON(t, path)
+	models, _ := root[customModelsKey].([]any)
+	if len(models) != 1 {
+		t.Fatalf("customModels = %v, want only the user's entry", models)
+	}
+	if obj, _ := models[0].(map[string]any); obj["displayName"] != "My Model" {
+		t.Fatalf("user entry must be preserved: %v", models)
+	}
+	if _, present := root["model"]; present {
+		t.Fatalf("managed model must be stripped: %v", root)
+	}
+	if root["editor"] != "vim" {
+		t.Fatalf("user settings must be preserved: %v", root)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+
+// TestPureUserConfigNeverOrphan proves the no-false-positive contract: a
+// hand-written config that never saw Apply (its own customModels entries, no
+// MintSwitch displayName) stays Default (no Restore button) and Restore
+// leaves it byte-for-byte untouched.
+func TestPureUserConfigNeverOrphan(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"customModels":[{"displayName":"My Model","model":"m1","baseUrl":"https://x.example.com"}],"model":"m1"}`
+	if err := os.WriteFile(path, []byte(user), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("pure user config status = %v, want Default", st)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != user {
+		t.Fatalf("pure user config rewritten: %q", got)
+	}
+}

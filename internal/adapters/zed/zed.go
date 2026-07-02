@@ -39,6 +39,12 @@ const modelMaxTokens = 128000
 const envKeyNote = "API key: set the MINTROUTER_API_KEY environment variable" +
 	" in the shell that launches Zed (Zed forbids API keys in settings.json)."
 
+// orphanDetail explains the orphan-remnant state: the settings still carry the
+// MintSwitch provider but the managed marker is gone (e.g. a previous restore
+// was interrupted after clearing the marker).
+const orphanDetail = "The MintSwitch provider is still present but the managed marker is missing " +
+	"(a previous restore may have been interrupted). Restore Default will remove it."
+
 // Ensure Adapter satisfies the shared tool adapter contracts.
 var (
 	_ core.ToolAdapter          = (*Adapter)(nil)
@@ -110,11 +116,14 @@ func (a *Adapter) Detect() (bool, string) {
 }
 
 // Status inspects the current settings relative to the given profile. The
-// marker is read from the sidecar store: no entry means Default; an entry
-// whose managed provider block has been removed from the file also means
-// Default (the file is back to an unmanaged state, e.g. after an external
-// restore/wipe); otherwise the marker fingerprint decides Applied vs
-// ModifiedExternally, exactly as with the legacy in-file marker.
+// marker is read from the sidecar store: no entry means Default — unless the
+// file still carries the MintSwitch provider block (see orphanRemnantAt),
+// which reports ModifiedExternally so the UI offers Restore even after the
+// marker was lost (e.g. an interrupted restore). An entry whose managed
+// provider block has been removed from the file also means Default (the file
+// is back to an unmanaged state, e.g. after an external restore/wipe);
+// otherwise the marker fingerprint decides Applied vs ModifiedExternally,
+// exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
@@ -125,6 +134,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, "", err
 	}
 	if !ok || !marker.Managed {
+		if a.orphanRemnantAt(path) {
+			return core.StatusModifiedExternally, orphanDetail, nil
+		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	root, err := readConfig(path)
@@ -229,9 +241,10 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // backup engine (oldest snapshot; all entries are pruned after a successful
 // restore) and removes the tool's entry from the sidecar marker store. When
 // no backup exists but the file is still MintSwitch-managed (marker in store
-// and the managed provider block present), it falls back to stripping the
-// managed provider and agent default model, preserving every other setting.
-// It is a safe no-op when nothing was applied.
+// and the managed provider block present, or — with the marker lost — the
+// provider block still in the file, see orphanRemnantAt), it falls back to
+// stripping the managed provider and agent default model, preserving every
+// other setting. It is a safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
 	_, inStore, err := a.m.Get(a.ID())
@@ -243,7 +256,7 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		return core.RestoreResult{}, err
 	}
 	stripped := false
-	if !restored && inStore {
+	if !restored && (inStore || a.orphanRemnantAt(path)) {
 		stripped, err = a.stripManaged(path)
 		if err != nil {
 			return core.RestoreResult{}, err
@@ -260,6 +273,21 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		msg = "No backup found; removed the MintSwitch provider from Zed settings."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// orphanRemnantAt reports whether the settings file at path still carries the
+// MintSwitch provider block (language_models.openai_compatible.mintrouter)
+// without requiring a marker. The "mintrouter" provider key is
+// MintSwitch-specific — no tool or user writes it independently — so its
+// presence alone is a reliable remnant signal. A missing or corrupt file is
+// never a remnant (JSONC comments are tolerated by readConfig, and a pure
+// user file without the block is never rewritten, so its comments survive).
+func (a *Adapter) orphanRemnantAt(path string) bool {
+	root, err := readConfig(path)
+	if err != nil || root == nil {
+		return false
+	}
+	return hasManagedProvider(root)
 }
 
 // stripManaged removes the MintSwitch openai_compatible provider block from

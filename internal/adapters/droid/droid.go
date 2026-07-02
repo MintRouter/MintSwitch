@@ -33,6 +33,12 @@ const customModelsKey = "customModels"
 // defaultMaxOutputTokens is written to the entry; Droid requires the field.
 const defaultMaxOutputTokens = 32768
 
+// orphanDetail explains the orphan-remnant state: the settings still carry the
+// MintSwitch customModels entry but the managed marker is gone (e.g. a
+// previous restore was interrupted after clearing the marker).
+const orphanDetail = "The MintSwitch custom model is still present but the managed marker is missing " +
+	"(a previous restore may have been interrupted). Restore Default will remove it."
+
 // Ensure Adapter satisfies the shared tool adapter contracts.
 var (
 	_ core.ToolAdapter          = (*Adapter)(nil)
@@ -90,11 +96,14 @@ func (a *Adapter) Detect() (bool, string) {
 }
 
 // Status inspects the current config relative to the given profile. The
-// marker is read from the sidecar store: no entry means Default; an entry
-// whose managed customModels entry has been removed from the file also means
-// Default (the file is back to an unmanaged state, e.g. after an external
-// restore/wipe); otherwise the marker fingerprint decides Applied vs
-// ModifiedExternally, exactly as with the legacy in-file marker.
+// marker is read from the sidecar store: no entry means Default — unless the
+// file still carries the MintSwitch customModels entry (see orphanRemnantAt),
+// which reports ModifiedExternally so the UI offers Restore even after the
+// marker was lost (e.g. an interrupted restore). An entry whose managed
+// customModels entry has been removed from the file also means Default (the
+// file is back to an unmanaged state, e.g. after an external restore/wipe);
+// otherwise the marker fingerprint decides Applied vs ModifiedExternally,
+// exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
@@ -105,6 +114,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, "", err
 	}
 	if !ok || !marker.Managed {
+		if a.orphanRemnantAt(path) {
+			return core.StatusModifiedExternally, orphanDetail, nil
+		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	root, err := core.ReadJSONObject(path)
@@ -175,9 +187,10 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // backup engine (oldest snapshot; all entries are pruned after a successful
 // restore) and removes the tool's entry from the sidecar marker store. When
 // no backup exists but the file is still MintSwitch-managed (marker in store
-// and the MintSwitch customModels entry present), it falls back to stripping
-// the managed entry, preserving every other setting. It is a safe no-op when
-// nothing was applied.
+// and the MintSwitch customModels entry present, or — with the marker lost —
+// the entry still in the file, see orphanRemnantAt), it falls back to
+// stripping the managed entry, preserving every other setting. It is a safe
+// no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
 	_, inStore, err := a.m.Get(a.ID())
@@ -189,7 +202,7 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		return core.RestoreResult{}, err
 	}
 	stripped := false
-	if !restored && inStore {
+	if !restored && (inStore || a.orphanRemnantAt(path)) {
 		stripped, err = a.stripManaged(path)
 		if err != nil {
 			return core.RestoreResult{}, err
@@ -206,6 +219,20 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		msg = "No backup found; removed the MintSwitch custom model from Factory Droid settings."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// orphanRemnantAt reports whether the settings file at path still carries the
+// MintSwitch-owned customModels entry without requiring a marker. The entry
+// is identified by its reserved displayName ("MintSwitch (MintRouter)"),
+// which is MintSwitch-specific — no tool or user writes it independently — so
+// its presence alone is a reliable remnant signal. A missing or corrupt file
+// is never a remnant.
+func (a *Adapter) orphanRemnantAt(path string) bool {
+	root, err := core.ReadJSONObject(path)
+	if err != nil {
+		return false
+	}
+	return hasManagedEntry(root)
 }
 
 // stripManaged removes the MintSwitch-owned customModels entry from

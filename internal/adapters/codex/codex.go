@@ -36,6 +36,12 @@ const (
 	authModeAPIKey = "apikey"
 )
 
+// orphanDetail explains the orphan-remnant state: the config files still carry
+// the MintSwitch-injected settings but the managed marker is gone (e.g. a
+// previous restore was interrupted after clearing the marker).
+const orphanDetail = "MintSwitch settings are still present but the managed marker is missing " +
+	"(a previous restore may have been interrupted). Restore Default will remove them."
+
 // Adapter applies/restores a MintSwitch profile to the Codex configuration.
 // The managed marker lives in the sidecar marker store, never in config.toml,
 // so Codex configs stay free of the legacy [mintswitchManaged] table.
@@ -83,11 +89,14 @@ func (a *Adapter) Detect() (bool, string) {
 }
 
 // Status inspects config.toml relative to the given profile. The marker is
-// read from the sidecar store: no entry means Default; an entry whose managed
-// key (openai_base_url) has been removed from the file also means Default (the
-// file is back to an unmanaged state, e.g. after an external restore/wipe);
-// otherwise the marker fingerprint decides Applied vs ModifiedExternally,
-// exactly as with the legacy in-file marker.
+// read from the sidecar store: no entry means Default — unless the config
+// files still carry the full MintSwitch injection signature (see
+// orphanRemnant), which reports ModifiedExternally so the UI offers Restore
+// even after the marker was lost (e.g. an interrupted restore). An entry
+// whose managed key (openai_base_url) has been removed from the file also
+// means Default (the file is back to an unmanaged state, e.g. after an
+// external restore/wipe); otherwise the marker fingerprint decides Applied vs
+// ModifiedExternally, exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, _ := a.Detect()
 	if !installed {
@@ -98,6 +107,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, "", err
 	}
 	if !ok || !marker.Managed {
+		if a.orphanRemnant() {
+			return core.StatusModifiedExternally, orphanDetail, nil
+		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	cfg, err := readTOML(a.configPath())
@@ -189,16 +201,18 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // a successful restore). Both restores are attempted best-effort even when one
 // fails, so an error on config.toml never silently skips auth.json (or vice
 // versa); failures are joined into a single error naming each file. When a
-// file has no backup but Codex is still MintSwitch-managed (marker in store),
-// Restore falls back to stripping the managed keys from it — openai_base_url
-// and model in config.toml, OPENAI_API_KEY and auth_mode in auth.json —
-// preserving every other key.
+// file has no backup but Codex is still MintSwitch-managed (marker in store,
+// or — with the marker lost — the full injection signature still in the
+// files, see orphanRemnant), Restore falls back to stripping the managed keys
+// from it — openai_base_url and model in config.toml, OPENAI_API_KEY and
+// auth_mode in auth.json — preserving every other key.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	cfgPath, authPath := a.configPath(), a.authPath()
 	_, inStore, err := a.m.Get(a.ID())
 	if err != nil {
 		return core.RestoreResult{}, err
 	}
+	orphan := !inStore && a.orphanRemnant()
 	cfgRestored, cfgEntry, cfgErr := a.e.RestorePristine(cfgPath)
 	authRestored, _, authErr := a.e.RestorePristine(authPath)
 	if cfgErr != nil {
@@ -211,13 +225,13 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		return core.RestoreResult{}, err
 	}
 	var cfgStripped, authStripped bool
-	if !cfgRestored && inStore {
+	if !cfgRestored && (inStore || orphan) {
 		cfgStripped, err = stripManagedConfig(cfgPath)
 		if err != nil {
 			return core.RestoreResult{}, err
 		}
 	}
-	if !authRestored && inStore {
+	if !authRestored && (inStore || orphan) {
 		authStripped, err = stripManagedAuth(authPath)
 		if err != nil {
 			return core.RestoreResult{}, err
@@ -248,6 +262,37 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		BackupPath:  cfgEntry,
 		Message:     msg,
 	}, nil
+}
+
+// orphanRemnant reports whether the Codex config files still carry the FULL
+// MintSwitch injection signature without requiring a marker: config.toml
+// holding both managed keys (openai_base_url and model) AND auth.json holding
+// OPENAI_API_KEY with auth_mode="apikey" — exactly the shape Apply writes. It
+// is deliberately stricter than the strip helpers' gates because each key on
+// its own is a state a user could configure themselves (a hand-rolled proxy
+// URL, an API-key login): only the complete signature is treated as a
+// MintSwitch remnant, so a hand-written config never shows Restore or gets
+// stripped by mistake. A missing or corrupt file is never a remnant.
+func (a *Adapter) orphanRemnant() bool {
+	cfg, err := readTOML(a.configPath())
+	if err != nil {
+		return false
+	}
+	if _, ok := cfg["openai_base_url"]; !ok {
+		return false
+	}
+	if _, ok := cfg["model"]; !ok {
+		return false
+	}
+	auth, err := readJSON(a.authPath())
+	if err != nil {
+		return false
+	}
+	if _, ok := auth[authKeyName]; !ok {
+		return false
+	}
+	mode, _ := auth[authModeKey].(string)
+	return mode == authModeAPIKey
 }
 
 // stripManagedConfig removes the MintSwitch-managed keys (openai_base_url and

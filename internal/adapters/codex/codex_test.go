@@ -372,3 +372,159 @@ func TestStripLegacyMarkerNoOp(t *testing.T) {
 		t.Fatalf("clean file rewritten: %q", got)
 	}
 }
+
+// TestOrphanStatusAndRestoreWithBackup is the regression for the lost-marker
+// gap: with the sidecar marker gone but the pristine backups intact, Status
+// must report ModifiedExternally (so the UI offers Restore instead of treating
+// the tool as never applied) and Restore must still revert byte-for-byte.
+func TestOrphanStatusAndRestoreWithBackup(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	cfgPath, authPath := a.configPath(), a.authPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	originalCfg := "approval_policy = \"never\"\n"
+	originalAuth := `{"auth_mode":"chatgpt"}` + "\n"
+	if err := os.WriteFile(cfgPath, []byte(originalCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, []byte(originalAuth), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// Simulate the lost marker (e.g. an interrupted earlier restore).
+	if err := a.m.Delete(a.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	st, detail, err := a.Status(sampleProfile())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st != core.StatusModifiedExternally || detail != orphanDetail {
+		t.Fatalf("orphan status = %v %q, want ModifiedExternally + orphanDetail", st, detail)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for path, want := range map[string]string{cfgPath: originalCfg, authPath: originalAuth} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s not byte-for-byte restored: %q", path, got)
+		}
+	}
+}
+
+// TestOrphanRestoreNoBackupStrips covers the orphan-no-backup branch: marker
+// gone AND backups gone, but the files still carry the full MintSwitch
+// signature — Restore must strip the managed keys from both files while
+// preserving the user's own settings, and Status must offer Restore
+// beforehand.
+func TestOrphanRestoreNoBackupStrips(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	cfgPath, authPath := a.configPath(), a.authPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("approval_policy = \"never\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"id_token":"tok"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.RemoveAll(a.r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.m.Delete(a.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusModifiedExternally {
+		t.Fatalf("orphan status = %v, want ModifiedExternally", st)
+	}
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	want := "No backup found; removed the MintSwitch-managed keys from the Codex config files."
+	if res.Message != want {
+		t.Fatalf("message = %q, want %q", res.Message, want)
+	}
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg["openai_base_url"]; present {
+		t.Fatalf("openai_base_url must be stripped: %v", cfg)
+	}
+	if _, present := cfg["model"]; present {
+		t.Fatalf("model must be stripped: %v", cfg)
+	}
+	if cfg["approval_policy"] != "never" {
+		t.Fatalf("user config keys must be preserved: %v", cfg)
+	}
+	auth, err := readJSON(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := auth[authKeyName]; present {
+		t.Fatalf("OPENAI_API_KEY must be stripped: %v", auth)
+	}
+	if _, present := auth[authModeKey]; present {
+		t.Fatalf("auth_mode must be stripped: %v", auth)
+	}
+	if _, present := auth["tokens"]; !present {
+		t.Fatalf("user auth keys must be preserved: %v", auth)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+
+// TestPureUserConfigNeverOrphan proves the no-false-positive contract: a
+// hand-written config that never saw Apply — even one carrying a proxy
+// openai_base_url + model with an API-key login under a ChatGPT auth_mode —
+// stays Default (no Restore button) and Restore leaves both files
+// byte-for-byte untouched.
+func TestPureUserConfigNeverOrphan(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	cfgPath, authPath := a.configPath(), a.authPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	userCfg := "model = \"gpt-5.5\"\nopenai_base_url = \"https://my-proxy.example.com/v1\"\n"
+	userAuth := `{"OPENAI_API_KEY":"sk-user","auth_mode":"chatgpt"}`
+	if err := os.WriteFile(cfgPath, []byte(userCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, []byte(userAuth), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("pure user config status = %v, want Default", st)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for path, want := range map[string]string{cfgPath: userCfg, authPath: userAuth} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("pure user file %s rewritten: %q", path, got)
+		}
+	}
+}

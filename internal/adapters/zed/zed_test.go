@@ -565,3 +565,133 @@ func TestRestoreNoBackupStripsManagedProvider(t *testing.T) {
 		t.Fatalf("status after strip = %v, want Default", st)
 	}
 }
+
+// TestOrphanStatusAndRestoreWithBackup is the regression for the lost-marker
+// gap: with the sidecar marker gone but the pristine backup intact, Status
+// must report ModifiedExternally (so the UI offers Restore instead of treating
+// the tool as never applied) and Restore must still revert byte-for-byte.
+func TestOrphanStatusAndRestoreWithBackup(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"theme":"One Dark"}` + "\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// Simulate the lost marker (e.g. an interrupted earlier restore).
+	if err := a.m.Delete(a.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	st, detail, err := a.Status(sampleProfile())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st != core.StatusModifiedExternally || detail != orphanDetail {
+		t.Fatalf("orphan status = %v %q, want ModifiedExternally + orphanDetail", st, detail)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("not byte-for-byte restored: %q", got)
+	}
+}
+
+// TestOrphanRestoreNoBackupStrips covers the orphan-no-backup branch: marker
+// gone AND backups gone, but the file still carries the MintSwitch provider —
+// Restore must strip it and the managed default model while preserving the
+// user's own settings, and Status must offer Restore beforehand.
+func TestOrphanRestoreNoBackupStrips(t *testing.T) {
+	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"theme":"One Dark","language_models":{"anthropic":{"api_url":"https://api.anthropic.com"}}}`
+	if err := os.WriteFile(path, []byte(user), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.RemoveAll(r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.m.Delete(a.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusModifiedExternally {
+		t.Fatalf("orphan status = %v, want ModifiedExternally", st)
+	}
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	want := "No backup found; removed the MintSwitch provider from Zed settings."
+	if res.Message != want {
+		t.Fatalf("message = %q, want %q", res.Message, want)
+	}
+	root := readJSON(t, path)
+	languageModels, _ := root["language_models"].(map[string]any)
+	if _, present := languageModels["openai_compatible"]; present {
+		t.Fatalf("openai_compatible must be stripped: %v", root)
+	}
+	if _, present := languageModels["anthropic"]; !present {
+		t.Fatalf("user provider must be preserved: %v", root)
+	}
+	if _, present := root["agent"]; present {
+		t.Fatalf("managed agent default_model must be stripped: %v", root)
+	}
+	if root["theme"] != "One Dark" {
+		t.Fatalf("user settings must be preserved: %v", root)
+	}
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+
+// TestPureUserConfigNeverOrphan proves the no-false-positive contract: a
+// hand-written JSONC settings file that never saw Apply (its own
+// openai_compatible provider, no mintrouter) stays Default (no Restore
+// button) and Restore leaves it byte-for-byte untouched — the user's comments
+// survive.
+func TestPureUserConfigNeverOrphan(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	user := "// my settings\n{\n  \"theme\": \"One Dark\",\n  \"language_models\": {\n" +
+		"    \"openai_compatible\": {\n      \"myproxy\": {\"api_url\": \"https://proxy.example.com\"}\n    }\n  }\n}\n"
+	if err := os.WriteFile(path, []byte(user), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("pure user config status = %v, want Default", st)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != user {
+		t.Fatalf("pure user config rewritten (comments lost): %q", got)
+	}
+}
