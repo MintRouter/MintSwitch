@@ -29,7 +29,7 @@ jobs:
         include:
           - os: macos-latest
             platform: darwin
-            arch: arm64
+            arch: universal
           - os: ubuntu-latest
             platform: linux
             arch: amd64
@@ -75,10 +75,12 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      # Produces bin/mintswitch + "bin/MintSwitch By MintRouter.AI.app" (ad-hoc signed by the Taskfile)
-      - name: Build macOS .app
+      # Produces a universal (x86_64 + arm64) bin/mintswitch via lipo and
+      # "bin/MintSwitch By MintRouter.AI.app" (ad-hoc signed by the Taskfile),
+      # so the same DMG runs on both Intel and Apple Silicon Macs.
+      - name: Build macOS .app (universal)
         if: matrix.platform == 'darwin'
-        run: wails3 task package
+        run: wails3 task darwin:package:universal
 
       # Produces bin/mintswitch, generates build/linux/mintswitch.desktop and
       # packages everything into a .deb via nfpm (embedded in the wails3 CLI —
@@ -89,12 +91,23 @@ jobs:
           sed -i "s/^version: .*/version: \"${GITHUB_REF_NAME#v}\"/" build/linux/nfpm/nfpm.yaml
           wails3 task linux:create:deb
 
-      # Produces bin/MintSwitch.exe (production flags, CGO disabled); the
-      # Windows Taskfile overrides APP_NAME to "MintSwitch" so the binary,
-      # NSIS and MSIX all use the same casing.
-      - name: Build Windows .exe
+      # NSIS is not preinstalled on the windows-2025 image (windows-latest);
+      # see actions/runner-images#11754. The choco package installs to
+      # "C:\Program Files (x86)\NSIS" without putting makensis on PATH.
+      - name: Install NSIS
         if: matrix.platform == 'windows'
-        run: wails3 task windows:build
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
+
+      # Produces bin/MintSwitch.exe (production flags, CGO disabled) plus the
+      # NSIS installer bin/MintSwitch-amd64-installer.exe (with the WebView2
+      # bootstrapper); the Windows Taskfile overrides APP_NAME to "MintSwitch"
+      # so the binary, NSIS and MSIX all use the same casing.
+      - name: Build Windows .exe + NSIS installer
+        if: matrix.platform == 'windows'
+        run: wails3 task windows:package
 
       # Standard drag-to-install DMG: the .app next to an /Applications symlink.
       - name: Package artifact (macOS)
@@ -109,12 +122,15 @@ jobs:
         if: matrix.platform == 'linux'
         run: mv bin/*.deb "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.deb"
 
-      # The Windows build is a single self-contained portable .exe (assets
-      # embedded, CGO disabled, WebView2 is an OS component), shipped zipped
-      # as MintSwitch.exe.
+      # Two Windows assets: the portable self-contained .exe (assets embedded,
+      # CGO disabled, WebView2 is an OS component) shipped zipped as
+      # MintSwitch.exe, and the NSIS installer renamed to the release pattern.
       - name: Package artifact (Windows)
         if: matrix.platform == 'windows'
-        run: Compress-Archive -Path bin/MintSwitch.exe -DestinationPath "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+        shell: pwsh
+        run: |
+          Compress-Archive -Path bin/MintSwitch.exe -DestinationPath "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          Move-Item "bin/MintSwitch-${{ matrix.arch }}-installer.exe" "MintSwitch-Setup-${{ matrix.platform }}-${{ matrix.arch }}.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
