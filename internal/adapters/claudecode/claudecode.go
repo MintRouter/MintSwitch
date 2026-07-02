@@ -20,6 +20,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
 
@@ -35,18 +36,22 @@ const (
 )
 
 // Adapter applies/restores a MintSwitch profile for Claude Code via its
-// ~/.claude/settings.json file. Construct it with [New].
+// ~/.claude/settings.json file. The managed marker lives in the sidecar
+// marker store, never in settings.json: Claude Code validates the file
+// strictly and rejects unknown top-level keys. Construct it with [New].
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
+	m *markers.Store
 	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
 	// exec.LookPath.
 	lookPath func(string) (string, error)
 }
 
-// New returns an Adapter that resolves paths via r and backs up via e.
-func New(r *paths.Resolver, e *backup.Engine) *Adapter {
-	return &Adapter{r: r, e: e, lookPath: exec.LookPath}
+// New returns an Adapter that resolves paths via r, backs up via e, and
+// records its managed marker in m.
+func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
+	return &Adapter{r: r, e: e, m: m, lookPath: exec.LookPath}
 }
 
 // ID returns the stable adapter identifier.
@@ -71,19 +76,29 @@ func (a *Adapter) Detect() (bool, string) {
 	return a.r.BinaryResolvable(a.lookPath, "claude"), a.settingsPath()
 }
 
-// Status inspects settings.json relative to profile p. See the package contract
-// for the status semantics.
+// Status inspects settings.json relative to profile p. The marker is read from
+// the sidecar store: no entry means Default; an entry whose managed env block
+// (ANTHROPIC_BASE_URL) has been removed from the file also means Default (the
+// file is back to an unmanaged state, e.g. after an external restore/wipe);
+// otherwise the marker fingerprint decides Applied vs ModifiedExternally,
+// exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
 		return core.StatusNotInstalled, core.StatusNotInstalled.Detail(), nil
 	}
+	marker, ok, err := a.m.Get(id)
+	if err != nil {
+		return core.StatusDefault, "", err
+	}
+	if !ok || !marker.Managed {
+		return core.StatusDefault, core.StatusDefault.Detail(), nil
+	}
 	m, err := readJSON(path)
 	if err != nil {
 		return core.StatusDefault, "", err
 	}
-	marker, ok := extractMarker(m)
-	if !ok {
+	if _, present := asObject(m[envKey])[envBaseURL]; !present {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
@@ -94,17 +109,20 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 
 // Apply backs up settings.json (only when it is not already MintSwitch-managed),
 // then idempotently injects the profile's endpoint into the top-level "env"
-// object and writes the MintSwitch managed marker, preserving all other keys.
+// object, preserving all other keys. The managed marker is recorded in the
+// sidecar store — never in settings.json, which Claude Code validates strictly —
+// and a leftover legacy in-file marker is stripped in the same write.
 //
-// The backup is created only on the first Apply over a pristine/unmanaged (or
-// absent) file, so the pristine pre-MintSwitch snapshot is what Restore reverts
-// to even after repeated Applies. Backing up an already-managed file would
-// snapshot a managed state (prior profile's token + marker) and hide the
-// pristine original. Limitation: if the file is already managed but no backup
-// exists (e.g. the backups dir was deleted, or a marker was left by an older
-// version), no new backup is taken and Restore is a no-op — we cannot safely
-// snapshot a managed file, and without the original we cannot distinguish our
-// injected keys from the user's own to strip them.
+// "Already managed" (the backup gate) means a store entry OR a legacy in-file
+// marker, so upgrading from a legacy-marker install never snapshots a managed
+// file. The backup is created only on the first Apply over a pristine/unmanaged
+// (or absent) file, so the pristine pre-MintSwitch snapshot is what Restore
+// reverts to even after repeated Applies. Backing up an already-managed file
+// would snapshot a managed state (prior profile's token) and hide the pristine
+// original. Limitation: if the file is already managed but no backup exists
+// (e.g. the backups dir was deleted), no new backup is taken and Restore is a
+// no-op — we cannot safely snapshot a managed file, and without the original we
+// cannot distinguish our injected keys from the user's own to strip them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -114,8 +132,13 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
+	_, inStore, err := a.m.Get(id)
+	if err != nil {
+		return core.ApplyResult{}, err
+	}
 	var backupPath string
-	if marker, ok := extractMarker(m); !ok || !marker.Managed {
+	legacy, hasLegacy := extractLegacyMarker(m)
+	if !inStore && !(hasLegacy && legacy.Managed) {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
 			return core.ApplyResult{}, err
@@ -132,9 +155,12 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		delete(env, envSmallFastModel)
 	}
 	m[envKey] = env
-	m[core.MarkerKey] = core.NewMarker(p, p.Label)
+	delete(m, core.MarkerKey)
 
 	if err := writeJSON(path, m); err != nil {
+		return core.ApplyResult{}, err
+	}
+	if err := a.m.Put(id, core.NewMarker(p, p.Label)); err != nil {
 		return core.ApplyResult{}, err
 	}
 	return core.ApplyResult{
@@ -144,12 +170,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts settings.json to its pre-apply state via the backup engine. It
-// is a safe no-op when nothing was applied.
+// Restore reverts settings.json to its pre-apply state via the backup engine
+// and removes the tool's entry from the sidecar marker store. It is a safe
+// no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.settingsPath()
 	restored, entry, err := a.e.RestoreLatest(path)
 	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	if err := a.m.Delete(id); err != nil {
 		return core.RestoreResult{}, err
 	}
 	msg := "No backup found; nothing to restore."
@@ -159,7 +189,37 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
 }
 
-var _ core.ToolAdapter = (*Adapter)(nil)
+// StripLegacyMarker removes the legacy top-level marker key from settings.json,
+// migrating its value into the sidecar store when the store has no entry for
+// this tool yet. It is a no-op when the file is absent or carries no legacy
+// marker; it never creates the file.
+func (a *Adapter) StripLegacyMarker() error {
+	path := a.settingsPath()
+	m, err := readJSON(path)
+	if err != nil {
+		return err
+	}
+	legacy, ok := extractLegacyMarker(m)
+	if !ok {
+		if _, present := m[core.MarkerKey]; !present {
+			return nil
+		}
+	}
+	if ok && legacy.Managed {
+		if _, inStore, err := a.m.Get(id); err == nil && !inStore {
+			if err := a.m.Put(id, legacy); err != nil {
+				return err
+			}
+		}
+	}
+	delete(m, core.MarkerKey)
+	return writeJSON(path, m)
+}
+
+var (
+	_ core.ToolAdapter          = (*Adapter)(nil)
+	_ core.LegacyMarkerStripper = (*Adapter)(nil)
+)
 
 // readJSON reads path as a JSON object. A missing file yields an empty object.
 func readJSON(path string) (map[string]any, error) {
@@ -198,8 +258,10 @@ func asObject(v any) map[string]any {
 	return map[string]any{}
 }
 
-// extractMarker pulls the MintSwitch marker out of a parsed settings object.
-func extractMarker(m map[string]any) (core.Marker, bool) {
+// extractLegacyMarker pulls a legacy in-file MintSwitch marker out of a parsed
+// settings object. It reports false when the key is absent or its value does
+// not decode as a [core.Marker].
+func extractLegacyMarker(m map[string]any) (core.Marker, bool) {
 	raw, ok := m[core.MarkerKey]
 	if !ok {
 		return core.Marker{}, false
