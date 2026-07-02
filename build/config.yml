@@ -5,13 +5,13 @@ version: '3'
 
 # This information is used to generate the build assets.
 info:
-  companyName: "MintSwitch" # The name of the company
-  productName: "MintSwitch" # The name of the application
-  productIdentifier: "dev.mintswitch.app" # The unique product identifier
+  companyName: "MintRouter.AI" # The name of the company
+  productName: "MintSwitch By MintRouter.AI" # The name of the application
+  productIdentifier: "ai.mintrouter.mintswitch" # The unique product identifier
   description: "AI Tool API Config Switcher" # The application description
-  copyright: "(c) 2026, MintSwitch" # Copyright text
+  copyright: "© 2026 MintRouter.AI" # Copyright text
   comments: "AI Tool API Config Switcher" # Comments
-  version: "0.0.1" # The application version
+  version: "1.0.0" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"

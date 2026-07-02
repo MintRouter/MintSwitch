@@ -6,6 +6,9 @@ includes:
 vars:
   # Docker image for cross-compilation (used when building on non-macOS)
   CROSS_IMAGE: wails-cross
+  # User-visible .app bundle name. macOS (Finder/Dock hover) displays the
+  # on-disk bundle name, so it must match the product display name.
+  PRODUCT_NAME: "MintSwitch By MintRouter.AI"
 
 tasks:
   build:
@@ -131,22 +134,22 @@ tasks:
   create:app:bundle:
     summary: Creates an `.app` bundle
     cmds:
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
+      - mkdir -p "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app/Contents/MacOS"
+      - mkdir -p "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app/Contents/Resources"
       - |
         if [ -f build/darwin/Assets.car ]; then
-          cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
+          cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app/Contents/Resources"
         fi
-      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
-      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app/Contents/MacOS"
+      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app/Contents"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:
     summary: Ad-hoc signs the app bundle (macOS only)
     internal: true
     cmds:
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app"
 
   codesign:skip:
     summary: Skips codesigning when cross-compiling
@@ -177,7 +180,7 @@ tasks:
     deps:
       - task: package
     cmds:
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" {{.CLI_ARGS}}
+      - wails3 tool sign --input "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app" {{.CLI_ARGS}}
 
   sign:notarize:
     summary: Signs and notarizes the application bundle
@@ -190,4 +193,4 @@ tasks:
     deps:
       - task: package
     cmds:
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" --notarize {{.CLI_ARGS}}
+      - wails3 tool sign --input "{{.BIN_DIR}}/{{.PRODUCT_NAME}}.app" --notarize {{.CLI_ARGS}}

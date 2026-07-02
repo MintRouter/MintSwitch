@@ -10,14 +10,14 @@
     <Installer
         Path="mintswitch"
         Arguments=""
-        InstallLocation="C:\Program Files\My Company\MintSwitch">
+        InstallLocation="C:\Program Files\MintRouter.AI\MintSwitch">
     </Installer>
     <PackageInformation
         PackageName="MintSwitch"
-        PackageDisplayName="MintSwitch"
-        PublisherName="CN=My Company"
-        PublisherDisplayName="My Company"
-        Version="0.1.0.0"
+        PackageDisplayName="MintSwitch By MintRouter.AI"
+        PublisherName="CN=MintRouter.AI"
+        PublisherDisplayName="MintRouter.AI"
+        Version="1.0.0.0"
         PackageDescription="AI Tool API Config Switcher">
         <Capabilities>
             <Capability Name="runFullTrust" />
@@ -41,8 +41,8 @@
         </Dependencies>
         <Properties>
             <Framework>false</Framework>
-            <DisplayName>MintSwitch</DisplayName>
-            <PublisherDisplayName>My Company</PublisherDisplayName>
+            <DisplayName>MintSwitch By MintRouter.AI</DisplayName>
+            <PublisherDisplayName>MintRouter.AI</PublisherDisplayName>
             <Description>AI Tool API Config Switcher</Description>
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>
