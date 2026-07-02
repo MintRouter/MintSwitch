@@ -73,7 +73,7 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      # Produces bin/mintswitch + bin/mintswitch.app (ad-hoc signed by the Taskfile)
+      # Produces bin/mintswitch + "bin/MintSwitch By MintRouter.AI.app" (ad-hoc signed by the Taskfile)
       - name: Build macOS .app
         if: matrix.platform == 'darwin'
         run: wails3 task package
@@ -90,7 +90,7 @@ jobs:
 
       - name: Package artifact (macOS)
         if: matrix.platform == 'darwin'
-        run: ditto -c -k --keepParent bin/mintswitch.app "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+        run: ditto -c -k --keepParent "bin/MintSwitch By MintRouter.AI.app" "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
       - name: Package artifact (Linux)
         if: matrix.platform == 'linux'
