@@ -1,6 +1,6 @@
 :root {
     /* Shared, non-color tokens (identical across themes). */
-    --radius: 10px;
+    --radius: 12px;
     --radius-sm: 8px;
     --radius-xs: 6px;
 
@@ -310,11 +310,11 @@ body {
 .btn-soft {
     color: var(--accent-soft-text);
     background: var(--accent-soft);
-    border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+    border-color: transparent;
 }
 .btn-soft:hover:not(:disabled) {
     background: color-mix(in srgb, var(--accent) 8%, var(--accent-soft));
-    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    border-color: transparent;
 }
 .btn-soft:active:not(:disabled) { filter: brightness(0.97); transform: translateY(0.5px); }
 /* Destructive: quiet at rest — red only appears on hover (intent). */
