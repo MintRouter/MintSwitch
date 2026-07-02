@@ -94,7 +94,7 @@ func Spec(toolID string) (Package, bool) {
 }
 
 // InstallArgs returns the full argv for installing toolID, e.g.
-// ["npm","install","-g","--ignore-scripts","@earendil-works/pi-coding-agent"].
+// ["npm","install","-g","@kilocode/cli"].
 // It returns ErrUnknownTool for an unrecognised toolID.
 func InstallArgs(toolID string) ([]string, error) {
 	p, ok := packages[toolID]
