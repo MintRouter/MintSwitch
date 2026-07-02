@@ -96,8 +96,8 @@
 
   onMount(load);
 
-  // Manual "Re-detect" + the silent auto-refreshes below share one in-flight
-  // guard so overlapping triggers (focus + a finishing op) don't stampede.
+  // The silent auto-refreshes below share one in-flight guard so overlapping
+  // triggers (focus + a finishing op) don't stampede.
   async function redetect(silent = false): Promise<void> {
     if (loading || refreshing) return;
     refreshing = true;
@@ -323,24 +323,6 @@
         </g>
       </svg>
       <span class="wordmark">MintSwitch</span>
-      <span class="topbar-sep" aria-hidden="true"></span>
-      <!-- Icon-only Re-detect (feedback #19, Multilogin-style): the circular
-           two-arrow refresh glyph replaces the label; the icon itself spins
-           while re-detecting. Tooltip + aria-label carry the lost text. -->
-      <button class="btn-ghost sm refresh" type="button" onclick={() => redetect(false)}
-        disabled={refreshing} aria-label="Re-detect tools" title="Re-detect tools">
-        <svg class="refresh-icon" class:spin={refreshing} viewBox="0 0 24 24" width="19" height="19"
-          fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true" focusable="false">
-          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-          <path d="M21 3v5h-5" />
-          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-          <path d="M8 16H3v5" />
-        </svg>
-      </button>
-      <span class="sr-only" role="status" aria-live="polite">
-        {refreshing ? "Re-detecting tools" : ""}
-      </span>
     </div>
     <!-- Promo banner (user feedback #9/#10/#15/#16 + bulk-button removal):
          compact two-line navy banner sized to its content + Telegram tile,
@@ -625,37 +607,6 @@
     letter-spacing: var(--tracking-tight);
     color: var(--text);
   }
-  /* Vertical hairline between the brand block and the Re-detect action
-     (Multilogin-style logo | icons divider): ~x-height of the wordmark, with
-     breathing room on both sides (7px flex gap + 7px margin = 14px/side). */
-  .topbar-sep {
-    flex: 0 0 auto;
-    width: 1px;
-    height: 19px;
-    margin: 0 7px;
-    background: var(--border-strong);
-  }
-
-  /* Quiet icon-only Re-detect (feedback #19, Multilogin icon-button style):
-     a compact 34px square, fully transparent at rest — no border, no fill —
-     only surfacing the soft inset fill on hover (W9-I standard; reads
-     clearly against the white chrome). The glyph uses the full --text ink
-     (not muted) so it reads clearly without its label. The global
-     focus-visible ring is untouched. */
-  .topbar-brand .refresh {
-    flex: 0 0 auto;
-    width: 34px;
-    min-height: 34px;
-    padding: 0;
-    background: transparent;
-    border-color: transparent;
-    color: var(--text);
-  }
-  .topbar-brand .refresh:hover:not(:disabled) {
-    background: var(--surface-2);
-    border-color: transparent;
-  }
-
   /* Theme toggle (feedback #18 → #24 FINAL): a 40×40 --surface tile matching
      the Telegram tile — WHITE floating on the gray chrome by pure contrast,
      border dropped per the Multilogin crop (no visible outline). 20px
@@ -682,13 +633,6 @@
     border-color: transparent;
   }
   .theme-icon { display: block; flex: 0 0 auto; }
-
-  .refresh-icon { display: block; flex: 0 0 auto; }
-  .refresh-icon.spin { animation: spin 0.7s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) {
-    .refresh-icon.spin { animation: none; }
-  }
 
   .install-log {
     margin-bottom: var(--s-2);
@@ -732,15 +676,5 @@
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px; height: 1px;
-    padding: 0; margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
   }
 </style>
