@@ -11,24 +11,24 @@ import (
 // fakeInjector is a configurable core.MCPInjector used to exercise the Service's
 // MCP methods without touching real tool config files.
 type fakeInjector struct {
-	id         string
-	installed  bool
-	status     core.MCPStatus
-	detail     string
-	statusErr  error
-	injectRes  core.MCPResult
-	injectErr  error
-	removeRes  core.MCPResult
-	removeErr  error
-	lastSpec   *core.MCPServerSpec
-	injCalls   int
-	remCalls   int
-	cfgPaths   []string
+	id        string
+	installed bool
+	status    core.MCPStatus
+	detail    string
+	statusErr error
+	injectRes core.MCPResult
+	injectErr error
+	removeRes core.MCPResult
+	removeErr error
+	lastSpec  *core.MCPServerSpec
+	injCalls  int
+	remCalls  int
+	cfgPaths  []string
 }
 
 func (f *fakeInjector) ID() string               { return f.id }
-func (f *fakeInjector) MCPConfigPaths() []string  { return f.cfgPaths }
-func (f *fakeInjector) Detect() bool              { return f.installed }
+func (f *fakeInjector) MCPConfigPaths() []string { return f.cfgPaths }
+func (f *fakeInjector) Detect() bool             { return f.installed }
 func (f *fakeInjector) MCPStatus(_ core.MCPServerSpec) (core.MCPStatus, string, error) {
 	return f.status, f.detail, f.statusErr
 }

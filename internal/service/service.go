@@ -680,5 +680,3 @@ func (s *Service) RestoreAll() ([]ToolOpResult, error) {
 	}
 	return out, nil
 }
-
-
