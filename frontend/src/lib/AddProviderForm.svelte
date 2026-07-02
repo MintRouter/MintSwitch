@@ -213,7 +213,7 @@
           {#if errors.modelPath}<p class="field-error" id="ap-err-model">{errors.modelPath}</p>{/if}
         </div>
 
-        <p class="field-hint">Mỗi ô là nơi giá trị từ hồ sơ được ghi vào file cấu hình khi Apply. Dùng dấu chấm để lồng: <code>provider.acme.options.apiKey</code>.</p>
+        <p class="field-hint">Each field is where that profile value is written in the config file on Apply. Use dots to nest: <code>provider.acme.options.apiKey</code>.</p>
         {#if errors.paths}<p class="field-error">{errors.paths}</p>{/if}
 
         {#if backendError}
