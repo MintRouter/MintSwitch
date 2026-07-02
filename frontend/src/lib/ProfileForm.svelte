@@ -367,8 +367,11 @@
 
 <style>
   /* Tight, even rhythm between field groups — no header/footer divider lines;
-     a compact local gap (tighter than the token scale) keeps the card short. */
-  .profile { display: flex; flex-direction: column; gap: 12px; }
+     a compact local gap (tighter than the token scale) keeps the card short.
+     The card GROWS to fill the left column (feedback #32) so its bottom edge
+     lines up with the tools panel; with tall content (many models) it still
+     sizes to content and the column scrolls as before. */
+  .profile { display: flex; flex-direction: column; gap: 12px; flex: 1 0 auto; }
   .profile-title { margin: 0; }
   /* Label + saved-state badge share a row (e.g. API KEY · Saved). */
   .label-row { display: flex; align-items: center; gap: 0.5rem; }
@@ -380,13 +383,16 @@
     color: var(--muted);
   }
   /* The Context Engine toggle and Save action share a footer row. A hairline
-     plus extra top space sets the actions apart from the fields above. */
+     plus extra top space sets the actions apart from the fields above. The
+     auto top margin anchors the row to the card's bottom (feedback #32) so
+     the stretched card has no dead space mid-card; when content is tall the
+     auto margin collapses to 0 and the row follows the fields as before. */
   .profile-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: var(--s-1);
-    margin-top: var(--s-1);
+    margin-top: auto;
     border-top: 1px solid var(--border);
     padding-top: 12px;
   }
