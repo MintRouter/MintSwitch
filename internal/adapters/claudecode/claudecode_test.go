@@ -9,6 +9,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
 
@@ -16,7 +17,7 @@ func newAdapter(t *testing.T) (*Adapter, *paths.Resolver) {
 	t.Helper()
 	home := t.TempDir()
 	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
-	a := New(r, backup.NewEngine(r.BackupsDir()))
+	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
 	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
 	return a, r
 }
@@ -162,8 +163,15 @@ func TestApplyNewFile(t *testing.T) {
 		env[envModel] != p.Model || env[envSmallFastModel] != p.SmallFastModel {
 		t.Fatalf("env not injected correctly: %+v", env)
 	}
-	if _, ok := m[core.MarkerKey]; !ok {
-		t.Fatal("marker missing")
+	if _, ok := m[core.MarkerKey]; ok {
+		t.Fatal("legacy marker must not be written into settings.json")
+	}
+	marker, ok, err := a.m.Get(id)
+	if err != nil || !ok || !marker.Managed {
+		t.Fatalf("store marker = %+v ok=%v err=%v, want managed entry", marker, ok, err)
+	}
+	if marker.Fingerprint != core.Fingerprint(p) {
+		t.Fatalf("store fingerprint mismatch: %q", marker.Fingerprint)
 	}
 }
 
@@ -233,6 +241,9 @@ func TestRestoreRevertsExistingFile(t *testing.T) {
 	if string(got) != string(original) {
 		t.Fatalf("file not restored byte-for-byte: %q", got)
 	}
+	if _, ok, _ := a.m.Get(id); ok {
+		t.Fatal("store entry must be deleted on Restore")
+	}
 }
 
 func TestRestoreDeletesCreatedFile(t *testing.T) {
@@ -290,5 +301,161 @@ func TestApplyInvalidProfile(t *testing.T) {
 	a, _ := newAdapter(t)
 	if _, err := a.Apply(core.Profile{}); err == nil {
 		t.Fatal("expected validation error for empty profile")
+	}
+}
+
+// writeLegacySettings writes a settings.json carrying the legacy in-file
+// marker for profile p plus a user key, mimicking a pre-store MintSwitch apply.
+func writeLegacySettings(t *testing.T, a *Adapter, p core.Profile) string {
+	t.Helper()
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]any{
+		"theme":        "dark",
+		envKey:         map[string]any{envBaseURL: p.BaseURL, envAuthToken: p.APIKey, envModel: p.Model},
+		core.MarkerKey: core.NewMarker(p, p.Label),
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestStatusDefaultWhenEnvRemoved proves a store entry alone does not report
+// Applied: when the managed env block was removed from the file (e.g. Claude
+// wiped an invalid settings.json), Status falls back to Default.
+func TestStatusDefaultWhenEnvRemoved(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	p := sampleProfile()
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.WriteFile(a.settingsPath(), []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusDefault {
+		t.Fatalf("want Default when managed env block is gone, got %v", st)
+	}
+}
+
+// TestApplyStripsLegacyMarker proves an Apply over a legacy-marker file removes
+// the key in the same write and records the fresh marker in the store, without
+// snapshotting the managed file (backup gate honors the legacy marker).
+func TestApplyStripsLegacyMarker(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	p := sampleProfile()
+	path := writeLegacySettings(t, a, p)
+
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if res.BackupPath != "" {
+		t.Fatalf("legacy-managed file must not be backed up, got %q", res.BackupPath)
+	}
+	m := readSettings(t, path)
+	if _, ok := m[core.MarkerKey]; ok {
+		t.Fatalf("legacy marker not stripped on Apply: %+v", m)
+	}
+	if m["theme"] != "dark" {
+		t.Fatalf("user key lost: %+v", m)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want AppliedByMintSwitch, got %v", st)
+	}
+}
+
+// TestStripLegacyMarkerMigrates is the startup-sweep case: a file carrying the
+// legacy marker gets it removed and migrated into the store even though the
+// user never pressed Apply.
+func TestStripLegacyMarkerMigrates(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	path := writeLegacySettings(t, a, p)
+
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	m := readSettings(t, path)
+	if _, ok := m[core.MarkerKey]; ok {
+		t.Fatalf("legacy marker still in file: %+v", m)
+	}
+	if m["theme"] != "dark" {
+		t.Fatalf("user key lost: %+v", m)
+	}
+	env := envOf(t, m)
+	if env[envBaseURL] != p.BaseURL {
+		t.Fatalf("env block lost: %+v", env)
+	}
+	marker, ok, err := a.m.Get(id)
+	if err != nil || !ok {
+		t.Fatalf("store entry after migrate = ok=%v err=%v", ok, err)
+	}
+	if marker.Fingerprint != core.Fingerprint(p) {
+		t.Fatalf("migrated fingerprint mismatch: %q", marker.Fingerprint)
+	}
+}
+
+// TestStripLegacyMarkerKeepsExistingStoreEntry proves the sweep never
+// overwrites a marker already recorded in the store (the store is newer truth).
+func TestStripLegacyMarkerKeepsExistingStoreEntry(t *testing.T) {
+	a, _ := newAdapter(t)
+	stored := core.NewMarker(secondProfile(), "personal")
+	if err := a.m.Put(id, stored); err != nil {
+		t.Fatal(err)
+	}
+	writeLegacySettings(t, a, sampleProfile())
+
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	marker, ok, err := a.m.Get(id)
+	if err != nil || !ok {
+		t.Fatalf("store entry = ok=%v err=%v", ok, err)
+	}
+	if marker.Fingerprint != stored.Fingerprint {
+		t.Fatalf("store entry overwritten by legacy marker: %+v", marker)
+	}
+	if m := readSettings(t, a.settingsPath()); m[core.MarkerKey] != nil {
+		t.Fatal("legacy marker still in file")
+	}
+}
+
+// TestStripLegacyMarkerNoOp proves the sweep neither creates a missing file nor
+// rewrites a clean one.
+func TestStripLegacyMarkerNoOp(t *testing.T) {
+	a, _ := newAdapter(t)
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip on missing file: %v", err)
+	}
+	if _, err := os.Stat(a.settingsPath()); !os.IsNotExist(err) {
+		t.Fatalf("strip must not create settings.json, stat err=%v", err)
+	}
+
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := []byte(`{"theme": "dark"}`)
+	if err := os.WriteFile(path, clean, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip on clean file: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(clean) {
+		t.Fatalf("clean file rewritten: %q", got)
 	}
 }

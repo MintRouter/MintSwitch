@@ -96,24 +96,41 @@ type ToolAdapter interface {
 	// Status inspects the current config relative to the given profile.
 	Status(p Profile) (status ToolStatus, detail string, err error)
 	// Apply backs up the existing config first, then idempotently injects the
-	// MintSwitch-managed settings (including the marker, see [Marker]).
+	// MintSwitch-managed settings. The managed [Marker] is recorded in the
+	// sidecar marker store, never in the tool's own config file.
 	Apply(p Profile) (ApplyResult, error)
 	// Restore reverts to the pre-apply state via backup / removal of injected
 	// keys. It must be a safe no-op when nothing was applied.
 	Restore() (RestoreResult, error)
 }
 
-// MarkerKey is the sentinel key adapters write into a tool's config to mark it
-// as MintSwitch-managed. Adapters embed a [Marker] value under this key
-// (translated to the tool's config format, e.g. a JSON object or TOML table).
+// LegacyMarkerStripper is an optional interface tool adapters implement to
+// clean the legacy in-file marker (see [MarkerKey]) out of a tool's config.
+// The service calls it once per adapter at startup (best-effort) so configs
+// broken by the legacy key — strict validators like OpenCode/Kilo/Claude Code
+// reject unknown top-level keys — heal without any user action.
+type LegacyMarkerStripper interface {
+	// StripLegacyMarker removes the legacy top-level [MarkerKey] from the
+	// tool's config file, migrating its value into the sidecar marker store
+	// when the store has no entry for the tool yet. It must be a safe no-op
+	// when the file is absent or carries no legacy marker.
+	StripLegacyMarker() error
+}
+
+// MarkerKey is the LEGACY sentinel key older MintSwitch versions wrote into a
+// tool's config file to mark it as MintSwitch-managed. Markers now live in the
+// sidecar store (internal/markers); adapters must never write this key. It is
+// kept only so [LegacyMarkerStripper] implementations can find and remove the
+// key from existing user configs (migrating the value into the store).
 const MarkerKey = "mintswitchManaged"
 
 // MarkerVersion is the current marker schema version.
 const MarkerVersion = 1
 
-// Marker is the MintSwitch sentinel embedded in a managed tool config. It lets
-// Status distinguish MintSwitch-applied configs from default/externally-edited
-// ones via the Fingerprint of the managed fields.
+// Marker is the MintSwitch sentinel recorded for a managed tool (in the
+// sidecar marker store; legacy versions embedded it in the tool config under
+// [MarkerKey]). It lets Status distinguish MintSwitch-applied configs from
+// default/externally-edited ones via the Fingerprint of the managed fields.
 type Marker struct {
 	Managed      bool      `json:"managed"`
 	ProfileLabel string    `json:"profileLabel,omitempty"`

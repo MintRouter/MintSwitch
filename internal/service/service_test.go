@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
 	"mintswitch/internal/installer"
+	"mintswitch/internal/markers"
+	"mintswitch/internal/paths"
 	"mintswitch/internal/settings"
 )
 
@@ -869,3 +872,41 @@ func reg(adapters ...*fakeAdapter) *core.Registry {
 // storeFrom returns the settings store backing an existing test Service so a
 // second Service can read the same persisted state.
 func storeFrom(s *Service) *settings.Store { return s.store }
+
+// TestNewWithDepsSweepsLegacyMarkers is the startup-sweep integration test: a
+// user's settings.json broken by the legacy in-file marker is healed (key
+// removed, marker migrated to the sidecar store) just by constructing the
+// Service, without any Apply.
+func TestNewWithDepsSweepsLegacyMarkers(t *testing.T) {
+	home := t.TempDir()
+	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"theme":"dark","env":{"ANTHROPIC_BASE_URL":"https://x.example.com"},` +
+		`"mintswitchManaged":{"managed":true,"fingerprint":"legacyfp","version":1}}`)
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	NewWithDeps(r, backup.NewEngine(r.BackupsDir()))
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read settings after sweep: %v", err)
+	}
+	if strings.Contains(string(data), core.MarkerKey) {
+		t.Fatalf("legacy marker not swept from settings.json: %s", data)
+	}
+	if !strings.Contains(string(data), "ANTHROPIC_BASE_URL") || !strings.Contains(string(data), "dark") {
+		t.Fatalf("sweep dropped user/env keys: %s", data)
+	}
+	marker, ok, err := markers.NewStore(r.MarkersPath()).Get("claude-code")
+	if err != nil || !ok {
+		t.Fatalf("store entry after sweep = ok=%v err=%v", ok, err)
+	}
+	if marker.Fingerprint != "legacyfp" {
+		t.Fatalf("migrated fingerprint = %q, want legacyfp", marker.Fingerprint)
+	}
+}

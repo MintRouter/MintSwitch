@@ -149,6 +149,12 @@ func (r *Resolver) SettingsPath() string {
 	return r.DataJoin("settings.json")
 }
 
+// MarkersPath returns the path to the sidecar managed-marker store
+// (DataDir/markers.json).
+func (r *Resolver) MarkersPath() string {
+	return r.DataJoin("markers.json")
+}
+
 // UserBinDirs returns the HOME-derived curated bin directories (~/.local/bin,
 // ~/.npm-global/bin, ~/bin). These are the only directories MintSwitch will ever
 // delete a standalone tool binary from. It derives everything from Home and
