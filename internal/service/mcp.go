@@ -76,6 +76,8 @@ func (s *Service) mcpSpec() (core.MCPServerSpec, bool, error) {
 // this method. It remains exported for binding stability and to keep existing
 // setups that saved a standalone key working.
 func (s *Service) SetMCPKey(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	st, err := s.store.Load()
 	if err != nil {
 		return err
@@ -88,6 +90,8 @@ func (s *Service) SetMCPKey(key string) error {
 // updates only the toggle (never the key or endpoint), and saves. The inverse is
 // stored so the feature defaults to enabled when unset (see settings.State).
 func (s *Service) SetMCPEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	st, err := s.store.Load()
 	if err != nil {
 		return err
@@ -130,6 +134,8 @@ func (s *Service) GetMCPState() (MCPState, error) {
 // InjectMCPOne injects the MintRouter MCP server into the single tool identified
 // by toolID. It fails when no key is saved or the tool is unknown.
 func (s *Service) InjectMCPOne(toolID string) (core.MCPResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	inj, ok := s.mcpInjector(toolID)
 	if !ok {
 		return core.MCPResult{}, fmt.Errorf("service: unknown MCP tool %q", toolID)
@@ -147,6 +153,8 @@ func (s *Service) InjectMCPOne(toolID string) (core.MCPResult, error) {
 // RemoveMCPOne removes the MintRouter MCP server from the single tool identified
 // by toolID. It is a safe no-op when nothing was injected.
 func (s *Service) RemoveMCPOne(toolID string) (core.MCPResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	inj, ok := s.mcpInjector(toolID)
 	if !ok {
 		return core.MCPResult{}, fmt.Errorf("service: unknown MCP tool %q", toolID)
