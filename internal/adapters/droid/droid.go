@@ -17,6 +17,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
 
@@ -32,22 +33,28 @@ const customModelsKey = "customModels"
 // defaultMaxOutputTokens is written to the entry; Droid requires the field.
 const defaultMaxOutputTokens = 32768
 
-// Ensure Adapter satisfies the shared tool adapter contract.
-var _ core.ToolAdapter = (*Adapter)(nil)
+// Ensure Adapter satisfies the shared tool adapter contracts.
+var (
+	_ core.ToolAdapter          = (*Adapter)(nil)
+	_ core.LegacyMarkerStripper = (*Adapter)(nil)
+)
 
-// Adapter manages Factory Droid's configuration on behalf of MintSwitch.
+// Adapter manages Factory Droid's configuration on behalf of MintSwitch. The
+// managed marker lives in the sidecar marker store, never in settings.json.
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
+	m *markers.Store
 	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
 	// exec.LookPath.
 	lookPath func(string) (string, error)
 }
 
 // New constructs a Factory Droid adapter. All filesystem locations derive from
-// the injected resolver and backup engine so tests can point HOME at a temp dir.
-func New(r *paths.Resolver, e *backup.Engine) *Adapter {
-	return &Adapter{r: r, e: e, lookPath: exec.LookPath}
+// the injected resolver, backup engine, and sidecar marker store so tests can
+// point HOME at a temp dir.
+func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
+	return &Adapter{r: r, e: e, m: m, lookPath: exec.LookPath}
 }
 
 // ID returns the stable adapter identifier.
@@ -82,18 +89,29 @@ func (a *Adapter) Detect() (bool, string) {
 	return false, path
 }
 
-// Status inspects the current config relative to the given profile.
+// Status inspects the current config relative to the given profile. The
+// marker is read from the sidecar store: no entry means Default; an entry
+// whose managed customModels entry has been removed from the file also means
+// Default (the file is back to an unmanaged state, e.g. after an external
+// restore/wipe); otherwise the marker fingerprint decides Applied vs
+// ModifiedExternally, exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
 		return core.StatusNotInstalled, core.StatusNotInstalled.Detail(), nil
 	}
+	marker, ok, err := a.m.Get(a.ID())
+	if err != nil {
+		return core.StatusDefault, "", err
+	}
+	if !ok || !marker.Managed {
+		return core.StatusDefault, core.StatusDefault.Detail(), nil
+	}
 	root, err := core.ReadJSONObject(path)
 	if err != nil {
 		return core.StatusDefault, "", err
 	}
-	marker, ok := extractMarker(root)
-	if !ok {
+	if !hasManagedEntry(root) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
@@ -104,13 +122,17 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 
 // Apply backs up the existing config (only when it is not already
 // MintSwitch-managed), then idempotently upserts the MintSwitch customModels
-// entry, sets the top-level "model" to the selected model, and writes the
-// managed marker, preserving all other keys (including the user's own
-// customModels entries). The write is atomic at 0600.
+// entry and sets the top-level "model" to the selected model, preserving all
+// other keys (including the user's own customModels entries). The write is
+// atomic at 0600. The managed marker is recorded in the sidecar store — never
+// in settings.json — and a leftover legacy in-file marker is stripped in the
+// same write.
 //
-// The backup is created only on the first Apply over a pristine/unmanaged (or
-// absent) file, so the pristine pre-MintSwitch snapshot is what Restore reverts
-// to even after repeated Applies.
+// "Already managed" (the backup gate) means a store entry OR a legacy in-file
+// marker, so upgrading from a legacy-marker install never snapshots a managed
+// file. The backup is created only on the first Apply over a
+// pristine/unmanaged (or absent) file, so the pristine pre-MintSwitch snapshot
+// is what Restore reverts to even after repeated Applies.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -120,8 +142,12 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
+	_, inStore, err := a.m.Get(a.ID())
+	if err != nil {
+		return core.ApplyResult{}, err
+	}
 	var backupPath string
-	if _, managed := extractMarker(root); !managed {
+	if _, hasLegacy := extractMarker(root); !inStore && !hasLegacy {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
 			return core.ApplyResult{}, err
@@ -130,9 +156,12 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 
 	upsertCustomModel(root, customModelEntry(p))
 	root["model"] = p.Model
-	root[core.MarkerKey] = core.NewMarker(p, p.Label)
+	delete(root, core.MarkerKey)
 
 	if err := core.WriteJSONObjectAtomic(path, root); err != nil {
+		return core.ApplyResult{}, err
+	}
+	if err := a.m.Put(a.ID(), core.NewMarker(p, p.Label)); err != nil {
 		return core.ApplyResult{}, err
 	}
 	return core.ApplyResult{
@@ -142,12 +171,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts the config to its pre-apply state via the backup engine. It
-// is a safe no-op when nothing was applied.
+// Restore reverts the config to its pre-apply state via the backup engine and
+// removes the tool's entry from the sidecar marker store. It is a safe no-op
+// when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
 	restored, entry, err := a.e.RestoreLatest(path)
 	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	if err := a.m.Delete(a.ID()); err != nil {
 		return core.RestoreResult{}, err
 	}
 	msg := "No backup found; nothing to restore."
@@ -155,4 +188,31 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		msg = "Restored Factory Droid settings to their pre-apply state."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// StripLegacyMarker removes the legacy top-level marker key from
+// settings.json, migrating its value into the sidecar store when the store
+// has no entry for this tool yet. It is a no-op when the file is absent or
+// carries no legacy marker; it never creates the file.
+func (a *Adapter) StripLegacyMarker() error {
+	path := a.configPath()
+	root, err := core.ReadJSONObject(path)
+	if err != nil {
+		return err
+	}
+	legacy, ok := extractMarker(root)
+	if !ok {
+		if _, present := root[core.MarkerKey]; !present {
+			return nil
+		}
+	}
+	if ok {
+		if _, inStore, err := a.m.Get(a.ID()); err == nil && !inStore {
+			if err := a.m.Put(a.ID(), legacy); err != nil {
+				return err
+			}
+		}
+	}
+	delete(root, core.MarkerKey)
+	return core.WriteJSONObjectAtomic(path, root)
 }

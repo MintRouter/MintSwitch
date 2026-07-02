@@ -22,6 +22,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
 
@@ -38,13 +39,18 @@ const modelMaxTokens = 128000
 const envKeyNote = "API key: set the MINTROUTER_API_KEY environment variable" +
 	" in the shell that launches Zed (Zed forbids API keys in settings.json)."
 
-// Ensure Adapter satisfies the shared tool adapter contract.
-var _ core.ToolAdapter = (*Adapter)(nil)
+// Ensure Adapter satisfies the shared tool adapter contracts.
+var (
+	_ core.ToolAdapter          = (*Adapter)(nil)
+	_ core.LegacyMarkerStripper = (*Adapter)(nil)
+)
 
-// Adapter manages Zed's settings on behalf of MintSwitch.
+// Adapter manages Zed's settings on behalf of MintSwitch. The managed marker
+// lives in the sidecar marker store, never in settings.json.
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
+	m *markers.Store
 	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
 	// exec.LookPath.
 	lookPath func(string) (string, error)
@@ -54,11 +60,13 @@ type Adapter struct {
 }
 
 // New constructs a Zed adapter. All filesystem locations derive from the
-// injected resolver and backup engine so tests can point HOME at a temp dir.
-func New(r *paths.Resolver, e *backup.Engine) *Adapter {
+// injected resolver, backup engine, and sidecar marker store so tests can
+// point HOME at a temp dir.
+func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
 	return &Adapter{
 		r:        r,
 		e:        e,
+		m:        m,
 		lookPath: exec.LookPath,
 		appBundles: []string{
 			"/Applications/Zed.app",
@@ -101,18 +109,29 @@ func (a *Adapter) Detect() (bool, string) {
 	return false, a.configPath()
 }
 
-// Status inspects the current settings relative to the given profile.
+// Status inspects the current settings relative to the given profile. The
+// marker is read from the sidecar store: no entry means Default; an entry
+// whose managed provider block has been removed from the file also means
+// Default (the file is back to an unmanaged state, e.g. after an external
+// restore/wipe); otherwise the marker fingerprint decides Applied vs
+// ModifiedExternally, exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
 		return core.StatusNotInstalled, core.StatusNotInstalled.Detail(), nil
 	}
+	marker, ok, err := a.m.Get(a.ID())
+	if err != nil {
+		return core.StatusDefault, "", err
+	}
+	if !ok || !marker.Managed {
+		return core.StatusDefault, core.StatusDefault.Detail(), nil
+	}
 	root, err := readConfig(path)
 	if err != nil {
 		return core.StatusDefault, "", err
 	}
-	marker, ok := extractMarker(root)
-	if !ok {
+	if !hasManagedProvider(root) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(fingerprintProfile(p)) {
@@ -124,15 +143,19 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 
 // Apply backs up the existing settings (only when they are not already
 // MintSwitch-managed), then idempotently upserts the MintSwitch
-// openai_compatible provider, agent default model, and managed marker,
-// preserving all other keys. The profile's API key is never written: Zed
-// reads it from the MINTROUTER_API_KEY environment variable.
+// openai_compatible provider and agent default model, preserving all other
+// keys. The profile's API key is never written: Zed reads it from the
+// MINTROUTER_API_KEY environment variable. The managed marker is recorded in
+// the sidecar store — never in settings.json — and a leftover legacy in-file
+// marker is stripped in the same write.
 //
-// The backup is created only on the first Apply over a pristine/unmanaged (or
-// absent) file, so the pristine pre-MintSwitch snapshot is what Restore
-// reverts to even after repeated Applies. Note: Zed settings may contain
-// JSONC comments; they are parsed leniently but the file is rewritten as
-// plain JSON (comments are preserved only in the backup).
+// "Already managed" (the backup gate) means a store entry OR a legacy in-file
+// marker, so upgrading from a legacy-marker install never snapshots a managed
+// file. The backup is created only on the first Apply over a
+// pristine/unmanaged (or absent) file, so the pristine pre-MintSwitch snapshot
+// is what Restore reverts to even after repeated Applies. Note: Zed settings
+// may contain JSONC comments; they are parsed leniently but the file is
+// rewritten as plain JSON (comments are preserved only in the backup).
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -145,8 +168,12 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if root == nil {
 		root = map[string]any{}
 	}
+	_, inStore, err := a.m.Get(a.ID())
+	if err != nil {
+		return core.ApplyResult{}, err
+	}
 	var backupPath string
-	if _, managed := extractMarker(root); !managed {
+	if _, hasLegacy := extractMarker(root); !inStore && !hasLegacy {
 		backupPath, err = a.e.Backup(path)
 		if err != nil {
 			return core.ApplyResult{}, err
@@ -183,9 +210,12 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		"model":    p.Model,
 	}
 	root["agent"] = agent
-	root[core.MarkerKey] = core.NewMarker(fingerprintProfile(p), p.Label)
+	delete(root, core.MarkerKey)
 
 	if err := writeConfig(path, root); err != nil {
+		return core.ApplyResult{}, err
+	}
+	if err := a.m.Put(a.ID(), core.NewMarker(fingerprintProfile(p), p.Label)); err != nil {
 		return core.ApplyResult{}, err
 	}
 	return core.ApplyResult{
@@ -195,12 +225,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}, nil
 }
 
-// Restore reverts the settings to their pre-apply state via the backup
-// engine. It is a safe no-op when nothing was applied.
+// Restore reverts the settings to their pre-apply state via the backup engine
+// and removes the tool's entry from the sidecar marker store. It is a safe
+// no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	path := a.configPath()
 	restored, entry, err := a.e.RestoreLatest(path)
 	if err != nil {
+		return core.RestoreResult{}, err
+	}
+	if err := a.m.Delete(a.ID()); err != nil {
 		return core.RestoreResult{}, err
 	}
 	msg := "No backup found; nothing to restore."
@@ -208,6 +242,36 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		msg = "Restored Zed settings to their pre-apply state."
 	}
 	return core.RestoreResult{ChangedPath: path, BackupPath: entry, Message: msg}, nil
+}
+
+// StripLegacyMarker removes the legacy top-level marker key from
+// settings.json, migrating its value into the sidecar store when the store
+// has no entry for this tool yet. It is a no-op when the file is absent or
+// carries no legacy marker; it never creates the file.
+func (a *Adapter) StripLegacyMarker() error {
+	path := a.configPath()
+	root, err := readConfig(path)
+	if err != nil {
+		return err
+	}
+	if root == nil {
+		return nil
+	}
+	legacy, ok := extractMarker(root)
+	if !ok {
+		if _, present := root[core.MarkerKey]; !present {
+			return nil
+		}
+	}
+	if ok {
+		if _, inStore, err := a.m.Get(a.ID()); err == nil && !inStore {
+			if err := a.m.Put(a.ID(), legacy); err != nil {
+				return err
+			}
+		}
+	}
+	delete(root, core.MarkerKey)
+	return writeConfig(path, root)
 }
 
 // readConfig reads and parses the settings file, tolerating Zed's JSONC
@@ -253,6 +317,15 @@ func writeConfig(path string, root map[string]any) error {
 func fingerprintProfile(p core.Profile) core.Profile {
 	p.APIKey = ""
 	return p
+}
+
+// hasManagedProvider reports whether the parsed settings still contain the
+// MintSwitch openai_compatible provider block that Apply writes.
+func hasManagedProvider(root map[string]any) bool {
+	languageModels, _ := root["language_models"].(map[string]any)
+	compatible, _ := languageModels["openai_compatible"].(map[string]any)
+	_, ok := compatible[providerID]
+	return ok
 }
 
 // extractMarker decodes the MintSwitch marker from the parsed settings, if present.

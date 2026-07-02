@@ -67,34 +67,22 @@ func writeJSON(path string, m map[string]any) error {
 	return core.WriteJSONObjectAtomic(path, m)
 }
 
-// markerMap builds the MintSwitch managed-marker as a generic map keyed by the
-// marker's JSON field names, so it serializes consistently into TOML.
-func markerMap(p core.Profile) (map[string]any, error) {
-	raw, err := json.Marshal(core.NewMarker(p, p.Label))
-	if err != nil {
-		return nil, err
-	}
-	m := map[string]any{}
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-// markerFingerprint extracts the fingerprint from a parsed config's managed
-// marker. It reports ok=false when no marker is present.
-func markerFingerprint(cfg map[string]any) (string, bool) {
+// extractLegacyMarker pulls a legacy in-file MintSwitch marker out of a parsed
+// config (a [mintswitchManaged] TOML table, converted via a JSON round-trip).
+// It reports false when the key is absent or its value does not decode as a
+// [core.Marker].
+func extractLegacyMarker(cfg map[string]any) (core.Marker, bool) {
 	raw, ok := cfg[core.MarkerKey]
 	if !ok {
-		return "", false
+		return core.Marker{}, false
 	}
-	m, ok := raw.(map[string]any)
-	if !ok {
-		return "", false
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return core.Marker{}, false
 	}
-	fp, ok := m["fingerprint"].(string)
-	if !ok {
-		return "", false
+	var marker core.Marker
+	if err := json.Unmarshal(b, &marker); err != nil {
+		return core.Marker{}, false
 	}
-	return fp, true
+	return marker, true
 }

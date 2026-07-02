@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
 
@@ -18,7 +20,7 @@ func newAdapter(t *testing.T) (*Adapter, string) {
 	t.Helper()
 	home := t.TempDir()
 	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
-	a := New(r, backup.NewEngine(r.BackupsDir()))
+	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
 	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
 	return a, home
 }
@@ -133,8 +135,15 @@ func TestApplyNewFiles(t *testing.T) {
 	if cfg["openai_base_url"] != p.BaseURL || cfg["model"] != p.Model {
 		t.Fatalf("config not written: %+v", cfg)
 	}
-	if fp, ok := markerFingerprint(cfg); !ok || fp != core.Fingerprint(p) {
-		t.Fatalf("marker fingerprint mismatch: %q ok=%v", fp, ok)
+	if _, present := cfg[core.MarkerKey]; present {
+		t.Fatalf("legacy marker written to config.toml: %+v", cfg)
+	}
+	marker, ok, err := a.m.Get(a.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || marker.Fingerprint != core.Fingerprint(p) {
+		t.Fatalf("store marker fingerprint mismatch: %+v ok=%v", marker, ok)
 	}
 
 	auth, err := readJSON(filepath.Join(home, ".codex", "auth.json"))
@@ -197,5 +206,169 @@ func TestApplyPreservesExistingKeys(t *testing.T) {
 	}
 	if auth[authModeKey] != authModeAPIKey {
 		t.Fatalf("auth_mode not set to apikey: %+v", auth)
+	}
+}
+
+// writeLegacyConfig writes a config.toml carrying the legacy in-file marker
+// for profile p plus a user key, mimicking a pre-store MintSwitch apply.
+func writeLegacyConfig(t *testing.T, a *Adapter, p core.Profile) string {
+	t.Helper()
+	path := a.configPath()
+	marker := core.NewMarker(p, p.Label)
+	cfg := map[string]any{
+		"sandbox_mode":    "read-only",
+		"openai_base_url": p.BaseURL,
+		"model":           p.Model,
+		core.MarkerKey: map[string]any{
+			"managed":      marker.Managed,
+			"profileLabel": marker.ProfileLabel,
+			"fingerprint":  marker.Fingerprint,
+			"appliedAt":    marker.AppliedAt.Format(time.RFC3339),
+			"version":      marker.Version,
+		},
+	}
+	if err := writeTOML(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestStatusDefaultWhenBaseURLRemoved proves a store entry alone does not
+// report Applied: when the managed openai_base_url was removed from the file
+// (e.g. an external restore/wipe), Status falls back to Default.
+func TestStatusDefaultWhenBaseURLRemoved(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.WriteFile(a.configPath(), []byte("model = \"gpt-5.5\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusDefault {
+		t.Fatalf("want Default when openai_base_url is gone, got %v", st)
+	}
+}
+
+// TestApplyStripsLegacyMarker proves an Apply over a legacy-marker config
+// removes the table in the same write and records the fresh marker in the
+// store, without snapshotting the managed file (backup gate honors the legacy
+// marker).
+func TestApplyStripsLegacyMarker(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	path := writeLegacyConfig(t, a, p)
+
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if res.BackupPath != "" {
+		t.Fatalf("legacy-managed file must not be backed up, got %q", res.BackupPath)
+	}
+	cfg, err := readTOML(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg[core.MarkerKey]; ok {
+		t.Fatalf("legacy marker not stripped on Apply: %+v", cfg)
+	}
+	if cfg["sandbox_mode"] != "read-only" {
+		t.Fatalf("user key lost: %+v", cfg)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want AppliedByMintSwitch, got %v", st)
+	}
+}
+
+// TestStripLegacyMarkerMigrates is the startup-sweep case: a config carrying
+// the legacy marker gets it removed and migrated into the store even though
+// the user never pressed Apply.
+func TestStripLegacyMarkerMigrates(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	path := writeLegacyConfig(t, a, p)
+
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	cfg, err := readTOML(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg[core.MarkerKey]; ok {
+		t.Fatalf("legacy marker still in file: %+v", cfg)
+	}
+	if cfg["sandbox_mode"] != "read-only" || cfg["openai_base_url"] != p.BaseURL {
+		t.Fatalf("existing keys lost: %+v", cfg)
+	}
+	marker, ok, err := a.m.Get(a.ID())
+	if err != nil || !ok {
+		t.Fatalf("store entry after migrate = ok=%v err=%v", ok, err)
+	}
+	if marker.Fingerprint != core.Fingerprint(p) {
+		t.Fatalf("migrated fingerprint mismatch: %q", marker.Fingerprint)
+	}
+}
+
+// TestStripLegacyMarkerKeepsExistingStoreEntry proves the sweep never
+// overwrites a marker already recorded in the store (the store is newer truth).
+func TestStripLegacyMarkerKeepsExistingStoreEntry(t *testing.T) {
+	a, _ := newAdapter(t)
+	stored := core.NewMarker(secondProfile(), "personal")
+	if err := a.m.Put(a.ID(), stored); err != nil {
+		t.Fatal(err)
+	}
+	writeLegacyConfig(t, a, sampleProfile())
+
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	marker, ok, err := a.m.Get(a.ID())
+	if err != nil || !ok {
+		t.Fatalf("store entry = ok=%v err=%v", ok, err)
+	}
+	if marker.Fingerprint != stored.Fingerprint {
+		t.Fatalf("store entry overwritten by legacy marker: %+v", marker)
+	}
+	cfg, err := readTOML(a.configPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg[core.MarkerKey]; present {
+		t.Fatal("legacy marker still in file")
+	}
+}
+
+// TestStripLegacyMarkerNoOp proves the sweep neither creates a missing file
+// nor rewrites a clean one.
+func TestStripLegacyMarkerNoOp(t *testing.T) {
+	a, _ := newAdapter(t)
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip on missing file: %v", err)
+	}
+	if _, err := os.Stat(a.configPath()); !os.IsNotExist(err) {
+		t.Fatalf("strip must not create config.toml, stat err=%v", err)
+	}
+
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := []byte("sandbox_mode = \"read-only\"\n")
+	if err := os.WriteFile(path, clean, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.StripLegacyMarker(); err != nil {
+		t.Fatalf("strip on clean file: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(clean) {
+		t.Fatalf("clean file rewritten: %q", got)
 	}
 }

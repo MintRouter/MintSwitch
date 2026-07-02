@@ -21,6 +21,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
 )
 
@@ -36,17 +37,21 @@ const (
 )
 
 // Adapter applies/restores a MintSwitch profile to the Codex configuration.
+// The managed marker lives in the sidecar marker store, never in config.toml,
+// so Codex configs stay free of the legacy [mintswitchManaged] table.
 type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
+	m *markers.Store
 	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
 	// exec.LookPath.
 	lookPath func(string) (string, error)
 }
 
-// New constructs a Codex adapter using the injected resolver and backup engine.
-func New(r *paths.Resolver, e *backup.Engine) *Adapter {
-	return &Adapter{r: r, e: e, lookPath: exec.LookPath}
+// New constructs a Codex adapter using the injected resolver, backup engine,
+// and sidecar marker store.
+func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
+	return &Adapter{r: r, e: e, m: m, lookPath: exec.LookPath}
 }
 
 // ID returns the stable adapter identifier.
@@ -77,42 +82,56 @@ func (a *Adapter) Detect() (bool, string) {
 	return a.r.BinaryResolvable(a.lookPath, "codex"), a.configPath()
 }
 
-// Status inspects config.toml relative to the given profile.
+// Status inspects config.toml relative to the given profile. The marker is
+// read from the sidecar store: no entry means Default; an entry whose managed
+// key (openai_base_url) has been removed from the file also means Default (the
+// file is back to an unmanaged state, e.g. after an external restore/wipe);
+// otherwise the marker fingerprint decides Applied vs ModifiedExternally,
+// exactly as with the legacy in-file marker.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, _ := a.Detect()
 	if !installed {
 		return core.StatusNotInstalled, core.StatusNotInstalled.Detail(), nil
 	}
+	marker, ok, err := a.m.Get(a.ID())
+	if err != nil {
+		return core.StatusDefault, "", err
+	}
+	if !ok || !marker.Managed {
+		return core.StatusDefault, core.StatusDefault.Detail(), nil
+	}
 	cfg, err := readTOML(a.configPath())
 	if err != nil {
 		return core.StatusDefault, "", err
 	}
-	fp, ok := markerFingerprint(cfg)
-	if !ok {
+	if _, present := cfg["openai_base_url"]; !present {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
-	if fp == core.Fingerprint(p) {
+	if marker.Fingerprint == core.Fingerprint(p) {
 		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 	}
 	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 }
 
 // Apply backs up both files (only when config.toml is not already
-// MintSwitch-managed), then injects openai_base_url + model and the managed
-// marker into config.toml and OPENAI_API_KEY plus auth_mode="apikey" into
-// auth.json, preserving all other existing keys in each file.
+// MintSwitch-managed), then injects openai_base_url + model into config.toml
+// and OPENAI_API_KEY plus auth_mode="apikey" into auth.json, preserving all
+// other existing keys in each file. The managed marker is recorded in the
+// sidecar store — never in config.toml — and a leftover legacy in-file marker
+// table is stripped in the same write.
 //
-// The backups are created only on the first Apply over a pristine/unmanaged (or
-// absent) config, so the pristine pre-MintSwitch snapshots are what Restore
-// reverts to even after repeated Applies. config.toml's marker is the single
-// source of truth for "managed": auth.json carries no marker but is gated by it
-// so both files snapshot the same pre-MintSwitch point in time. Backing up an
-// already-managed config would snapshot a managed state (prior profile's key +
-// marker) and hide the pristine original. Limitation: if config.toml is already
-// managed but no backup exists (e.g. the backups dir was deleted, or a marker
-// was left by an older version), no new backup is taken and Restore is a no-op —
-// we cannot safely snapshot a managed file, and without the original we cannot
-// distinguish our injected keys from the user's own to strip them.
+// "Already managed" (the backup gate) means a store entry OR a legacy in-file
+// marker, so upgrading from a legacy-marker install never snapshots a managed
+// file. The backups are created only on the first Apply over a
+// pristine/unmanaged (or absent) config, so the pristine pre-MintSwitch
+// snapshots are what Restore reverts to even after repeated Applies. auth.json
+// carries no marker but is gated by the same check so both files snapshot the
+// same pre-MintSwitch point in time. Backing up an already-managed config
+// would snapshot a managed state (prior profile's key) and hide the pristine
+// original. Limitation: if config.toml is already managed but no backup exists
+// (e.g. the backups dir was deleted), no new backup is taken and Restore is a
+// no-op — we cannot safely snapshot a managed file, and without the original
+// we cannot distinguish our injected keys from the user's own to strip them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -123,8 +142,13 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
+	_, inStore, err := a.m.Get(a.ID())
+	if err != nil {
+		return core.ApplyResult{}, err
+	}
 	var cfgBackup string
-	if _, managed := markerFingerprint(cfg); !managed {
+	legacy, hasLegacy := extractLegacyMarker(cfg)
+	if !inStore && !(hasLegacy && legacy.Managed) {
 		cfgBackup, err = a.e.Backup(cfgPath)
 		if err != nil {
 			return core.ApplyResult{}, err
@@ -136,11 +160,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 
 	cfg["openai_base_url"] = p.BaseURL
 	cfg["model"] = p.Model
-	marker, err := markerMap(p)
-	if err != nil {
-		return core.ApplyResult{}, err
-	}
-	cfg[core.MarkerKey] = marker
+	delete(cfg, core.MarkerKey)
 	if err := writeTOML(cfgPath, cfg); err != nil {
 		return core.ApplyResult{}, err
 	}
@@ -155,6 +175,9 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		return core.ApplyResult{}, err
 	}
 
+	if err := a.m.Put(a.ID(), core.NewMarker(p, p.Label)); err != nil {
+		return core.ApplyResult{}, err
+	}
 	return core.ApplyResult{
 		ChangedPath: cfgPath,
 		BackupPath:  cfgBackup,
@@ -182,6 +205,9 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 	if err := errors.Join(cfgErr, authErr); err != nil {
 		return core.RestoreResult{}, err
 	}
+	if err := a.m.Delete(a.ID()); err != nil {
+		return core.RestoreResult{}, err
+	}
 	var msg string
 	switch {
 	case cfgRestored && authRestored:
@@ -200,4 +226,35 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 	}, nil
 }
 
-var _ core.ToolAdapter = (*Adapter)(nil)
+// StripLegacyMarker removes the legacy [mintswitchManaged] table from
+// config.toml, migrating its value into the sidecar store when the store has
+// no entry for this tool yet. The TOML round-trip preserves every other key
+// (including [mcp_servers], [projects], ...). It is a no-op when the file is
+// absent or carries no legacy marker; it never creates the file.
+func (a *Adapter) StripLegacyMarker() error {
+	path := a.configPath()
+	cfg, err := readTOML(path)
+	if err != nil {
+		return err
+	}
+	legacy, ok := extractLegacyMarker(cfg)
+	if !ok {
+		if _, present := cfg[core.MarkerKey]; !present {
+			return nil
+		}
+	}
+	if ok && legacy.Managed {
+		if _, inStore, err := a.m.Get(a.ID()); err == nil && !inStore {
+			if err := a.m.Put(a.ID(), legacy); err != nil {
+				return err
+			}
+		}
+	}
+	delete(cfg, core.MarkerKey)
+	return writeTOML(path, cfg)
+}
+
+var (
+	_ core.ToolAdapter          = (*Adapter)(nil)
+	_ core.LegacyMarkerStripper = (*Adapter)(nil)
+)
