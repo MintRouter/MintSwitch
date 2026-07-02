@@ -14,6 +14,8 @@
 package codex
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 
 	"mintswitch/internal/backup"
@@ -158,19 +160,40 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 }
 
 // Restore reverts both config.toml and auth.json from their latest backups.
+// Both restores are attempted best-effort even when one fails, so an error on
+// config.toml never silently skips auth.json (or vice versa); failures are
+// joined into a single error naming each file. When config.toml is restored
+// but auth.json has no backup, the message states that the MintSwitch API key
+// may still be present in auth.json rather than reporting an unqualified
+// success.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	cfgPath, authPath := a.configPath(), a.authPath()
-	_, cfgEntry, err := a.e.RestoreLatest(cfgPath)
-	if err != nil {
+	cfgRestored, cfgEntry, cfgErr := a.e.RestoreLatest(cfgPath)
+	authRestored, _, authErr := a.e.RestoreLatest(authPath)
+	if cfgErr != nil {
+		cfgErr = fmt.Errorf("restore config.toml: %w", cfgErr)
+	}
+	if authErr != nil {
+		authErr = fmt.Errorf("restore auth.json: %w", authErr)
+	}
+	if err := errors.Join(cfgErr, authErr); err != nil {
 		return core.RestoreResult{}, err
 	}
-	if _, _, err := a.e.RestoreLatest(authPath); err != nil {
-		return core.RestoreResult{}, err
+	var msg string
+	switch {
+	case cfgRestored && authRestored:
+		msg = "Restored Codex config.toml and auth.json from backup."
+	case cfgRestored:
+		msg = "Restored Codex config.toml from backup; no backup found for auth.json, so the MintSwitch API key may still be present there."
+	case authRestored:
+		msg = "Restored Codex auth.json from backup; no backup found for config.toml."
+	default:
+		msg = "No backup found; nothing to restore."
 	}
 	return core.RestoreResult{
 		ChangedPath: cfgPath,
 		BackupPath:  cfgEntry,
-		Message:     "Restored Codex config.toml and auth.json from backup.",
+		Message:     msg,
 	}, nil
 }
 

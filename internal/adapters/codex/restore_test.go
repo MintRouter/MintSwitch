@@ -3,6 +3,7 @@ package codex
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mintswitch/internal/core"
@@ -72,6 +73,106 @@ func TestRestoreNoBackupNoOp(t *testing.T) {
 	a, _ := newAdapter(t)
 	if _, err := a.Restore(); err != nil {
 		t.Fatalf("restore with no backup should be safe no-op: %v", err)
+	}
+}
+
+// removeBackupDirs deletes every per-path backup dir under root whose name
+// contains substr, simulating a missing/deleted backup for that file.
+func removeBackupDirs(t *testing.T, root, substr string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := false
+	for _, en := range entries {
+		if en.IsDir() && strings.Contains(en.Name(), substr) {
+			if err := os.RemoveAll(filepath.Join(root, en.Name())); err != nil {
+				t.Fatal(err)
+			}
+			removed = true
+		}
+	}
+	if !removed {
+		t.Fatalf("no backup dir matching %q under %s", substr, root)
+	}
+}
+
+func TestRestoreAuthBackupMissingWarnsInMessage(t *testing.T) {
+	a, home := newAdapter(t)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(codexDir, "config.toml")
+	authPath := filepath.Join(codexDir, "auth.json")
+	origCfg := []byte("model = \"original\"\n")
+	if err := os.WriteFile(cfgPath, origCfg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, []byte("{\"OTHER\":\"keep\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	removeBackupDirs(t, filepath.Join(home, "data", "backups"), "auth.json")
+
+	res, err := a.Restore()
+	if err != nil {
+		t.Fatalf("restore should still succeed for config.toml: %v", err)
+	}
+	gotCfg, _ := os.ReadFile(cfgPath)
+	if string(gotCfg) != string(origCfg) {
+		t.Fatalf("config.toml not reverted: %q", gotCfg)
+	}
+	if !strings.Contains(res.Message, "auth.json") || !strings.Contains(res.Message, "API key") {
+		t.Fatalf("message must warn that the API key may remain in auth.json, got %q", res.Message)
+	}
+}
+
+func TestRestoreBestEffortWhenConfigRestoreFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based failure injection is ineffective as root")
+	}
+	a, home := newAdapter(t)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(codexDir, "config.toml")
+	authPath := filepath.Join(codexDir, "auth.json")
+	origAuth := []byte("{\"OPENAI_API_KEY\":\"sk-original\"}")
+	if err := os.WriteFile(cfgPath, []byte("model = \"original\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, origAuth, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := a.Apply(sampleProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.BackupPath == "" {
+		t.Fatal("expected a config.toml backup entry from Apply")
+	}
+	if err := os.Chmod(res.BackupPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(res.BackupPath, 0o600) })
+
+	_, rerr := a.Restore()
+	if rerr == nil {
+		t.Fatal("expected error when config.toml backup is unreadable")
+	}
+	if !strings.Contains(rerr.Error(), "config.toml") {
+		t.Fatalf("error must name the failing file, got %q", rerr)
+	}
+	gotAuth, _ := os.ReadFile(authPath)
+	if string(gotAuth) != string(origAuth) {
+		t.Fatalf("auth.json should still be restored best-effort: %q", gotAuth)
 	}
 }
 
