@@ -29,7 +29,7 @@
   </Resources>
   
   <Applications>
-    <Application Id="ai.mintrouter.mintswitch" Executable="mintswitch" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="ai.mintrouter.mintswitch" Executable="MintSwitch" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="MintSwitch By MintRouter.AI"
         Description="AI Tool API Config Switcher"
@@ -41,7 +41,7 @@
       </uap:VisualElements>
       
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="mintswitch" />
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="MintSwitch" />
         
         
       </Extensions>

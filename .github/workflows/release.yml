@@ -80,32 +80,41 @@ jobs:
         if: matrix.platform == 'darwin'
         run: wails3 task package
 
-      # Produces bin/mintswitch and generates build/linux/mintswitch.desktop
-      - name: Build Linux binary
+      # Produces bin/mintswitch, generates build/linux/mintswitch.desktop and
+      # packages everything into a .deb via nfpm (embedded in the wails3 CLI —
+      # no extra install needed). The nfpm version is synced to the tag first.
+      - name: Build Linux .deb
         if: matrix.platform == 'linux'
-        run: wails3 task linux:build
+        run: |
+          sed -i "s/^version: .*/version: \"${GITHUB_REF_NAME#v}\"/" build/linux/nfpm/nfpm.yaml
+          wails3 task linux:create:deb
 
-      # Produces bin/mintswitch.exe (production flags, CGO disabled)
+      # Produces bin/MintSwitch.exe (production flags, CGO disabled); the
+      # Windows Taskfile overrides APP_NAME to "MintSwitch" so the binary,
+      # NSIS and MSIX all use the same casing.
       - name: Build Windows .exe
         if: matrix.platform == 'windows'
         run: wails3 task windows:build
 
+      # Standard drag-to-install DMG: the .app next to an /Applications symlink.
       - name: Package artifact (macOS)
         if: matrix.platform == 'darwin'
-        run: ditto -c -k --keepParent "bin/MintSwitch By MintRouter.AI.app" "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+        run: |
+          mkdir dmg-stage
+          cp -R "bin/MintSwitch By MintRouter.AI.app" dmg-stage/
+          ln -s /Applications dmg-stage/Applications
+          hdiutil create -volname "MintSwitch" -srcfolder dmg-stage -ov -format UDZO "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.dmg"
 
       - name: Package artifact (Linux)
         if: matrix.platform == 'linux'
-        run: |
-          mkdir -p stage/MintSwitch
-          cp bin/mintswitch stage/MintSwitch/
-          cp build/linux/mintswitch.desktop stage/MintSwitch/
-          cp build/appicon.png stage/MintSwitch/mintswitch.png
-          tar -czf "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" -C stage MintSwitch
+        run: mv bin/*.deb "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.deb"
 
+      # The Windows build is a single self-contained portable .exe (assets
+      # embedded, CGO disabled, WebView2 is an OS component), shipped zipped
+      # as MintSwitch.exe.
       - name: Package artifact (Windows)
         if: matrix.platform == 'windows'
-        run: Compress-Archive -Path bin/mintswitch.exe -DestinationPath "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+        run: Compress-Archive -Path bin/MintSwitch.exe -DestinationPath "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

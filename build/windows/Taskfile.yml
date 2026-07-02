@@ -14,6 +14,12 @@ vars:
   # Docker image for cross-compilation with CGO (used when CGO_ENABLED=1 on non-Windows)
   CROSS_IMAGE: wails-cross
 
+  # Windows executable base name (bin/MintSwitch.exe). Overrides the root
+  # Taskfile's lowercase APP_NAME so build, NSIS and MSIX all use the same
+  # casing; NSIS derives PRODUCT_EXECUTABLE from INFO_PROJECTNAME
+  # ("MintSwitch"), which already matches.
+  APP_NAME: "MintSwitch"
+
 tasks:
   build:
     summary: Builds the application for Windows

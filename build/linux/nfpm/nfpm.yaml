@@ -9,7 +9,7 @@ platform: "linux"
 version: "1.0.0"
 section: "default"
 priority: "extra"
-maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
+maintainer: "MintRouter.AI <support@mintrouter.ai>"
 description: "AI Tool API Config Switcher"
 vendor: "MintRouter.AI"
 homepage: "https://mintrouter.ai"
