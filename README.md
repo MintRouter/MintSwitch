@@ -1,22 +1,25 @@
 # MintSwitch — AI Tool API Config Switcher
 
-Cross-platform desktop app to switch AI coding tools (Claude Code, Codex, OpenCode, Factory Droid, Pi) to a custom OpenAI-compatible endpoint. One profile, per-tool or global apply, automatic backups, one-click restore. Built with Go + Wails.
-
-> This repository currently contains the **scaffold only**: project layout, the
-> dual desktop/web build wiring, and one sample Go service (`GreetService`) wired
-> end-to-end to the Svelte UI to prove bindings work. Tool adapters, the profile
-> domain model, and real UI logic are implemented in later tasks.
+Cross-platform desktop app to switch AI coding tools (Claude Code, Codex, OpenCode, Factory Droid, Zed, Kilo Code) to a custom OpenAI-compatible endpoint. One profile, per-tool or global apply, automatic backups, one-click restore. Built with Go + Wails.
 
 ## Project layout
 
 ```
 .
 ├── main.go              # App entry point (desktop + web/server via build tags)
-├── greetservice.go      # Sample Go service exposed to the frontend (Greet)
 ├── Taskfile.yml         # Top-level tasks (dev, build, build:server, run:server)
 ├── build/               # Wails build config, per-OS Taskfiles, Docker, icons
+├── internal/            # Go backend packages
+│   ├── adapters/        # Per-tool config adapters (claudecode, codex, opencode, droid, zed, kilo)
+│   ├── injectors/       # Per-tool MCP server injectors (claudecode, codex, opencode, droid, kilo)
+│   ├── backup/          # Config backup and restore
+│   ├── core/            # Domain model: profiles, adapter interfaces, registry
+│   ├── installer/       # Tool install detection
+│   ├── paths/           # Home/data directory resolution
+│   ├── settings/        # App settings persistence
+│   └── service/         # Backend service exposed to the frontend via bindings
 └── frontend/            # Svelte + TS + Vite frontend
-    ├── src/App.svelte   # Calls GreetService.Greet() and shows the result
+    ├── src/             # App.svelte and UI components (lib/)
     ├── bindings/        # Auto-generated TS bindings (do not edit by hand)
     └── dist/            # Built assets, embedded into the Go binary (generated)
 ```
@@ -80,12 +83,6 @@ WAILS_SERVER_HOST=0.0.0.0 WAILS_SERVER_PORT=8099 ./bin/mintswitch-server
 
 A Docker image for the server build is also available:
 `wails3 task run:docker` (exposes port 8080).
-
-## Verifying the sample binding
-
-`GreetService.Greet(name)` (Go) is called from `frontend/src/App.svelte`. Type a
-name and press **Greet** — the string returned by Go is shown in the UI. In
-server mode the binding is reachable over HTTP at `POST /wails/runtime`.
 
 ## Common tasks
 
