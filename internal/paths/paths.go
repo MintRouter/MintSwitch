@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 )
 
 // Resolver resolves filesystem locations for tools and for MintSwitch's own
@@ -21,6 +22,17 @@ type Resolver struct {
 	// ConfigHome, when non-empty, overrides the XDG config base directory. When
 	// empty, [Resolver.ConfigDir] falls back to Home/.config.
 	ConfigHome string
+	// NativeConfigDir is the OS-native per-user config root from
+	// os.UserConfigDir(): %APPDATA% on Windows, ~/Library/Application Support on
+	// macOS, $XDG_CONFIG_HOME or ~/.config on Linux. Tools that follow the
+	// native convention on Windows (e.g. Zed) resolve their config under it.
+	NativeConfigDir string
+	// CodexHome, when non-empty, overrides the Codex home directory used by
+	// [Resolver.CodexDir]. NewResolver seeds it from $CODEX_HOME.
+	CodexHome string
+	// ClaudeConfigDir, when non-empty, overrides Claude Code's config directory
+	// used by [Resolver.ClaudeDir]. NewResolver seeds it from $CLAUDE_CONFIG_DIR.
+	ClaudeConfigDir string
 	// SystemBinDirs are absolute, system-wide executable directories searched by
 	// [Resolver.BinaryResolvable] in addition to the HOME-derived ones.
 	// NewResolver seeds the common macOS/Linux locations; tests can leave it nil
@@ -41,10 +53,13 @@ func NewResolver() (*Resolver, error) {
 		return nil, err
 	}
 	return &Resolver{
-		Home:          home,
-		DataDir:       filepath.Join(cfg, "mintswitch"),
-		ConfigHome:    os.Getenv("XDG_CONFIG_HOME"),
-		SystemBinDirs: []string{"/opt/homebrew/bin", "/usr/local/bin"},
+		Home:            home,
+		DataDir:         filepath.Join(cfg, "mintswitch"),
+		ConfigHome:      os.Getenv("XDG_CONFIG_HOME"),
+		NativeConfigDir: cfg,
+		CodexHome:       os.Getenv("CODEX_HOME"),
+		ClaudeConfigDir: os.Getenv("CLAUDE_CONFIG_DIR"),
+		SystemBinDirs:   []string{"/opt/homebrew/bin", "/usr/local/bin"},
 	}, nil
 }
 
@@ -67,6 +82,53 @@ func (r *Resolver) ConfigDir() string {
 // r.ConfigJoin("opencode", "opencode.json").
 func (r *Resolver) ConfigJoin(elem ...string) string {
 	return filepath.Join(append([]string{r.ConfigDir()}, elem...)...)
+}
+
+// ZedConfigDir returns the directory holding Zed's settings.json:
+// %APPDATA%\Zed on Windows (Zed follows the native convention there),
+// ~/.config/zed (XDG-aware) on macOS and Linux, per Zed's documentation.
+func (r *Resolver) ZedConfigDir() string {
+	return r.zedConfigDir(runtime.GOOS)
+}
+
+// zedConfigDir is the GOOS-parameterised implementation of
+// [Resolver.ZedConfigDir], so tests can exercise every branch from any host
+// OS. On Windows it falls back to the XDG-style dir when NativeConfigDir is
+// unset (test resolvers constructed without it).
+func (r *Resolver) zedConfigDir(goos string) string {
+	if goos == "windows" && r.NativeConfigDir != "" {
+		return filepath.Join(r.NativeConfigDir, "Zed")
+	}
+	return r.ConfigJoin("zed")
+}
+
+// CodexDir returns the Codex home directory: CodexHome ($CODEX_HOME) when set,
+// otherwise Home/.codex (the documented default on every OS).
+func (r *Resolver) CodexDir() string {
+	if r.CodexHome != "" {
+		return r.CodexHome
+	}
+	return filepath.Join(r.Home, ".codex")
+}
+
+// ClaudeDir returns Claude Code's config directory: ClaudeConfigDir
+// ($CLAUDE_CONFIG_DIR) when set, otherwise Home/.claude (the documented
+// default on every OS).
+func (r *Resolver) ClaudeDir() string {
+	if r.ClaudeConfigDir != "" {
+		return r.ClaudeConfigDir
+	}
+	return filepath.Join(r.Home, ".claude")
+}
+
+// ClaudeJSONPath returns the path of Claude Code's global .claude.json (the
+// MCP-servers file): $CLAUDE_CONFIG_DIR/.claude.json when the override is set
+// (per Claude Code's settings docs), otherwise Home/.claude.json.
+func (r *Resolver) ClaudeJSONPath() string {
+	if r.ClaudeConfigDir != "" {
+		return filepath.Join(r.ClaudeConfigDir, ".claude.json")
+	}
+	return filepath.Join(r.Home, ".claude.json")
 }
 
 // DataJoin joins the given path elements under DataDir.
@@ -125,6 +187,13 @@ func (r *Resolver) BinaryResolvable(lookPath func(string) (string, error), binNa
 // it is safe to call on every Detect/ListTools. A nil lookPath defaults to
 // exec.LookPath. ok is false (and path empty) when binName cannot be resolved.
 func (r *Resolver) ResolveBinary(lookPath func(string) (string, error), binName string) (string, bool) {
+	return r.resolveBinary(lookPath, binName, runtime.GOOS)
+}
+
+// resolveBinary is the GOOS-parameterised implementation of
+// [Resolver.ResolveBinary], so tests can exercise the Windows and Unix
+// branches from any host OS.
+func (r *Resolver) resolveBinary(lookPath func(string) (string, error), binName, goos string) (string, bool) {
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
@@ -132,21 +201,39 @@ func (r *Resolver) ResolveBinary(lookPath func(string) (string, error), binName 
 		return p, true
 	}
 	for _, dir := range r.binDirs() {
-		p := filepath.Join(dir, binName)
-		if isExecutableFile(p) {
-			return p, true
+		for _, name := range binCandidates(binName, goos) {
+			p := filepath.Join(dir, name)
+			if isExecutableFile(p, goos) {
+				return p, true
+			}
 		}
 	}
 	return "", false
 }
 
-// isExecutableFile reports whether path is a regular file with an executable
-// bit set. Symlinks are followed (os.Stat), so an npm-global symlink to a real
-// binary resolves correctly.
-func isExecutableFile(path string) bool {
+// binCandidates returns the file names probed for binName inside a curated bin
+// dir. On Windows executables carry an extension, so the PATHEXT-style
+// candidates .exe/.cmd/.bat are probed first (npm shims are .cmd); elsewhere
+// only the bare name is probed.
+func binCandidates(binName, goos string) []string {
+	if goos != "windows" {
+		return []string{binName}
+	}
+	return []string{binName + ".exe", binName + ".cmd", binName + ".bat", binName}
+}
+
+// isExecutableFile reports whether path is a regular file that qualifies as an
+// executable. On Unix an executable bit must be set; on Windows there are no
+// exec bits (Go reports 0666/0444), so any regular file qualifies. Symlinks are
+// followed (os.Stat), so an npm-global symlink to a real binary resolves
+// correctly.
+func isExecutableFile(path, goos string) bool {
 	fi, err := os.Stat(path)
 	if err != nil || !fi.Mode().IsRegular() {
 		return false
+	}
+	if goos == "windows" {
+		return true
 	}
 	return fi.Mode().Perm()&0o111 != 0
 }

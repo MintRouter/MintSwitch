@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -32,14 +31,14 @@ func readTOML(path string) (map[string]any, error) {
 	return m, nil
 }
 
-// writeTOML marshals the map to TOML and writes it with 0600 perms, creating
-// the parent directory as needed.
+// writeTOML marshals the map to TOML and writes it atomically with 0600 perms,
+// creating the parent directory as needed.
 func writeTOML(path string, m map[string]any) error {
 	data, err := toml.Marshal(m)
 	if err != nil {
 		return err
 	}
-	return writeFile(path, data)
+	return core.WriteFileAtomic(path, data, 0o600)
 }
 
 // readJSON parses a JSON object file into a generic map. A missing or empty
@@ -62,22 +61,10 @@ func readJSON(path string) (map[string]any, error) {
 	return m, nil
 }
 
-// writeJSON marshals the map to indented JSON and writes it with 0600 perms.
+// writeJSON marshals the map to indented JSON and writes it atomically with
+// 0600 perms.
 func writeJSON(path string, m map[string]any) error {
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return writeFile(path, data)
-}
-
-// writeFile creates parent directories and writes data with 0600 perms.
-func writeFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
+	return core.WriteJSONObjectAtomic(path, m)
 }
 
 // markerMap builds the MintSwitch managed-marker as a generic map keyed by the

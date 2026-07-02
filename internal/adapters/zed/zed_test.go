@@ -53,6 +53,18 @@ func TestIDName(t *testing.T) {
 	}
 }
 
+// TestConfigPathUsesResolverZedDir proves the adapter derives settings.json
+// from the resolver's per-OS ZedConfigDir (%APPDATA%\Zed on Windows,
+// ~/.config/zed elsewhere; the per-GOOS branches are covered in
+// internal/paths).
+func TestConfigPathUsesResolverZedDir(t *testing.T) {
+	a, r := newAdapter(t)
+	want := filepath.Join(r.ZedConfigDir(), "settings.json")
+	if got := a.ConfigPaths(); len(got) != 1 || got[0] != want {
+		t.Fatalf("ConfigPaths = %v, want [%q]", got, want)
+	}
+}
+
 // TestDetect proves the contract: a leftover settings dir is NOT an installed
 // signal; only a resolvable "zed" binary or a Zed.app bundle is.
 func TestDetect(t *testing.T) {

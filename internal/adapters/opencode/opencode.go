@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -191,18 +190,10 @@ func readConfig(path string) (map[string]any, error) {
 	return root, nil
 }
 
-// writeConfig writes the config as indented JSON with restrictive permissions,
-// creating parent directories as needed.
+// writeConfig writes the config as indented JSON, atomically and with
+// restrictive permissions, creating parent directories as needed.
 func writeConfig(path string, root map[string]any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	return core.WriteJSONObjectAtomic(path, root)
 }
 
 // extractMarker decodes the MintSwitch marker from the parsed config, if present.

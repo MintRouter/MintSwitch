@@ -48,6 +48,19 @@ func sampleProfile() core.Profile {
 	}
 }
 
+// TestConfigPathsHonorClaudeConfigDir proves the adapter follows the
+// documented CLAUDE_CONFIG_DIR override (wired into the resolver by
+// paths.NewResolver).
+func TestConfigPathsHonorClaudeConfigDir(t *testing.T) {
+	a, r := newAdapter(t)
+	override := t.TempDir()
+	r.ClaudeConfigDir = override
+	want := filepath.Join(override, "settings.json")
+	if got := a.ConfigPaths(); len(got) != 1 || got[0] != want {
+		t.Fatalf("ConfigPaths = %v, want [%q]", got, want)
+	}
+}
+
 func readSettings(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)

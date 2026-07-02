@@ -49,6 +49,22 @@ func sampleProfile() core.Profile {
 	}
 }
 
+// TestConfigPathsHonorCodexHome proves the adapter follows the documented
+// CODEX_HOME override (wired into the resolver by paths.NewResolver).
+func TestConfigPathsHonorCodexHome(t *testing.T) {
+	a, _ := newAdapter(t)
+	override := t.TempDir()
+	a.r.CodexHome = override
+	want := []string{
+		filepath.Join(override, "config.toml"),
+		filepath.Join(override, "auth.json"),
+	}
+	got := a.ConfigPaths()
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ConfigPaths = %v, want %v", got, want)
+	}
+}
+
 // TestDetect proves the binary-based contract: a leftover ~/.codex dir is NOT
 // an installed signal; only a resolvable "codex" binary is.
 func TestDetect(t *testing.T) {

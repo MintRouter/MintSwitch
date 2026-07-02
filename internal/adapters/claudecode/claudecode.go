@@ -55,8 +55,9 @@ func (a *Adapter) ID() string { return id }
 // Name returns the display name.
 func (a *Adapter) Name() string { return name }
 
-// settingsPath returns the absolute path to ~/.claude/settings.json.
-func (a *Adapter) settingsPath() string { return a.r.Join(".claude", "settings.json") }
+// settingsPath returns the absolute path to settings.json under Claude Code's
+// config dir ($CLAUDE_CONFIG_DIR, default ~/.claude).
+func (a *Adapter) settingsPath() string { return filepath.Join(a.r.ClaudeDir(), "settings.json") }
 
 // ConfigPaths returns the config files this adapter manages.
 func (a *Adapter) ConfigPaths() []string { return []string{a.settingsPath()} }
@@ -182,18 +183,11 @@ func readJSON(path string) (map[string]any, error) {
 	return m, nil
 }
 
-// writeJSON writes m as indented JSON to path, creating parent dirs. The file is
-// written with 0600 perms since it contains the profile's auth token.
+// writeJSON writes m as indented JSON to path atomically, creating parent
+// dirs. The file is written with 0600 perms since it contains the profile's
+// auth token.
 func writeJSON(path string, m map[string]any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	return core.WriteJSONObjectAtomic(path, m)
 }
 
 // asObject returns v as a JSON object, or a fresh object if v is not one.

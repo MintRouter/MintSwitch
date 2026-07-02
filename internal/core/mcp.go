@@ -134,22 +134,31 @@ func ReadJSONObject(path string) (map[string]any, error) {
 // file + rename, creating parent dirs. The file carries 0600 perms since it may
 // contain an auth token.
 func WriteJSONObjectAtomic(path string, m map[string]any) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	tmp, err := os.CreateTemp(dir, ".mcp-*.tmp")
+	return WriteFileAtomic(path, data, 0o600)
+}
+
+// WriteFileAtomic writes data to path atomically: it creates parent
+// directories (0700), writes to a sibling temp file with the given perm,
+// fsyncs, then renames over path (os.Rename replaces an existing file on
+// every supported OS). A crash mid-write can never leave a truncated config
+// behind.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".mintswitch-*.tmp")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(perm); err != nil {
 		tmp.Close()
 		return err
 	}

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -54,11 +55,13 @@ func (a *Adapter) ID() string { return "codex" }
 // Name returns the display name.
 func (a *Adapter) Name() string { return "Codex (CLI + IDE extension)" }
 
-// configPath returns the absolute path to ~/.codex/config.toml.
-func (a *Adapter) configPath() string { return a.r.Join(".codex", "config.toml") }
+// configPath returns the absolute path to config.toml under the Codex home
+// dir ($CODEX_HOME, default ~/.codex).
+func (a *Adapter) configPath() string { return filepath.Join(a.r.CodexDir(), "config.toml") }
 
-// authPath returns the absolute path to ~/.codex/auth.json.
-func (a *Adapter) authPath() string { return a.r.Join(".codex", "auth.json") }
+// authPath returns the absolute path to auth.json under the Codex home dir
+// ($CODEX_HOME, default ~/.codex).
+func (a *Adapter) authPath() string { return filepath.Join(a.r.CodexDir(), "auth.json") }
 
 // ConfigPaths returns the config files this adapter manages.
 func (a *Adapter) ConfigPaths() []string {

@@ -269,6 +269,46 @@ func TestUninstallNeverDeletesOutsideCuratedDirs(t *testing.T) {
 	}
 }
 
+// TestClassifyMethodWindowsPaths proves classification works for Windows-style
+// backslash paths: the global npm shim dir (%APPDATA%\npm), a node_modules
+// tree, and an unknown location. The paths need not exist — classification is
+// purely lexical for the npm/brew signals.
+func TestClassifyMethodWindowsPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolved string
+		want     uninstallMethod
+	}{
+		{
+			"npm shim under AppData/Roaming/npm",
+			`C:\Users\alice\AppData\Roaming\npm\codex.cmd`,
+			methodNpm,
+		},
+		{
+			"node_modules tree with backslashes",
+			`C:\Users\alice\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.exe`,
+			methodNpm,
+		},
+		{
+			".npm-global with backslashes",
+			`C:\Users\alice\.npm-global\bin\codex.cmd`,
+			methodNpm,
+		},
+		{
+			"unknown windows location",
+			`C:\Program Files\Codex\codex.exe`,
+			methodUnknown,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyMethod(tt.resolved, nil); got != tt.want {
+				t.Fatalf("classifyMethod(%q) = %v, want %v", tt.resolved, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNpmMissing(t *testing.T) {
 	fr := &fakeRunner{}
 	inst := NewWithLookPath(fr, missLook)

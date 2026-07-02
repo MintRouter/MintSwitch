@@ -283,18 +283,20 @@ const (
 // classifyMethod determines how the binary at resolved was installed, using
 // first-match-wins ordering over authoritative signals:
 //  1. Homebrew: the path (or its symlink target) lies in a Cellar/Caskroom.
-//  2. npm-global: the path (or target) lies under a node_modules / .npm-global tree.
+//  2. npm-global: the path (or target) lies under a node_modules / .npm-global
+//     tree, or under Windows' global npm shim dir (%APPDATA%\npm).
 //  3. Homebrew: the path (or target) sits under a brew prefix (/opt/homebrew, /usr/local).
 //  4. standalone: the resolved path is a regular file directly inside a curated
 //     userBinDir — the only case that authorises deleting the file.
 //
 // Anything else is methodUnknown (a safe no-op). The Cellar/node_modules checks
 // precede the brew-prefix check so an npm-global package installed under a
-// Homebrew node prefix is still classified as npm.
+// Homebrew node prefix is still classified as npm. Paths are slash-normalised
+// (see normalizeSlashes) before matching so Windows backslash paths classify too.
 func classifyMethod(resolved string, userBinDirs []string) uninstallMethod {
-	candidates := []string{resolved}
+	candidates := []string{normalizeSlashes(resolved)}
 	if target := symlinkTarget(resolved); target != "" {
-		candidates = append(candidates, target)
+		candidates = append(candidates, normalizeSlashes(target))
 	}
 	for _, p := range candidates {
 		if strings.Contains(p, "/Cellar/") || strings.Contains(p, "/Caskroom/") {
@@ -302,7 +304,8 @@ func classifyMethod(resolved string, userBinDirs []string) uninstallMethod {
 		}
 	}
 	for _, p := range candidates {
-		if strings.Contains(p, "/node_modules/") || strings.Contains(p, "/.npm-global/") {
+		if strings.Contains(p, "/node_modules/") || strings.Contains(p, "/.npm-global/") ||
+			strings.Contains(p, "/AppData/Roaming/npm/") {
 			return methodNpm
 		}
 	}
@@ -315,6 +318,14 @@ func classifyMethod(resolved string, userBinDirs []string) uninstallMethod {
 		return methodStandalone
 	}
 	return methodUnknown
+}
+
+// normalizeSlashes converts backslash separators to forward slashes so the
+// substring/prefix classification signals match Windows paths too. Unlike
+// filepath.ToSlash it converts on every host OS, keeping the classification
+// (and its tests) deterministic cross-platform.
+func normalizeSlashes(p string) string {
+	return strings.ReplaceAll(p, `\`, "/")
 }
 
 // symlinkTarget returns the cleaned, absolute target of path when path is a
@@ -336,9 +347,10 @@ func symlinkTarget(path string) string {
 }
 
 // underAnyPrefix reports whether p equals or is nested under any of prefixes.
+// Both p and prefixes must be slash-normalised (filepath.ToSlash).
 func underAnyPrefix(p string, prefixes []string) bool {
 	for _, pre := range prefixes {
-		if p == pre || strings.HasPrefix(p, pre+string(filepath.Separator)) {
+		if p == pre || strings.HasPrefix(p, pre+"/") {
 			return true
 		}
 	}

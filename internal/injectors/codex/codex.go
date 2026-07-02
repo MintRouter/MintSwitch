@@ -59,20 +59,21 @@ func New(r *paths.Resolver, e *backup.Engine) *Injector {
 // ID returns the stable injector identifier.
 func (i *Injector) ID() string { return id }
 
-// configPath returns the absolute path to ~/.codex/config.toml.
-func (i *Injector) configPath() string { return i.r.Join(".codex", "config.toml") }
+// configPath returns the absolute path to config.toml under the Codex home
+// dir ($CODEX_HOME, default ~/.codex).
+func (i *Injector) configPath() string { return filepath.Join(i.r.CodexDir(), "config.toml") }
 
 // MCPConfigPaths returns the config files this injector manages.
 func (i *Injector) MCPConfigPaths() []string { return []string{i.configPath()} }
 
 // Detect reports whether Codex is installed, defined as the "codex" CLI binary
-// being resolvable OR the ~/.codex directory existing (a Codex install/session
+// being resolvable OR the Codex home dir existing (a Codex install/session
 // leaves the config dir behind even when the CLI is not on the current PATH).
 func (i *Injector) Detect() bool {
 	if i.r.BinaryResolvable(i.lookPath, "codex") {
 		return true
 	}
-	fi, err := os.Stat(i.r.Join(".codex"))
+	fi, err := os.Stat(i.r.CodexDir())
 	return err == nil && fi.IsDir()
 }
 
@@ -250,15 +251,12 @@ func readTOML(path string) (map[string]any, error) {
 	return m, nil
 }
 
-// writeTOML marshals the map to TOML and writes it with 0600 perms (the file may
-// carry an auth token), creating the parent directory as needed.
+// writeTOML marshals the map to TOML and writes it atomically with 0600 perms
+// (the file may carry an auth token), creating the parent directory as needed.
 func writeTOML(path string, m map[string]any) error {
 	data, err := toml.Marshal(m)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
+	return core.WriteFileAtomic(path, data, 0o600)
 }

@@ -50,8 +50,10 @@ func New(r *paths.Resolver, e *backup.Engine) *Injector {
 // ID returns the stable injector identifier.
 func (i *Injector) ID() string { return id }
 
-// configPath returns the absolute path to the global ~/.claude.json.
-func (i *Injector) configPath() string { return i.r.Join(".claude.json") }
+// configPath returns the absolute path to the global .claude.json
+// ($CLAUDE_CONFIG_DIR/.claude.json when the override is set, else
+// ~/.claude.json).
+func (i *Injector) configPath() string { return i.r.ClaudeJSONPath() }
 
 // MCPConfigPaths returns the config files this injector manages.
 func (i *Injector) MCPConfigPaths() []string { return []string{i.configPath()} }
