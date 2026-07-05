@@ -35,7 +35,7 @@
     <img class="promo-logo" src="favicon.svg" alt="" aria-hidden="true" />
     <span class="promo-lines">
       <span class="promo-title">Mint<span class="promo-accent">Router.AI</span></span>
-      <span class="promo-sub">Get $5 free credit — Sign up now!</span>
+      <span class="promo-sub">The last AI key you'll ever need</span>
     </span>
     <svg class="promo-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none"
       stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
