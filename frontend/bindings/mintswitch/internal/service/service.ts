@@ -48,6 +48,20 @@ export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult
 }
 
 /**
+ * FetchEndpointModels queries {baseURL}/models like [Service.FetchProviderModels]
+ * but for endpoint values that may not be saved yet, so the Add/Edit dialog
+ * can list models before the provider is persisted. The API key is transient:
+ * it is used only for this one request and is never stored, logged, or
+ * included in errors. When apiKey is blank and providerID names a stored
+ * provider, that provider's stored key is used instead (the Edit flow, where
+ * the key never round-trips to the frontend). Read-only: it never mutates
+ * settings, and errors stay display-safe.
+ */
+export function FetchEndpointModels(baseURL: string, apiKey: string, providerID: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(4130773511, baseURL, apiKey, providerID);
+}
+
+/**
  * FetchProviderModels queries the stored provider's OpenAI-compatible
  * endpoint (GET {base_url}/models with a Bearer key) and returns the sorted,
  * de-duplicated model IDs it advertises. It is read-only: it never mutates
