@@ -3,22 +3,18 @@
   import { Service } from "../bindings/mintswitch/internal/service";
   import type {
     ToolView,
-    ProfileView,
+    ProviderView,
     InstallResult,
   } from "../bindings/mintswitch/internal/service";
-  import type { Profile } from "../bindings/mintswitch/internal/core";
+  import type { Provider } from "../bindings/mintswitch/internal/core";
   import { errMsg, npmCommand } from "./lib/ui";
-  import ProfileForm from "./lib/ProfileForm.svelte";
+  import ProvidersCard from "./lib/ProvidersCard.svelte";
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import PromoBanner from "./lib/PromoBanner.svelte";
 
-  const emptyProfile: ProfileView = {
-    label: "", base_url: "", models: [], model_names: {}, model: "", small_fast_model: "", has_key: false, keys: [],
-  };
-
   let tools = $state<ToolView[]>([]);
-  let profile = $state<ProfileView>(emptyProfile);
+  let providers = $state<ProviderView[]>([]);
   let loading = $state(true);
   let loadError = $state("");
   let saving = $state(false);
@@ -53,10 +49,6 @@
     }
   }
 
-  const hasSavedProfile = $derived(
-    !!(profile.base_url && profile.model && profile.has_key),
-  );
-
   function flash(msg: string): void {
     toast = { msg };
     clearTimeout(toastTimer);
@@ -68,10 +60,10 @@
   async function refresh(): Promise<void> {
     const [t, p] = await Promise.all([
       Service.ListTools(),
-      Service.GetProfile(),
+      Service.ListProviders(),
     ]);
     tools = t ?? [];
-    profile = p ?? emptyProfile;
+    providers = p ?? [];
   }
 
   async function load(): Promise<void> {
@@ -111,28 +103,14 @@
     if (document.visibilityState === "visible") void redetect(true);
   }
 
-  async function saveProfile(p: Profile): Promise<boolean> {
+  // Provider mutations from the Providers card / Manage dialog. Each returns
+  // the error message (instead of flashing a toast) so the dialog can show the
+  // failure inline; each refreshes so the tool cards pick up the change
+  // immediately (on failure the refresh re-syncs the UI to persisted state).
+  async function providerOp(fn: () => Promise<unknown>): Promise<string | null> {
     saving = true;
     try {
-      await Service.SaveProfile(p);
-      await refresh();
-      return true;
-    } catch (e) {
-      flash(errMsg(e));
-      return false;
-    } finally {
-      saving = false;
-    }
-  }
-
-  // Auto-save from the Models dialog (add/remove/default change). Unlike
-  // saveProfile it returns the error message instead of flashing a toast so
-  // the dialog can show the failure inline; it still refreshes so the tool
-  // cards' model dropdowns pick up the change immediately.
-  async function saveProfileQuiet(p: Profile): Promise<string | null> {
-    saving = true;
-    try {
-      await Service.SaveProfile(p);
+      await fn();
       await refresh();
       return null;
     } catch (e) {
@@ -141,6 +119,11 @@
       saving = false;
     }
   }
+
+  const addProvider = (p: Provider) => providerOp(() => Service.AddProvider(p));
+  const updateProvider = (p: Provider) => providerOp(() => Service.UpdateProvider(p));
+  const removeProvider = (id: string) => providerOp(() => Service.RemoveProvider(id));
+  const setActiveProvider = (id: string) => providerOp(() => Service.SetActiveProvider(id));
 
   function ask(opts: { title: string; message: string; confirmLabel: string; danger?: boolean; action: () => Promise<void> }): void {
     confirm = {
@@ -267,14 +250,15 @@
     await refresh();
   }
 
-  // Persist (or clear, with an empty keyID) a per-tool API key override, then
-  // refresh so the keys dialog and the tool cards' key line pick up the
-  // change. Returns the error message (instead of flashing) so the dialog can
-  // show it inline; always refreshes to re-sync the select on failure.
-  async function changeToolKey(id: string, keyID: string): Promise<string | null> {
+  // Persist (or clear, with an empty providerID) a per-tool provider
+  // override, then refresh so the providers dialog and the tool cards'
+  // provider badge pick up the change. Returns the error message (instead of
+  // flashing) so the dialog can show it inline; always refreshes to re-sync
+  // the select on failure.
+  async function changeToolProvider(id: string, providerID: string): Promise<string | null> {
     let err: string | null = null;
     try {
-      await Service.SetToolKey(id, keyID);
+      await Service.SetToolProvider(id, providerID);
     } catch (e) {
       err = errMsg(e);
     }
@@ -349,10 +333,11 @@
   </header>
 
   <div class="layout">
-    <section class="col-form" aria-label="Profile">
+    <section class="col-form" aria-label="Providers">
       <div class="col-scroll">
-        <ProfileForm {profile} {tools} {saving} onSave={saveProfile} onAutoSave={saveProfileQuiet}
-          onToolKeyChange={changeToolKey} />
+        <ProvidersCard {providers} {tools} {saving}
+          onAdd={addProvider} onUpdate={updateProvider} onRemove={removeProvider}
+          onSetActive={setActiveProvider} onToolProviderChange={changeToolProvider} />
       </div>
     </section>
 
@@ -387,7 +372,7 @@
         {:else}
           <div class="tool-grid">
             {#each tools as t (t.id)}
-              <ToolCard tool={t} {hasSavedProfile} busy={busyIds.includes(t.id)}
+              <ToolCard tool={t} busy={busyIds.includes(t.id)}
                 onApply={applyOne} onRestore={restoreOne}
                 onInstall={installOne} onUninstall={uninstallOne}
                 onModelChange={changeToolModel} />

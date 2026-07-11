@@ -4,7 +4,6 @@
 
   interface Props {
     tool: ToolView;
-    hasSavedProfile: boolean;
     busy: boolean;
     onApply: (id: string) => void;
     onRestore: (id: string) => void;
@@ -13,9 +12,14 @@
     onModelChange: (toolID: string, model: string) => void;
   }
   let {
-    tool, hasSavedProfile, busy,
+    tool, busy,
     onApply, onRestore, onInstall, onUninstall, onModelChange,
   }: Props = $props();
+
+  // The provider in effect for this tool (per-tool override or the active
+  // provider). Empty when no provider is configured yet — Apply then stays
+  // disabled since the backend would fail fast anyway.
+  const hasProvider = $derived(!!tool.selected_provider_id);
 
   // Provider logos are self-contained app-icon SVGs under /logos/<id>.svg. If a
   // tool has no asset or it fails to load we fall back to a neutral monogram
@@ -51,17 +55,19 @@
     }
     return { label: "Installed", tone: "neutral", full: meta.label };
   });
-  // Apply needs an installed tool and a saved profile (the backend fails fast
-  // without one). Restore only makes sense once we've changed something.
-  const canApply = $derived(tool.installed && hasSavedProfile && !busy);
+  // Apply needs an installed tool and a configured provider (the backend
+  // fails fast without one). Restore only makes sense once we've changed
+  // something.
+  const canApply = $derived(tool.installed && hasProvider && !busy);
   const canRestore = $derived(
     tool.installed && tool.status !== "default" && tool.status !== "not_installed" && !busy,
   );
 
-  // Per-tool model picker. The list comes from the active profile (via the
-  // backend ToolView). selectedModel is the effective model; if it isn't a
-  // member of the current list (e.g. the profile changed) we fall back to the
-  // empty "Use profile default" option so the control never shows a stale value.
+  // Per-tool model picker. The list comes from the tool's EFFECTIVE provider
+  // (via the backend ToolView). selectedModel is the effective model; if it
+  // isn't a member of the current list (e.g. the provider changed) we fall
+  // back to the empty "Use provider default" option so the control never
+  // shows a stale value.
   const models = $derived(tool.models ?? []);
   // Optional per-model display names: option labels show the friendly name
   // (fallback = the model ID) while option values stay the canonical ID.
@@ -100,7 +106,7 @@
   {#snippet applyButton()}
     <button class="btn-primary sm soft" type="button" onclick={() => onApply(tool.id)}
       disabled={!canApply}
-      title={!tool.installed ? "Tool is not installed" : !hasSavedProfile ? "Save a profile first" : undefined}>
+      title={!tool.installed ? "Tool is not installed" : !hasProvider ? "Add a provider first" : undefined}>
       Apply
     </button>
   {/snippet}
@@ -111,7 +117,7 @@
         aria-label="Model"
         value={selectedModel}
         onchange={(e) => onModelChange(tool.id, e.currentTarget.value)}>
-        <option value="">Use profile default</option>
+        <option value="">Use provider default</option>
         {#each models as m (m)}
           <option value={m}>{modelNames[m] || m}</option>
         {/each}
@@ -120,12 +126,12 @@
     </div>
   {/if}
 
-  {#if tool.installed && tool.key_provider}
+  {#if tool.installed && tool.provider_name}
     <p class="tool-key"
-      title={tool.key_overridden
-        ? "This tool uses its own key instead of the profile's active key"
-        : "This tool uses the profile's active key"}>
-      Key: {tool.key_provider}{tool.key_overridden ? " · override" : ""}
+      title={tool.provider_overridden
+        ? "This tool uses its own provider instead of the active one"
+        : "This tool uses the active provider"}>
+      Provider: {tool.provider_name}{tool.provider_overridden ? " · override" : ""}
     </p>
   {/if}
 
@@ -291,8 +297,9 @@
   .tool-status.tone-success .dot { background: var(--ok); }
   .tool-status.tone-warning .dot { background: var(--warn); }
 
-  /* Which key Apply will use: the entry's provider name only (never any part
-     of the key value), flagged when it comes from a per-tool override. */
+  /* Which provider Apply will use: the provider's display name only (never
+     any part of the key value), flagged when it comes from a per-tool
+     override. */
   .tool-key {
     margin: 0;
     font-size: var(--fs-micro);
