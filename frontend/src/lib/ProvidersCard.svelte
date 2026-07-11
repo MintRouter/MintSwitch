@@ -39,137 +39,26 @@
     return `${models.length} model${models.length > 1 ? "s" : ""}${p.model ? ` · default ${name}` : ""}`;
   }
 
-  // Builds the full UpdateProvider payload for one provider with patch applied
-  // on top. api_key defaults to "" which the backend treats as "keep the
-  // stored key" — a key value only rides along when the user typed a new one.
-  function fullProvider(p: ProviderView, patch: Partial<Provider>): Provider {
-    return {
-      id: p.id,
-      name: p.name,
-      note: p.note,
-      api_key: "",
-      base_url: p.base_url,
-      models: p.models ?? [],
-      model_names: p.model_names ?? {},
-      model: p.model,
-      small_fast_model: p.small_fast_model,
-      ...patch,
-    };
-  }
-
   // ---- Manage dialog (provider list) ----
   let manageOpen = $state(false);
   let manageDialogEl = $state<HTMLDivElement | null>(null);
-  let addNameEl = $state<HTMLInputElement | null>(null);
+  let addBtnEl = $state<HTMLButtonElement | null>(null);
   let dialogError = $state("");
   let toolProviderError = $state("");
 
   function openManage(): void {
     dialogError = "";
     toolProviderError = "";
-    autoFetchNotice = "";
     manageOpen = true;
   }
 
   function closeManage(): void {
     manageOpen = false;
-    cancelEdit();
-  }
-
-  // Add form. The backend requires name + key + base URL + a default model
-  // (core.Provider.Validate), so all four gate the Add button; the note is
-  // optional non-secret text shown in the list row.
-  let newName = $state("");
-  let newBaseUrl = $state("");
-  let newKey = $state("");
-  let newModel = $state("");
-  let newNote = $state("");
-  const newBase = $derived(normalizeBaseUrl(newBaseUrl));
-  const canAdd = $derived(
-    !!newName.trim() && isHttpUrl(newBase.url) && !!newKey.trim() && !!newModel.trim(),
-  );
-
-  async function addProvider(): Promise<void> {
-    if (!canAdd || saving) return;
-    dialogError = "";
-    autoFetchNotice = "";
-    const addedName = newName.trim();
-    const addedBase = newBase.url;
-    const err = await onAdd({
-      id: "",
-      name: addedName,
-      note: newNote.trim(),
-      api_key: newKey,
-      base_url: addedBase,
-      models: [],
-      model_names: {},
-      model: newModel.trim(),
-      small_fast_model: "",
-    });
-    if (err != null) {
-      dialogError = err;
-      return;
-    }
-    newName = "";
-    newBaseUrl = "";
-    newKey = "";
-    newModel = "";
-    newNote = "";
-    addNameEl?.focus();
-    void autoFetchFor(addedName, addedBase);
-  }
-
-  function onAddKeydown(e: KeyboardEvent): void {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      void addProvider();
-    }
-  }
-
-  // Inline per-provider edit of name / base URL / key / note. The key input
-  // stays empty for "keep the stored key"; typing a value replaces it.
-  let editingId = $state("");
-  let editName = $state("");
-  let editBaseUrl = $state("");
-  let editKey = $state("");
-  let editNote = $state("");
-  const editBase = $derived(normalizeBaseUrl(editBaseUrl));
-  const canSaveEdit = $derived(!!editName.trim() && isHttpUrl(editBase.url));
-
-  function startEdit(p: ProviderView): void {
-    editingId = p.id;
-    editName = p.name;
-    editBaseUrl = p.base_url;
-    editKey = "";
-    editNote = p.note;
-    dialogError = "";
-  }
-
-  function cancelEdit(): void {
-    editingId = "";
-    editKey = "";
-  }
-
-  async function saveEdit(): Promise<void> {
-    const p = providers.find((x) => x.id === editingId);
-    if (!p || !canSaveEdit || saving) return;
-    dialogError = "";
-    const err = await onUpdate(fullProvider(p, {
-      name: editName.trim(),
-      note: editNote.trim(),
-      base_url: editBase.url,
-      api_key: editKey,
-    }));
-    if (err != null) {
-      dialogError = err;
-      return;
-    }
-    cancelEdit();
+    closeForm();
   }
 
   async function removeProvider(id: string): Promise<void> {
     dialogError = "";
-    if (editingId === id) cancelEdit();
     const err = await onRemove(id);
     if (err != null) dialogError = err;
   }
@@ -190,214 +79,214 @@
     if (err != null) toolProviderError = err;
   }
 
-  // ---- Models dialog (one provider's model list) ----
-  // Opened from a provider row; it temporarily replaces the Manage dialog and
-  // Esc / backdrop / Done all return to it. Model mutations persist
-  // immediately via UpdateProvider (api_key "" = keep the stored key).
-  let modelsProviderId = $state("");
-  let modelsDialogEl = $state<HTMLDivElement | null>(null);
+  // ---- Unified Add/Edit dialog ----
+  // One form serves both flows: formId "" means Add, otherwise it edits that
+  // provider. It temporarily replaces the Manage dialog and Esc / backdrop /
+  // Cancel all return to it. The key input stays empty on Edit for "keep the
+  // stored key"; typing a value replaces it. Nothing persists until Save.
+  let formOpen = $state(false);
+  let formId = $state("");
+  let formDialogEl = $state<HTMLDivElement | null>(null);
+  let formNameEl = $state<HTMLInputElement | null>(null);
+  let formName = $state("");
+  let formNote = $state("");
+  let formBaseUrl = $state("");
+  let formKey = $state("");
+  let fModels = $state<string[]>([]);
+  let fModelNames = $state<Record<string, string>>({});
+  let fModel = $state("");
+  let modelInput = $state("");
   let modelInputEl = $state<HTMLInputElement | null>(null);
-  let mModels = $state<string[]>([]);
-  let mModelNames = $state<Record<string, string>>({});
-  let mModel = $state("");
-  let newModelId = $state("");
-  let newModelName = $state("");
-  let modelsError = $state("");
+  let formError = $state("");
 
-  // ---- Fetch models from the provider's endpoint ----
-  // Read-only fetch of GET {base_url}/models via the backend; results feed a
-  // checkbox picker for bulk-add. Errors are display-safe and never blocking:
-  // the manual add-model input keeps working regardless.
-  let fetching = $state(false);
-  let fetchAttempted = $state(false);
-  let fetchError = $state("");
-  let fetchedModels = $state<string[]>([]);
-  let fetchedSelected = $state<Record<string, boolean>>({});
-  // Gentle notice on the provider list for the auto-fetch that runs right
-  // after a provider is added (progress, or its non-blocking failure).
-  let autoFetchNotice = $state("");
+  const formBase = $derived(normalizeBaseUrl(formBaseUrl));
+  const isEdit = $derived(!!formId);
+  const editing = $derived(providers.find((p) => p.id === formId) ?? null);
 
-  const modelsProvider = $derived(providers.find((p) => p.id === modelsProviderId) ?? null);
-  // A provider always needs one model (the backend refuses an empty list), so
-  // the last entry can't be removed.
-  const canRemoveModel = $derived(mModels.length > 1);
+  // Models can be fetched once there is a usable endpoint + key. On Edit the
+  // stored key counts: the backend uses it when the key input is blank, so
+  // the key value never round-trips to the frontend.
+  const canFetch = $derived(
+    isHttpUrl(formBase.url) && (!!formKey.trim() || (isEdit && !!editing?.has_key)),
+  );
 
-  function openModels(p: ProviderView): void {
-    modelsProviderId = p.id;
-    mModels = [...(p.models ?? [])];
+  // The backend requires name + key + base URL + a default model
+  // (core.Provider.Validate); on Edit a blank key keeps the stored one.
+  const canSave = $derived(
+    !!formName.trim() && isHttpUrl(formBase.url) &&
+    (isEdit || !!formKey.trim()) &&
+    fModels.length > 0 && fModels.includes(fModel),
+  );
+
+  function openForm(p: ProviderView | null): void {
+    formId = p?.id ?? "";
+    formName = p?.name ?? "";
+    formNote = p?.note ?? "";
+    formBaseUrl = p?.base_url ?? "";
+    formKey = "";
+    fModels = [...(p?.models ?? [])];
     const seeded: Record<string, string> = {};
-    for (const [id, name] of Object.entries(p.model_names ?? {})) {
+    for (const [id, name] of Object.entries(p?.model_names ?? {})) {
       if (name) seeded[id] = name;
     }
-    mModelNames = seeded;
-    mModel = p.model;
-    newModelId = "";
-    newModelName = "";
-    modelsError = "";
+    fModelNames = seeded;
+    fModel = p?.model ?? "";
+    modelInput = "";
+    formError = "";
     fetching = false;
     fetchAttempted = false;
     fetchError = "";
     fetchedModels = [];
-    fetchedSelected = {};
+    formOpen = true;
+    // Edit opens with a stored endpoint + key, so the model list can appear
+    // with zero extra clicks.
+    if (p) scheduleFetch(0);
   }
 
-  function closeModels(): void {
-    modelsProviderId = "";
+  function closeForm(): void {
+    formOpen = false;
+    formId = "";
+    formKey = "";
+    clearTimeout(fetchTimer);
+    fetchSeq++;
+    fetching = false;
   }
+
+  // ---- Auto-fetch of the endpoint's advertised models ----
+  // Runs when Edit opens and (debounced) whenever the endpoint or key input
+  // changes, via the read-only FetchEndpointModels binding: a typed key
+  // travels only for this one request and is never stored or echoed back.
+  // Failures degrade to a quiet notice with a retry button — manual entry and
+  // Save keep working regardless.
+  let fetching = $state(false);
+  let fetchAttempted = $state(false);
+  let fetchError = $state("");
+  let fetchedModels = $state<string[]>([]);
+  let fetchTimer: ReturnType<typeof setTimeout> | undefined;
+  // Monotonic token so a stale (slow) response can never clobber the state of
+  // a newer fetch or a reopened form.
+  let fetchSeq = 0;
+
+  function scheduleFetch(delay = 600): void {
+    clearTimeout(fetchTimer);
+    if (!canFetch) return;
+    fetchTimer = setTimeout(() => void fetchModels(), delay);
+  }
+
+  async function fetchModels(): Promise<void> {
+    if (!canFetch) return;
+    const seq = ++fetchSeq;
+    fetching = true;
+    fetchError = "";
+    try {
+      const ids = (await Service.FetchEndpointModels(formBase.url, formKey, formId)) ?? [];
+      if (seq !== fetchSeq) return;
+      fetchedModels = ids;
+      fetchAttempted = true;
+      fetching = false;
+    } catch (e) {
+      if (seq !== fetchSeq) return;
+      fetchError = errMsg(e);
+      fetchAttempted = true;
+      fetching = false;
+    }
+  }
+
+  // Fetched IDs not yet selected — the pickable dropdown list under the chips
+  // (already-selected entries are hidden so picking never duplicates).
+  const pickableModels = $derived(fetchedModels.filter((m) => !fModels.includes(m)));
 
   // What the UI shows for a model: its optional display name, falling back to
   // the canonical ID.
   function displayName(m: string): string {
-    return mModelNames[m] || m;
+    return fModelNames[m] || m;
   }
 
-  async function persistModels(): Promise<void> {
-    const p = providers.find((x) => x.id === modelsProviderId);
-    if (!p) return;
-    if (mModels.length === 0 || !mModels.includes(mModel)) return;
-    modelsError = "";
-    const err = await onUpdate(fullProvider(p, {
-      models: mModels,
-      model_names: mModelNames,
-      model: mModel,
-    }));
-    if (err != null) modelsError = err;
+  // Add one model ID (trimmed, deduped); the first model added becomes the
+  // default automatically.
+  function addModelId(id: string): void {
+    const v = id.trim();
+    if (!v) return;
+    if (!fModels.includes(v)) {
+      fModels = [...fModels, v];
+      if (!fModel) fModel = v;
+    }
   }
 
-  // Add the typed model to the list (trimmed, deduped by ID). The optional
-  // display name is stored alongside; re-adding an existing ID never
-  // duplicates it but a newly typed name updates its alias. The first model
-  // added becomes the default automatically.
-  function addModel(): void {
-    const id = newModelId.trim();
-    if (!id) return;
-    const name = newModelName.trim();
-    if (!mModels.includes(id)) {
-      mModels = [...mModels, id];
-      if (!mModel) mModel = id;
-    }
-    if (name) {
-      mModelNames = { ...mModelNames, [id]: name };
-    }
-    newModelId = "";
-    newModelName = "";
+  function addTypedModel(): void {
+    addModelId(modelInput);
+    modelInput = "";
     modelInputEl?.focus();
-    void persistModels();
   }
 
   function onModelKeydown(e: KeyboardEvent): void {
     if (e.key === "Enter") {
       e.preventDefault();
-      addModel();
+      addTypedModel();
     }
   }
 
-  // Remove a model (and its display name); if it was the default, fall back
-  // to the first remaining model so the default is never orphaned.
+  // Remove a chip (and its display name); if it was the default, fall back to
+  // the first remaining model so the default is never orphaned.
   function removeModel(m: string): void {
-    if (!canRemoveModel) return;
-    mModels = mModels.filter((x) => x !== m);
-    if (m in mModelNames) {
-      const next = { ...mModelNames };
+    fModels = fModels.filter((x) => x !== m);
+    if (m in fModelNames) {
+      const next = { ...fModelNames };
       delete next[m];
-      mModelNames = next;
+      fModelNames = next;
     }
-    if (mModel === m) {
-      mModel = mModels[0] ?? "";
-    }
-    void persistModels();
+    if (fModel === m) fModel = fModels[0] ?? "";
   }
 
   function setDefault(m: string): void {
-    if (mModel === m) return;
-    mModel = m;
-    void persistModels();
+    fModel = m;
   }
 
-  // Fetch (or refetch) the model IDs the provider's endpoint advertises. The
-  // result replaces the previous picker; already-added models render marked
-  // and disabled so bulk-add can never duplicate.
-  async function fetchModels(): Promise<void> {
-    const p = modelsProvider;
-    if (!p || fetching) return;
-    fetching = true;
-    fetchError = "";
-    try {
-      fetchedModels = (await Service.FetchProviderModels(p.id)) ?? [];
-      fetchedSelected = {};
-      fetchAttempted = true;
-    } catch (e) {
-      fetchError = errMsg(e);
-    } finally {
-      fetching = false;
-    }
-  }
-
-  const selectedFetchCount = $derived(
-    fetchedModels.filter((m) => fetchedSelected[m] && !mModels.includes(m)).length,
-  );
-
-  // Bulk-add the checked fetched models (dedupe against the existing list);
-  // the first model ever added becomes the default, same as manual add.
-  function addSelectedModels(): void {
-    const picked = fetchedModels.filter((m) => fetchedSelected[m] && !mModels.includes(m));
-    if (picked.length === 0) return;
-    mModels = [...mModels, ...picked];
-    if (!mModel) mModel = mModels[0];
-    fetchedSelected = {};
-    void persistModels();
-  }
-
-  // Auto-fetch right after a provider is added: locate the new provider in
-  // the refreshed list (by name, preferring an exact base URL match), then on
-  // success open its Models dialog pre-populated with the fetched picker. Any
-  // failure degrades to a gentle notice — the manual flow stays untouched.
-  async function autoFetchFor(name: string, base: string): Promise<void> {
-    const byName = providers.filter((x) => x.name === name);
-    const added = byName.filter((x) => x.base_url === base).pop() ?? byName.pop();
-    if (!added) return;
-    autoFetchNotice = `Checking ${added.name} for available models…`;
-    let ids: string[];
-    try {
-      ids = (await Service.FetchProviderModels(added.id)) ?? [];
-    } catch {
-      autoFetchNotice = `Couldn't fetch models from ${added.name} — you can add them manually via Models.`;
+  async function saveForm(): Promise<void> {
+    if (!canSave || saving) return;
+    formError = "";
+    const payload: Provider = {
+      id: formId,
+      name: formName.trim(),
+      note: formNote.trim(),
+      api_key: formKey,
+      base_url: formBase.url,
+      models: fModels,
+      model_names: fModelNames,
+      model: fModel,
+      small_fast_model: editing?.small_fast_model ?? "",
+    };
+    const err = isEdit ? await onUpdate(payload) : await onAdd(payload);
+    if (err != null) {
+      formError = err;
       return;
     }
-    autoFetchNotice = "";
-    if (!manageOpen || modelsProviderId) return;
-    if (ids.length === 0) {
-      autoFetchNotice = `${added.name} didn't advertise any models — you can add them manually via Models.`;
-      return;
-    }
-    openModels(providers.find((x) => x.id === added.id) ?? added);
-    fetchedModels = ids;
-    fetchAttempted = true;
+    closeForm();
   }
 
-  // Focus the first input whenever a dialog (or dialog view) opens; runs
-  // after render so the element refs exist.
+  // Focus the natural first control whenever a dialog view opens; runs after
+  // render so the element refs exist.
   $effect(() => {
-    if (manageOpen && !modelsProviderId) {
-      queueMicrotask(() => addNameEl?.focus());
+    if (manageOpen && !formOpen) {
+      queueMicrotask(() => addBtnEl?.focus());
     }
   });
 
   $effect(() => {
-    if (modelsProviderId) {
-      queueMicrotask(() => modelInputEl?.focus());
+    if (formOpen) {
+      queueMicrotask(() => formNameEl?.focus());
     }
   });
 
-  // Esc closes the open dialog view (Models falls back to the provider list);
-  // Tab is trapped inside the visible dialog while open.
+  // Esc closes the open dialog view (the form falls back to the provider
+  // list); Tab is trapped inside the visible dialog while open.
   function onDialogKeydown(e: KeyboardEvent): void {
     if (!manageOpen) return;
-    const inModels = !!modelsProviderId;
-    const dialogEl = inModels ? modelsDialogEl : manageDialogEl;
+    const inForm = formOpen;
+    const dialogEl = inForm ? formDialogEl : manageDialogEl;
     if (e.key === "Escape") {
       e.preventDefault();
-      if (inModels) closeModels();
+      if (inForm) closeForm();
       else closeManage();
       return;
     }
@@ -449,59 +338,17 @@
 
 <svelte:window onkeydown={onDialogKeydown} />
 
-{#if manageOpen && !modelsProviderId}
+{#if manageOpen && !formOpen}
   <div class="backdrop" role="presentation"
     onclick={(e) => e.target === e.currentTarget && closeManage()}>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pv-manage-title"
       tabindex="-1" bind:this={manageDialogEl}>
       <h2 class="title" id="pv-manage-title">Providers</h2>
       <div class="add-body">
-        <div class="field">
-          <span class="micro-label">Add a provider</span>
-          <div class="add-grid">
-            <div class="add-field">
-              <label class="add-label" for="pv-add-name">Name</label>
-              <input class="field-input" id="pv-add-name" type="text" bind:value={newName}
-                bind:this={addNameEl}
-                placeholder="MintRouter.AI" autocomplete="off" spellcheck="false"
-                onkeydown={onAddKeydown} />
-            </div>
-            <div class="add-field">
-              <label class="add-label" for="pv-add-base">Base URL</label>
-              <input class="field-input" id="pv-add-base" type="url" bind:value={newBaseUrl}
-                placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
-                onkeydown={onAddKeydown} />
-            </div>
-            <div class="add-field">
-              <label class="add-label" for="pv-add-key">API key</label>
-              <input class="field-input" id="pv-add-key" type="password" bind:value={newKey}
-                placeholder="Enter the API key" autocomplete="off"
-                onkeydown={onAddKeydown} />
-            </div>
-            <div class="add-field">
-              <label class="add-label" for="pv-add-model">Default model</label>
-              <input class="field-input" id="pv-add-model" type="text" bind:value={newModel}
-                placeholder="anthropic/claude-opus-4.8" autocomplete="off" spellcheck="false"
-                onkeydown={onAddKeydown} />
-            </div>
-          </div>
-          <div class="add-field">
-            <label class="add-label" for="pv-add-note">Note <span class="opt">Optional</span></label>
-            <textarea class="field-input note-input" id="pv-add-note" bind:value={newNote}
-              placeholder="e.g. team account, EU endpoint" rows="2" autocomplete="off"></textarea>
-          </div>
-          {#if newBase.upgraded}
-            <p class="field-notice">
-              Will be saved as <code>{newBase.url}</code> — http endpoints can drop the API key on redirect.
-            </p>
-          {/if}
-          <div class="add-actions">
-            <button class="btn-primary sm" type="button" onclick={() => void addProvider()}
-              disabled={!canAdd || saving}>Add provider</button>
-          </div>
-          {#if autoFetchNotice}
-            <p class="field-hint" role="status">{autoFetchNotice}</p>
-          {/if}
+        <div class="list-head">
+          <span class="micro-label">Providers</span>
+          <button class="btn-ghost sm" type="button" bind:this={addBtnEl}
+            onclick={() => openForm(null)}>Add provider</button>
         </div>
 
         {#if providers.length}
@@ -522,53 +369,14 @@
                     <span class="provider-meta">{p.base_url} · {modelsSummary(p)}</span>
                   </button>
                   <div class="provider-actions">
-                    <button class="btn-ghost sm" type="button" onclick={() => openModels(p)}
-                      title={`Manage ${p.name} models`}>Models</button>
-                    <button class="btn-ghost sm" type="button"
-                      onclick={() => (editingId === p.id ? cancelEdit() : startEdit(p))}>
-                      {editingId === p.id ? "Cancel" : "Edit"}
+                    <button class="btn-ghost sm" type="button" onclick={() => openForm(p)}>
+                      Edit
                     </button>
                     <button class="provider-remove" type="button" disabled={saving}
                       onclick={() => void removeProvider(p.id)}
                       aria-label={`Remove ${p.name}`} title={`Remove ${p.name}`}>×</button>
                   </div>
                 </div>
-                {#if editingId === p.id}
-                  <div class="provider-edit">
-                    <div class="add-grid">
-                      <div class="add-field">
-                        <label class="add-label" for={`pv-edit-name-${p.id}`}>Name</label>
-                        <input class="field-input" id={`pv-edit-name-${p.id}`} type="text"
-                          bind:value={editName} autocomplete="off" spellcheck="false" />
-                      </div>
-                      <div class="add-field">
-                        <label class="add-label" for={`pv-edit-base-${p.id}`}>Base URL</label>
-                        <input class="field-input" id={`pv-edit-base-${p.id}`} type="url"
-                          bind:value={editBaseUrl} autocomplete="off" spellcheck="false" />
-                      </div>
-                    </div>
-                    <div class="add-field">
-                      <label class="add-label" for={`pv-edit-key-${p.id}`}>API key</label>
-                      <input class="field-input" id={`pv-edit-key-${p.id}`} type="password"
-                        bind:value={editKey} autocomplete="off"
-                        placeholder="Leave blank to keep the current key" />
-                    </div>
-                    <div class="add-field">
-                      <label class="add-label" for={`pv-edit-note-${p.id}`}>Note <span class="opt">Optional</span></label>
-                      <textarea class="field-input note-input" id={`pv-edit-note-${p.id}`}
-                        bind:value={editNote} rows="2" autocomplete="off"></textarea>
-                    </div>
-                    {#if editBase.upgraded}
-                      <p class="field-notice">
-                        Will be saved as <code>{editBase.url}</code> — http endpoints can drop the API key on redirect.
-                      </p>
-                    {/if}
-                    <div class="add-actions">
-                      <button class="btn-primary sm" type="button" onclick={() => void saveEdit()}
-                        disabled={!canSaveEdit || saving}>Save changes</button>
-                    </div>
-                  </div>
-                {/if}
               </div>
             {/each}
           </div>
@@ -612,103 +420,109 @@
   </div>
 {/if}
 
-{#if manageOpen && modelsProviderId}
+{#if manageOpen && formOpen}
   <div class="backdrop" role="presentation"
-    onclick={(e) => e.target === e.currentTarget && closeModels()}>
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pv-models-title"
-      tabindex="-1" bind:this={modelsDialogEl}>
-      <h2 class="title" id="pv-models-title">Models — {modelsProvider?.name ?? ""}</h2>
+    onclick={(e) => e.target === e.currentTarget && closeForm()}>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pv-form-title"
+      tabindex="-1" bind:this={formDialogEl}>
+      <h2 class="title" id="pv-form-title">{isEdit ? `Edit ${editing?.name ?? "provider"}` : "Add a provider"}</h2>
       <div class="add-body">
-        <div class="field">
-          <span class="micro-label">Add a model</span>
-          <div class="model-add">
-            <div class="add-field">
-              <label class="add-label" for="pv-model-add">Model ID</label>
-              <input class="field-input" id="pv-model-add" type="text" bind:value={newModelId}
-                bind:this={modelInputEl}
-                placeholder="anthropic/claude-opus-4.8" autocomplete="off" spellcheck="false"
-                onkeydown={onModelKeydown} />
-            </div>
-            <div class="add-field">
-              <label class="add-label" for="pv-model-add-name">Display name <span class="opt">Optional</span></label>
-              <input class="field-input" id="pv-model-add-name" type="text" bind:value={newModelName}
-                placeholder="opus4.8" autocomplete="off" spellcheck="false"
-                onkeydown={onModelKeydown} />
-            </div>
-            <button class="btn-primary sm" type="button" onclick={addModel}
-              disabled={!newModelId.trim() || saving}>Add</button>
-          </div>
+        <div class="add-field">
+          <label class="add-label" for="pv-form-name">Provider name</label>
+          <input class="field-input" id="pv-form-name" type="text" bind:value={formName}
+            bind:this={formNameEl}
+            placeholder="MintRouter.AI" autocomplete="off" spellcheck="false" />
         </div>
-        <div class="field">
-          <div class="fetch-head">
-            <span class="micro-label">From the endpoint</span>
-            <button class="btn-ghost sm" type="button" onclick={() => void fetchModels()}
-              disabled={fetching || saving} aria-busy={fetching}
-              title="List the models the provider's /models endpoint advertises">
-              {fetching ? "Fetching…" : fetchAttempted || fetchError ? "Refetch models" : "Fetch models"}
-            </button>
+        <div class="add-field">
+          <label class="add-label" for="pv-form-note">Note <span class="opt">Optional</span></label>
+          <textarea class="field-input note-input" id="pv-form-note" bind:value={formNote}
+            placeholder="e.g. team account, EU endpoint" rows="2" autocomplete="off"></textarea>
+        </div>
+        <div class="add-field">
+          <label class="add-label" for="pv-form-base">API endpoint</label>
+          <input class="field-input" id="pv-form-base" type="url" bind:value={formBaseUrl}
+            placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
+            oninput={() => scheduleFetch()} />
+        </div>
+        {#if formBase.upgraded}
+          <p class="field-notice">
+            Will be saved as <code>{formBase.url}</code> — http endpoints can drop the API key on redirect.
+          </p>
+        {/if}
+        <div class="add-field">
+          <label class="add-label" for="pv-form-key">API key</label>
+          <input class="field-input" id="pv-form-key" type="password" bind:value={formKey}
+            placeholder={isEdit ? "Unchanged unless typed" : "Enter the API key"}
+            autocomplete="off" oninput={() => scheduleFetch()} />
+        </div>
+
+        <div class="add-field">
+          <div class="models-head">
+            <label class="add-label" for="pv-form-model-input">Models</label>
+            {#if fetching}
+              <span class="models-status" role="status">Fetching models…</span>
+            {:else if canFetch}
+              <button class="btn-ghost sm" type="button" onclick={() => void fetchModels()}
+                title="List the models the endpoint's /models route advertises">
+                {fetchAttempted || fetchError ? "Refetch models" : "Fetch models"}
+              </button>
+            {/if}
+          </div>
+          {#if fModels.length}
+            <div class="chips" role="group" aria-label="Selected models">
+              {#each fModels as m (m)}
+                <span class="chip" class:default={m === fModel}>
+                  <button class="chip-label" type="button" aria-pressed={m === fModel}
+                    onclick={() => setDefault(m)}
+                    title={m === fModel ? `${displayName(m)} is the default model` : `Set ${displayName(m)} as default`}>
+                    {displayName(m)}
+                    {#if m === fModel}<span class="chip-default-tag">default</span>{/if}
+                  </button>
+                  <button class="chip-remove" type="button" onclick={() => removeModel(m)}
+                    aria-label={`Remove ${displayName(m)}`} title={`Remove ${displayName(m)}`}>×</button>
+                </span>
+              {/each}
+            </div>
+          {/if}
+          <div class="model-entry">
+            <input class="field-input" id="pv-form-model-input" type="text" bind:value={modelInput}
+              bind:this={modelInputEl}
+              placeholder="Type a model ID and press Enter" autocomplete="off" spellcheck="false"
+              onkeydown={onModelKeydown} />
+            <button class="btn-ghost sm" type="button" onclick={addTypedModel}
+              disabled={!modelInput.trim()}>Add</button>
           </div>
           {#if fetchError}
-            <p class="field-notice" role="alert">
-              Couldn't fetch models: {fetchError} — you can still add models manually above.
-            </p>
+            <p class="field-hint" role="status">Couldn't fetch models — add manually. ({fetchError})</p>
           {/if}
-          {#if fetchAttempted && !fetchError}
-            {#if fetchedModels.length === 0}
-              <p class="field-hint">The endpoint didn't advertise any models.</p>
-            {:else}
-              <div class="fetch-list" role="group" aria-label="Fetched models">
-                {#each fetchedModels as m (m)}
-                  {#if mModels.includes(m)}
-                    <label class="fetch-item added">
-                      <input type="checkbox" checked disabled />
-                      <span class="fetch-id">{m}</span>
-                      <span class="badge tone-success">Added</span>
-                    </label>
-                  {:else}
-                    <label class="fetch-item">
-                      <input type="checkbox" bind:checked={fetchedSelected[m]} />
-                      <span class="fetch-id">{m}</span>
-                    </label>
-                  {/if}
-                {/each}
-              </div>
-              <div class="add-actions">
-                <button class="btn-primary sm" type="button" onclick={addSelectedModels}
-                  disabled={selectedFetchCount === 0 || saving}>
-                  Add selected{selectedFetchCount > 0 ? ` (${selectedFetchCount})` : ""}
+          {#if fetchAttempted && !fetchError && fetchedModels.length === 0}
+            <p class="field-hint">The endpoint didn't advertise any models — add them manually.</p>
+          {/if}
+          {#if pickableModels.length}
+            <div class="fetch-list" role="group" aria-label="Available models">
+              {#each pickableModels as m (m)}
+                <button class="fetch-item" type="button" onclick={() => addModelId(m)}
+                  title={`Add ${m}`}>
+                  <span class="fetch-id">{m}</span>
                 </button>
-              </div>
-            {/if}
+              {/each}
+            </div>
+          {/if}
+          {#if fModels.length && !fModels.includes(fModel)}
+            <p class="field-hint">Pick a default model by clicking one of the chips above.</p>
+          {:else if !fModels.length}
+            <p class="field-hint">At least one model is required; the first one added becomes the default.</p>
           {/if}
         </div>
-        {#if mModels.length}
-          <div class="seg-group" role="group" aria-label="Default model">
-            {#each mModels as m (m)}
-              <div class="seg" class:selected={m === mModel}>
-                <button class="seg-select" type="button" aria-pressed={m === mModel}
-                  onclick={() => setDefault(m)} title={`Set ${displayName(m)} as default`}>
-                  <span class="seg-name">{displayName(m)}</span>
-                  {#if mModelNames[m]}
-                    <span class="seg-id">{m}</span>
-                  {/if}
-                </button>
-                <button class="seg-remove" type="button" disabled={!canRemoveModel}
-                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); removeModel(m); }}
-                  aria-label={`Remove ${displayName(m)}`}
-                  title={canRemoveModel ? `Remove ${displayName(m)}` : "A provider needs at least one model"}>×</button>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="field-hint">No models yet — add your first one above.</p>
-        {/if}
-        {#if modelsError}
-          <p class="field-error" role="alert">Couldn't save: {modelsError}</p>
+
+        {#if formError}
+          <p class="field-error" role="alert">Couldn't save: {formError}</p>
         {/if}
       </div>
       <div class="actions">
-        <button class="btn-primary" type="button" onclick={closeModels}>Done</button>
+        <button class="btn-ghost" type="button" onclick={closeForm}>Cancel</button>
+        <button class="btn-primary" type="button" onclick={() => void saveForm()}
+          disabled={!canSave || saving}>{isEdit ? "Save changes" : "Add provider"}</button>
       </div>
     </div>
   </div>
@@ -848,13 +662,7 @@
     margin-top: var(--s-2);
   }
 
-  /* Add/edit form fields: labelled inputs in a 2-col grid (stacking on narrow
-     dialogs), with the Note textarea full-width below. */
-  .add-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-    gap: var(--s-1);
-  }
+  /* Add/edit form fields: stacked labelled inputs, top to bottom. */
   .add-field {
     min-width: 0;
     display: flex;
@@ -869,11 +677,28 @@
   }
   .add-field .field-input { width: 100%; }
   .note-input { resize: vertical; min-height: 2.4rem; font-family: inherit; }
-  .add-actions { display: flex; justify-content: flex-end; margin-top: 0.1rem; }
+
+  /* Manage dialog header row: the list label left, quiet-accent Add action
+     right — the single entry point into the unified Add/Edit form. */
+  .list-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .list-head .btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--accent-soft-text);
+  }
+  .list-head .btn-ghost:hover:not(:disabled) {
+    background: var(--accent-soft);
+    border-color: transparent;
+  }
 
   /* Provider list: one bordered row per provider — the main area is a button
-     that sets it active (accent ring when active), with quiet Models / Edit /
-     remove actions on the right; the inline edit form expands below. */
+     that sets it active (accent ring when active), with quiet Edit / remove
+     actions on the right. */
   .provider-list { display: flex; flex-direction: column; gap: 6px; }
   .provider-row {
     display: flex;
@@ -966,40 +791,103 @@
   }
   .provider-remove:hover:not(:disabled) { color: var(--danger-strong); }
   .provider-remove:disabled { opacity: 0.4; cursor: default; }
-  .provider-edit {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-    padding: 0 0.6rem 0.6rem;
-    border-top: 1px solid var(--border);
-    padding-top: 0.6rem;
-    margin: 0 0 0;
-  }
 
-  /* Fetch-from-endpoint block: quiet header row (label + ghost fetch button),
-     then a scroll-capped checkbox list of the advertised model IDs; rows for
-     already-added models are muted with an "Added" badge and can't be
-     re-checked, so bulk-add never duplicates. */
-  .fetch-head {
+  /* Models field header: label left, and either a quiet-accent Fetch button or
+     a muted "Fetching…" status on the right. */
+  .models-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-2);
   }
-  .fetch-head .btn-ghost {
+  .models-head .btn-ghost {
     background: transparent;
     border-color: transparent;
     color: var(--accent-soft-text);
   }
-  .fetch-head .btn-ghost:hover:not(:disabled) {
+  .models-head .btn-ghost:hover:not(:disabled) {
     background: var(--accent-soft);
     border-color: transparent;
   }
+  .models-status {
+    font-size: var(--fs-micro);
+    color: var(--muted);
+    line-height: var(--lh-tight);
+  }
+
+  /* Selected models as chips: click the label to make it the default (accent
+     fill + "default" tag), click × to remove. */
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip {
+    display: inline-flex;
+    align-items: stretch;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+  .chip:not(.default):hover { border-color: var(--muted); }
+  .chip.default { background: var(--accent); border-color: var(--accent); }
+  .chip-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: 0;
+    padding: 0.22rem 0.15rem 0.22rem 0.65rem;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
+    color: var(--text);
+    background: transparent;
+    border: none;
+    border-radius: 999px 0 0 999px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.15s ease;
+  }
+  .chip.default .chip-label { color: var(--accent-text); }
+  .chip-default-tag {
+    flex: 0 0 auto;
+    font-size: 0.62rem;
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    opacity: 0.8;
+  }
+  .chip-remove {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0.5rem 0 0.3rem;
+    border: none;
+    border-radius: 0 999px 999px 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s ease, opacity 0.15s ease;
+  }
+  .chip-remove:hover { color: var(--danger-strong); }
+  .chip.default .chip-remove { color: var(--accent-text); }
+  .chip.default .chip-remove:hover { color: var(--accent-text); opacity: 0.75; }
+
+  /* Manual model entry: text input with a quiet Add button level with it. */
+  .model-entry { display: flex; gap: var(--s-1); align-items: center; }
+  .model-entry .field-input { flex: 1 1 auto; min-width: 0; }
+  .model-entry .btn-ghost { flex: 0 0 auto; }
+
+  /* Suggestions from the endpoint: a scroll-capped list of advertised model
+     IDs not yet selected — each row is a button that adds it as a chip. */
   .fetch-list {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    max-height: 14rem;
+    max-height: 11rem;
     overflow-y: auto;
     padding: 4px;
     background: var(--surface-2);
@@ -1011,107 +899,17 @@
     align-items: center;
     gap: 0.45rem;
     padding: 0.28rem 0.4rem;
+    border: none;
     border-radius: 6px;
+    background: transparent;
+    text-align: left;
     font-size: var(--fs-sm);
     color: var(--text);
     line-height: var(--lh-tight);
     cursor: pointer;
   }
   .fetch-item:hover { background: var(--surface); }
-  .fetch-item.added { color: var(--muted); cursor: default; }
-  .fetch-item.added:hover { background: transparent; }
-  .fetch-item input { flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
   .fetch-item .fetch-id { min-width: 0; overflow-wrap: anywhere; }
-  .fetch-item .badge { flex: 0 0 auto; margin-left: auto; }
-
-  /* Models add row: Model ID + optional Display name side by side with the Add
-     button pinned level to the input boxes. */
-  .model-add { display: flex; gap: var(--s-1); align-items: flex-end; }
-  .model-add .field-input,
-  .model-add .btn-primary { height: 36px; }
-  .model-add .add-field { flex: 1 1 0; }
-  .model-add .btn-primary { flex: 0 0 auto; }
-
-  /* Segmented default picker (same language as the old Models dialog): models
-     render as connected segments; the selected one is accent-filled, the rest
-     are clickable to become the default; each carries its own isolated ×. */
-  .seg-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 3px;
-    margin: 0.1rem 0 0;
-    padding: 3px;
-    width: fit-content;
-    max-width: 100%;
-    align-self: flex-start;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-  .seg {
-    display: inline-flex;
-    align-items: stretch;
-    min-width: 0;
-    max-width: 100%;
-    min-height: 36px;
-    border: 1px solid transparent;
-    border-radius: 7px;
-    background: transparent;
-    transition: background-color 0.15s ease, border-color 0.15s ease;
-  }
-  .seg.selected { background: var(--accent); }
-  .seg:not(.selected):hover { border-color: var(--muted); }
-  .seg-select {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 1px;
-    min-width: 0;
-    padding: 0.32rem 0.4rem 0.32rem 0.6rem;
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-semibold);
-    color: var(--text);
-    background: transparent;
-    border: none;
-    border-radius: 7px 0 0 7px;
-    cursor: pointer;
-    transition: color 0.15s ease;
-  }
-  .seg.selected .seg-select { color: var(--accent-text); }
-  .seg-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .seg-id {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.68rem;
-    font-weight: var(--fw-medium);
-    line-height: 1.15;
-    color: var(--muted);
-  }
-  .seg.selected .seg-id { color: var(--accent-text); opacity: 0.75; }
-  .seg-remove {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 0.6rem 0 0.4rem;
-    border: none;
-    border-radius: 0 7px 7px 0;
-    background: transparent;
-    color: var(--muted);
-    font-size: 1.05rem;
-    line-height: 1;
-    cursor: pointer;
-    transition: color 0.15s ease, opacity 0.15s ease;
-  }
-  .seg-remove:hover { color: var(--danger-strong); }
-  .seg.selected .seg-remove { color: var(--accent-text); }
-  .seg.selected .seg-remove:hover { color: var(--accent-text); opacity: 0.75; }
-  .seg-remove:disabled { opacity: 0.4; cursor: default; }
-  .seg-remove:disabled:hover { color: var(--muted); }
-  .seg.selected .seg-remove:disabled:hover { color: var(--accent-text); }
 
   /* Per-tool provider overrides: one compact row per installed tool — tool
      name left, a small select right listing providers by name only. */

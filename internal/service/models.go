@@ -44,6 +44,44 @@ func (s *Service) FetchProviderModels(providerID string) ([]string, error) {
 	if base == "" {
 		return nil, errors.New("service: the provider has no base URL saved; set one before fetching models")
 	}
+	return s.fetchModels(base, pr.APIKey)
+}
+
+// FetchEndpointModels queries {baseURL}/models like [Service.FetchProviderModels]
+// but for endpoint values that may not be saved yet, so the Add/Edit dialog
+// can list models before the provider is persisted. The API key is transient:
+// it is used only for this one request and is never stored, logged, or
+// included in errors. When apiKey is blank and providerID names a stored
+// provider, that provider's stored key is used instead (the Edit flow, where
+// the key never round-trips to the frontend). Read-only: it never mutates
+// settings, and errors stay display-safe.
+func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]string, error) {
+	base, _ := core.NormalizeBaseURL(baseURL)
+	if base == "" {
+		return nil, errors.New("service: enter a valid base URL before fetching models")
+	}
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		if id := strings.TrimSpace(providerID); id != "" {
+			st, err := s.store.Load()
+			if err != nil {
+				return nil, err
+			}
+			pr, ok := st.Provider(id)
+			if !ok {
+				return nil, fmt.Errorf("service: unknown provider %q", id)
+			}
+			key = strings.TrimSpace(pr.APIKey)
+		}
+	}
+	return s.fetchModels(base, key)
+}
+
+// fetchModels performs the actual GET {base}/models request with an optional
+// Bearer key and parses the advertised model IDs. Shared by the stored-
+// provider and transient-endpoint entry points; errors never include the key,
+// the Authorization header, or the endpoint's response body.
+func (s *Service) fetchModels(base, key string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsFetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
@@ -51,7 +89,7 @@ func (s *Service) FetchProviderModels(providerID string) ([]string, error) {
 		return nil, errors.New("service: could not build the models request; check the provider's base URL")
 	}
 	req.Header.Set("Accept", "application/json")
-	if key := strings.TrimSpace(pr.APIKey); key != "" {
+	if key = strings.TrimSpace(key); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	client := s.modelsClient
