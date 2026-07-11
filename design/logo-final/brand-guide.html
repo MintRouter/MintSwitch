@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MintSwitch — Brand Guide (Logo cuối, Wave 2)</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f7; --text:#1a1a1c; --muted:#57575c; --border:#e3e3e6;
+    --accent:#135bec; --mint:#0d9488; --dark-bg:#212124; --dark-surface:#2a2a2e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:48px 32px 96px;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    font-size:15px;line-height:1.55}
+  main{max-width:1100px;margin:0 auto}
+  h1{font-size:28px;letter-spacing:-0.01em;margin:0 0 4px}
+  h2{font-size:20px;letter-spacing:-0.01em;margin:56px 0 8px;padding-top:24px;border-top:1px solid var(--border)}
+  h3{font-size:15px;margin:24px 0 8px}
+  p.lead{color:var(--muted);margin:0 0 8px;max-width:70ch}
+  .row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin:16px 0}
+  .cell{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .cell figcaption{font-size:12px;color:var(--muted)}
+  figure{margin:0}
+  .pill{display:flex;align-items:center;justify-content:center;border-radius:12px;border:1px solid var(--border);background:var(--bg);padding:20px}
+  .pill.dark{background:var(--dark-bg);border-color:#3a3a3f}
+  .pill.soft{background:var(--surface)}
+  .checker{background:conic-gradient(#d4d4d8 90deg,#ffffff 90deg 180deg,#d4d4d8 180deg 270deg,#ffffff 270deg) 0 0/16px 16px;border:1px solid var(--border)}
+  .gray{filter:grayscale(1)}
+  img{display:block}
+  table{border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{border:1px solid var(--border);padding:8px 12px;text-align:left;vertical-align:top}
+  th{background:var(--surface);font-weight:600}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:var(--surface);padding:1px 5px;border-radius:4px}
+  .swatch{display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid rgba(0,0,0,.18);vertical-align:-2px;margin-right:6px}
+  .mask-squircle{border-radius:22.37%;overflow:hidden;width:160px;height:160px}
+  .mask-circle{border-radius:50%;overflow:hidden;width:160px;height:160px}
+  .mask-rounded{border-radius:36px;overflow:hidden;width:160px;height:160px}
+  .mask-squircle img,.mask-circle img,.mask-rounded img{width:100%;height:100%}
+  .clearspace{position:relative;display:inline-block;padding:16px;border:1px dashed #b3b3ba;background:var(--surface)}
+  .clearspace .inner{outline:1px dashed #d9a03c;display:inline-block}
+  ul{max-width:75ch}
+  .ok{color:#0e7490}
+</style>
+</head>
+<body>
+<main>
+  <h1>MintSwitch — Hệ logo cuối (Concept A · Route Switch)</h1>
+  <p class="lead">Wave 2 · bộ bàn giao trong <code>design/logo-final/</code>. Trang này tĩnh hoàn toàn (không JS) — mở trực tiếp để duyệt. Chưa tích hợp vào mã nguồn; asset sản phẩm hiện tại không bị thay đổi.</p>
+
+  <h2 id="construction">1 · Hình học &amp; căn quang học</h2>
+  <p class="lead">Lưới 48 · nét 4.5 round-cap · node r 4. Tinh chỉnh so với Wave 1: control point đối xứng <code>(27,24)/(27,12|36)</code> cho cả hai nhánh; nhánh chạy ngang từ x=34 và kết thúc đúng tâm node (38,12|36) nên đầu nét được node che phủ — mối nối liền mạch ở mọi kích thước. Ink bounds <code>x 4.5–42, y 8–40</code> (37.5×32). Khối hình nặng bên phải (2 node đầu mút) → khi đặt trong khung vuông, dịch trái 0.75 unit: crop chuẩn <code>viewBox="4 4 40 40"</code> cho tâm thị giác (24,24).</p>
+  <div class="row">
+    <figure class="cell"><div class="pill soft"><img src="mark-master.svg" width="192" height="192" alt="Master mark trên lưới sáng"></div><figcaption>Master · phóng 192 px</figcaption></figure>
+    <figure class="cell"><div class="pill soft"><img src="favicon.svg" width="160" height="160" alt="Crop vuông quang học 4 4 40 40"></div><figcaption>Crop vuông quang học <code>4 4 40 40</code></figcaption></figure>
+  </div>
+
+  <h2 id="variants">2 · Biến thể màu / mono / light–dark</h2>
+  <div class="row">
+    <figure class="cell"><div class="pill"><img src="mark-master.svg" width="96" height="96" alt="Master màu trên nền sáng"></div><figcaption>Master (light) · #135bec + #0d9488</figcaption></figure>
+    <figure class="cell"><div class="pill dark"><img src="mark-dark.svg" width="96" height="96" alt="Biến thể dark trên nền tối"></div><figcaption>Dark · #4d8dff + #2dd4bf</figcaption></figure>
+    <figure class="cell"><div class="pill" style="color:#1a1a1c"><!-- mark-mono.svg nhúng inline để currentColor kế thừa màu ngữ cảnh -->
+      <svg width="96" height="96" viewBox="0 0 48 48" fill="none" role="img" aria-label="Mono trên nền sáng"><g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"><path d="M20 24C27 24 27 36 34 36H38"/><path d="M8.5 24H20C27 24 27 12 34 12H38"/></g><g fill="currentColor"><circle cx="8.5" cy="24" r="4"/><circle cx="38" cy="12" r="4"/><circle cx="38" cy="36" r="4"/></g></svg>
+    </div><figcaption>Mono · currentColor (light)</figcaption></figure>
+    <figure class="cell"><div class="pill dark" style="color:#f2f2f4">
+      <svg width="96" height="96" viewBox="0 0 48 48" fill="none" role="img" aria-label="Mono trên nền tối"><g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"><path d="M20 24C27 24 27 36 34 36H38"/><path d="M8.5 24H20C27 24 27 12 34 12H38"/></g><g fill="currentColor"><circle cx="8.5" cy="24" r="4"/><circle cx="38" cy="12" r="4"/><circle cx="38" cy="36" r="4"/></g></svg>
+    </div><figcaption>Mono · currentColor (dark)</figcaption></figure>
+  </div>
+  <p class="lead">Bản mono nhúng inline sẽ nhận màu chữ hiện hành; trong app map vào <code>var(--accent)</code> hoặc <code>var(--text)</code>. File <code>favicon.svg</code> tự đổi bảng màu theo <code>prefers-color-scheme</code>.</p>
+
+  <h2 id="sizes">3 · Thang kích thước 16 → 1024 px</h2>
+  <p class="lead">Render trực tiếp từ SVG (crop vuông <code>favicon.svg</code>). Cấu trúc “1 tuyến vào → 2 nhánh + 3 node” phải còn đọc được ở 16 px.</p>
+  <h3>Nền sáng</h3>
+  <div class="row">
+    <figure class="cell"><div class="pill"><img src="favicon.svg" width="16" height="16" alt="16 px nền sáng"></div><figcaption>16</figcaption></figure>
+    <figure class="cell"><div class="pill"><img src="favicon.svg" width="32" height="32" alt="32 px nền sáng"></div><figcaption>32</figcaption></figure>
+    <figure class="cell"><div class="pill"><img src="favicon.svg" width="48" height="48" alt="48 px nền sáng"></div><figcaption>48</figcaption></figure>
+    <figure class="cell"><div class="pill"><img src="favicon.svg" width="128" height="128" alt="128 px nền sáng"></div><figcaption>128</figcaption></figure>
+    <figure class="cell"><div class="pill"><img src="favicon.svg" width="256" height="256" alt="256 px nền sáng"></div><figcaption>256</figcaption></figure>
+  </div>
+  <h3>Nền tối</h3>
+  <div class="row">
+    <figure class="cell"><div class="pill dark"><img src="mark-dark.svg" width="16" height="16" alt="16 px nền tối"></div><figcaption>16</figcaption></figure>
+    <figure class="cell"><div class="pill dark"><img src="mark-dark.svg" width="32" height="32" alt="32 px nền tối"></div><figcaption>32</figcaption></figure>
+    <figure class="cell"><div class="pill dark"><img src="mark-dark.svg" width="48" height="48" alt="48 px nền tối"></div><figcaption>48</figcaption></figure>
+    <figure class="cell"><div class="pill dark"><img src="mark-dark.svg" width="128" height="128" alt="128 px nền tối"></div><figcaption>128</figcaption></figure>
+    <figure class="cell"><div class="pill dark"><img src="mark-dark.svg" width="256" height="256" alt="256 px nền tối"></div><figcaption>256</figcaption></figure>
+  </div>
+  <h3>1024 px (app icon, kích thước thật)</h3>
+  <img src="app-icon.svg" width="1024" height="1024" alt="App icon 1024 px kích thước thật" style="max-width:100%;height:auto;border:1px solid var(--border)">
+
+  <h2 id="robustness">4 · Grayscale &amp; nền trong suốt</h2>
+  <div class="row">
+    <figure class="cell"><div class="pill gray"><img src="mark-master.svg" width="96" height="96" alt="Master chuyển grayscale"></div><figcaption>Grayscale (light)</figcaption></figure>
+    <figure class="cell"><div class="pill dark gray"><img src="mark-dark.svg" width="96" height="96" alt="Biến thể dark chuyển grayscale"></div><figcaption>Grayscale (dark)</figcaption></figure>
+    <figure class="cell"><div class="pill gray"><img src="favicon.svg" width="32" height="32" alt="Grayscale 32 px"></div><figcaption>Grayscale · 32 px</figcaption></figure>
+    <figure class="cell"><div class="pill checker"><img src="mark-master.svg" width="96" height="96" alt="Master trên nền trong suốt (bàn cờ)"></div><figcaption>Nền trong suốt</figcaption></figure>
+    <figure class="cell"><div class="pill checker"><img src="favicon.svg" width="32" height="32" alt="32 px trên nền trong suốt"></div><figcaption>Trong suốt · 32 px</figcaption></figure>
+  </div>
+  <p class="lead">Hai tuyến vẫn phân biệt được khi mất màu nhờ chênh độ sáng (mint sáng hơn blue) và cấu trúc trên/dưới; mọi file đều không có nền — an toàn trên nền bất kỳ.</p>
+
+  <h2 id="appicon">5 · App icon &amp; mask bo góc</h2>
+  <p class="lead">Nguồn <code>app-icon.svg</code> là tile vuông full-bleed 1024 (gradient <code>#2f6ff2 → #0f4fd6</code>, mark trắng + mint nhạt <code>#9fe8dc</code>) để pipeline nền tảng tự áp mask. Mark chiếm 600×512 (≈59% cạnh), nằm gọn trong safe zone của cả squircle lẫn mask tròn.</p>
+  <div class="row">
+    <figure class="cell"><div class="mask-squircle"><img src="app-icon.svg" alt="App icon dưới mask squircle macOS"></div><figcaption>macOS squircle ≈22.37%</figcaption></figure>
+    <figure class="cell"><div class="mask-rounded"><img src="app-icon.svg" alt="App icon dưới mask bo góc 36px"></div><figcaption>Rounded 22.5%</figcaption></figure>
+    <figure class="cell"><div class="mask-circle"><img src="app-icon.svg" alt="App icon dưới mask tròn"></div><figcaption>Circle (maskable)</figcaption></figure>
+    <figure class="cell"><div class="mask-squircle" style="width:64px;height:64px"><img src="app-icon.svg" alt="App icon 64 px dưới mask squircle"></div><figcaption>64 px</figcaption></figure>
+    <figure class="cell"><div class="mask-squircle" style="width:32px;height:32px"><img src="app-icon.svg" alt="App icon 32 px dưới mask squircle"></div><figcaption>32 px</figcaption></figure>
+  </div>
+
+  <h2 id="lockup">6 · Wordmark lockup, khoảng trống &amp; kích thước tối thiểu</h2>
+  <p class="lead">Typography khớp UI hệ thống: system stack, weight 700, tracking −0.01em (đúng token <code>--fw-bold</code>/<code>--tracking-tight</code> của app). Chữ trong lockup là <code>&lt;text&gt;</code> trên system stack; chỉ outline thành path nếu dùng ngoài môi trường có font hệ thống.</p>
+  <div class="row">
+    <figure class="cell"><div class="pill"><img src="lockup-light.svg" width="204" height="48" alt="Lockup trên nền sáng"></div><figcaption>Lockup · light</figcaption></figure>
+    <figure class="cell"><div class="pill dark"><img src="lockup-dark.svg" width="204" height="48" alt="Lockup trên nền tối"></div><figcaption>Lockup · dark</figcaption></figure>
+  </div>
+  <h3>Khoảng trống (clearspace)</h3>
+  <div class="row">
+    <figure class="cell">
+      <div class="clearspace"><span class="inner"><img src="favicon.svg" width="80" height="80" alt="Mark với vùng clearspace bằng đường kính node"></span></div>
+      <figcaption>Clearspace tối thiểu = Ø node (8/48 ≈ 17% chiều cao mark) quanh 4 phía</figcaption>
+    </figure>
+  </div>
+  <ul>
+    <li><strong>Mark tối thiểu:</strong> 16 px (UI), 12 px chỉ khi hệ render cho phép fractional AA tốt.</li>
+    <li><strong>Lockup tối thiểu:</strong> cao 20 px; dưới ngưỡng này dùng mark đơn.</li>
+    <li>Không đặt mark lên nền nhiễu/ảnh mà không có lớp nền pill trơn.</li>
+  </ul>
+
+  <h2 id="color">7 · Thông số màu</h2>
+  <table>
+    <caption style="text-align:left;font-size:13px;color:var(--muted);padding:4px 0">Tương phản tính theo WCAG; chuẩn đồ họa phi văn bản ≥3:1.</caption>
+    <thead><tr><th>Vai trò</th><th>Light</th><th>Dark</th><th>Token đề xuất</th><th>Tương phản</th></tr></thead>
+    <tbody>
+      <tr><td>Tuyến chính + node</td><td><span class="swatch" style="background:#135bec"></span><code>#135bec</code></td><td><span class="swatch" style="background:#4d8dff"></span><code>#4d8dff</code></td><td><code>var(--accent)</code></td><td>5.62:1 trên trắng · ≈5.0:1 trên <code>#212124</code></td></tr>
+      <tr><td>Tuyến phụ (mint) + node</td><td><span class="swatch" style="background:#0d9488"></span><code>#0d9488</code></td><td><span class="swatch" style="background:#2dd4bf"></span><code>#2dd4bf</code></td><td><code>--mint</code> (token mới, đề xuất)</td><td>≈3.75:1 trên trắng · ≈8.6:1 trên <code>#212124</code></td></tr>
+      <tr><td>App-icon tile</td><td colspan="2">gradient <span class="swatch" style="background:#2f6ff2"></span><code>#2f6ff2</code> → <span class="swatch" style="background:#0f4fd6"></span><code>#0f4fd6</code></td><td><code>var(--brand)</code> gốc</td><td>mark trắng ≥4.49:1 · mint nhạt <code>#9fe8dc</code> ≥3.22:1</td></tr>
+      <tr><td>Mono</td><td colspan="2"><code>currentColor</code></td><td><code>var(--accent)</code> / <code>var(--text)</code></td><td>theo ngữ cảnh</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="usage">8 · Quy tắc sử dụng</h2>
+  <ul>
+    <li><span class="ok">✓</span> Dùng đúng crop vuông <code>4 4 40 40</code> cho mọi ngữ cảnh icon vuông (favicon, tile, avatar).</li>
+    <li><span class="ok">✓</span> Trong UI, dẫn màu qua token (<code>var(--accent)</code> + <code>--mint</code>) để mark tự khớp theme.</li>
+    <li><span class="ok">✓</span> Trên nền brand/gradient đậm: dùng bản mark trắng + <code>#9fe8dc</code> như trong app icon.</li>
+    <li>✗ Không đổi tỷ lệ nét/node, không xoay hay lật mark (hướng trái→phải mang nghĩa định tuyến).</li>
+    <li>✗ Không dùng bảng light trên nền tối và ngược lại; không thêm hiệu ứng bóng đổ/viền.</li>
+    <li>✗ Không tự dựng lại wordmark bằng font khác; giữ weight 700, tracking −0.01em.</li>
+  </ul>
+
+  <p class="lead" style="margin-top:40px">File trong bộ: <code>mark-master.svg</code> · <code>mark-dark.svg</code> · <code>mark-mono.svg</code> · <code>favicon.svg</code> · <code>app-icon.svg</code> · <code>lockup-light.svg</code> · <code>lockup-dark.svg</code> · <code>brand-guide.html</code>. Tích hợp vào mã nguồn thuộc wave sau (cần phê duyệt riêng).</p>
+</main>
+</body>
+</html>
