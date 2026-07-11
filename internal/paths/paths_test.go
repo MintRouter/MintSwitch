@@ -21,9 +21,6 @@ func TestResolverJoinAndData(t *testing.T) {
 	if got, want := r.BackupsDir(), filepath.Join(data, "backups"); got != want {
 		t.Errorf("BackupsDir = %q, want %q", got, want)
 	}
-	if got, want := r.MCPBackupsDir(), filepath.Join(data, "backups-mcp"); got != want {
-		t.Errorf("MCPBackupsDir = %q, want %q", got, want)
-	}
 	if got, want := r.SettingsPath(), filepath.Join(data, "settings.json"); got != want {
 		t.Errorf("SettingsPath = %q, want %q", got, want)
 	}
@@ -91,13 +88,10 @@ func TestNewResolverToolEnvOverrides(t *testing.T) {
 	if got := r.ClaudeDir(); got != claudeDir {
 		t.Errorf("ClaudeDir = %q, want %q", got, claudeDir)
 	}
-	if got, want := r.ClaudeJSONPath(), filepath.Join(claudeDir, ".claude.json"); got != want {
-		t.Errorf("ClaudeJSONPath = %q, want %q", got, want)
-	}
 }
 
-// TestCodexAndClaudeDirDefaults proves the defaults (~/.codex, ~/.claude,
-// ~/.claude.json) apply when no env override is set.
+// TestCodexAndClaudeDirDefaults proves the defaults (~/.codex, ~/.claude)
+// apply when no env override is set.
 func TestCodexAndClaudeDirDefaults(t *testing.T) {
 	home := t.TempDir()
 	r := &Resolver{Home: home}
@@ -106,9 +100,6 @@ func TestCodexAndClaudeDirDefaults(t *testing.T) {
 	}
 	if got, want := r.ClaudeDir(), filepath.Join(home, ".claude"); got != want {
 		t.Errorf("ClaudeDir = %q, want %q", got, want)
-	}
-	if got, want := r.ClaudeJSONPath(), filepath.Join(home, ".claude.json"); got != want {
-		t.Errorf("ClaudeJSONPath = %q, want %q", got, want)
 	}
 }
 

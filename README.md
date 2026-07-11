@@ -1,6 +1,6 @@
 # MintSwitch — AI Tool API Config Switcher
 
-Cross-platform desktop app to switch AI coding tools (Claude Code, Codex, OpenCode, Factory Droid, Zed, Kilo Code) to a custom OpenAI-compatible endpoint. One profile, per-tool or global apply, automatic backups, one-click restore. Built with Go + Wails.
+Cross-platform desktop app to switch AI coding tools (Claude Code, Codex, OpenCode, Factory Droid, Zed, Kilo Code) to a custom OpenAI-compatible endpoint. One profile, per-tool or global apply, automatic backups, one-click restore. The profile holds multiple named API keys (you pick each key's provider name): one active key applies to all tools, with optional per-tool key overrides via the Manage dialog. Keys are stored in the OS keychain (settings-file fallback) and their values are never displayed. Built with Go + Wails.
 
 ## Project layout
 
@@ -11,11 +11,12 @@ Cross-platform desktop app to switch AI coding tools (Claude Code, Codex, OpenCo
 ├── build/               # Wails build config, per-OS Taskfiles, Docker, icons
 ├── internal/            # Go backend packages
 │   ├── adapters/        # Per-tool config adapters (claudecode, codex, opencode, droid, zed, kilo)
-│   ├── injectors/       # Per-tool MCP server injectors (claudecode, codex, opencode, droid, kilo)
 │   ├── backup/          # Config backup and restore
 │   ├── core/            # Domain model: profiles, adapter interfaces, registry
 │   ├── installer/       # Tool install detection
+│   ├── markers/         # Sidecar store for per-tool managed markers
 │   ├── paths/           # Home/data directory resolution
+│   ├── secrets/         # API key storage in the OS keychain
 │   ├── settings/        # App settings persistence
 │   └── service/         # Backend service exposed to the frontend via bindings
 └── frontend/            # Svelte + TS + Vite frontend

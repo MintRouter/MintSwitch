@@ -8,7 +8,8 @@ export {
 
 export type {
     InstallResult,
-    ProfileView,
+    ProviderRef,
+    ProviderView,
     ToolOpResult,
     ToolView
 } from "./models.js";

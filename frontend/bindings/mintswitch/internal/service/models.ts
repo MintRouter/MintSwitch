@@ -16,11 +16,25 @@ export interface InstallResult {
 }
 
 /**
- * ProfileView is the non-secret view of the active profile returned to the
- * frontend. It never carries the API key; HasKey reports whether one is stored.
+ * ProviderRef is the minimal non-secret reference to one provider (for
+ * per-tool dropdowns): ID, display name and whether it is the globally
+ * active provider — never any part of the key value, not even masked.
  */
-export interface ProfileView {
-    "label": string;
+export interface ProviderRef {
+    "id": string;
+    "name": string;
+    "active": boolean;
+}
+
+/**
+ * ProviderView is the non-secret view of one managed provider returned to
+ * the frontend. It never carries any API key value; HasKey reports whether
+ * one is stored.
+ */
+export interface ProviderView {
+    "id": string;
+    "name": string;
+    "note": string;
     "base_url": string;
     "models": string[] | null;
 
@@ -32,6 +46,7 @@ export interface ProfileView {
     "model": string;
     "small_fast_model": string;
     "has_key": boolean;
+    "active": boolean;
 }
 
 /**
@@ -74,6 +89,32 @@ export interface ToolView {
      * It is empty when no profile is saved.
      */
     "selected_model": string;
+
+    /**
+     * Providers is the provider list (ID + name + active flag, never key
+     * values), used to populate the per-tool provider dropdown. It is empty
+     * when no provider is configured.
+     */
+    "providers": ProviderRef[] | null;
+
+    /**
+     * SelectedProviderID is the ID of the provider in effect for this tool:
+     * the per-tool override when set and still a member, otherwise the active
+     * provider. It is empty when no provider is configured.
+     */
+    "selected_provider_id": string;
+
+    /**
+     * ProviderName is the display name of the provider in effect for this
+     * tool. It never carries any part of the key value.
+     */
+    "provider_name": string;
+
+    /**
+     * ProviderOverridden is true when the provider in effect comes from a
+     * per-tool override rather than the active provider.
+     */
+    "provider_overridden": boolean;
 
     /**
      * Installable is true when the tool has a whitelisted npm package the

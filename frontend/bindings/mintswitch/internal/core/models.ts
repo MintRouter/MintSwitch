@@ -22,21 +22,36 @@ export interface ApplyResult {
 }
 
 /**
- * Profile is a single OpenAI-compatible endpoint configuration that the user
- * wants to apply to one or more AI coding tools.
+ * Provider is one named OpenAI-compatible endpoint the user manages: an API
+ * key plus the endpoint fields adapters need, under a user-chosen display
+ * name. The application holds a list of Providers and resolves one per tool
+ * into the [Profile] adapters consume.
  * 
- * API keys live in this struct; callers must never write APIKey to logs.
+ * Name and Note are non-secret display text (persisted in the settings file
+ * and shown over bindings); the APIKey value must never be logged or sent to
+ * the frontend, not even masked.
  */
-export interface Profile {
+export interface Provider {
     /**
-     * Label is an optional human-friendly name for the profile.
+     * ID uniquely identifies the provider within the state.
      */
-    "label"?: string;
+    "id": string;
 
     /**
-     * APIKey is the secret bearer token for the endpoint. Required.
+     * Name is the user-chosen display name (e.g. "OpenAI").
      */
-    "api_key": string;
+    "name": string;
+
+    /**
+     * Note is optional free-text shown alongside the name. Never secret.
+     */
+    "note"?: string;
+
+    /**
+     * APIKey is the secret bearer token. Required. Persisted keychain-first;
+     * never logged or returned to the frontend.
+     */
+    "api_key"?: string;
 
     /**
      * BaseURL is the OpenAI-compatible base URL (http or https). Required.
@@ -44,22 +59,20 @@ export interface Profile {
     "base_url": string;
 
     /**
-     * Models is the user's saved set of selectable model identifiers. The
-     * currently selected one is Model, which must be a member when Models is
-     * non-empty. Adapters never read Models; they consume only Model.
+     * Models is the provider's saved set of selectable model identifiers. The
+     * default selection is Model, which must be a member when Models is
+     * non-empty.
      */
     "models"?: string[] | null;
 
     /**
-     * ModelNames optionally maps a member of Models to a human-friendly display
-     * name shown by the UI. Adapters never read it; tool configs always receive
-     * the canonical model identifier. Missing entries fall back to the ID.
+     * ModelNames optionally maps a member of Models to a human-friendly
+     * display name shown by the UI.
      */
     "model_names"?: { [_ in string]?: string } | null;
 
     /**
-     * Model is the currently selected model identifier and the single value
-     * adapters write to tool configs. Required.
+     * Model is the provider's default model identifier. Required.
      */
     "model": string;
 

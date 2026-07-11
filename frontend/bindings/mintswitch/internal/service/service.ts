@@ -19,6 +19,16 @@ import * as core$0 from "../core/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AddProvider validates and persists a new provider, returning its generated
+ * ID. The name, API key value, base URL and default model are required
+ * ([core.Provider.Validate] rules). The first provider added becomes active.
+ * The key value is only persisted (keychain-first), never echoed back.
+ */
+export function AddProvider(p: core$0.Provider): $CancellablePromise<string> {
+    return $Call.ByID(1254497234, p);
+}
+
+/**
  * ApplyAll applies the active profile to every registered tool and returns a
  * per-tool outcome. It validates the saved profile once up front and fails fast
  * (returning an error, no partial results) when no valid profile is saved.
@@ -38,11 +48,15 @@ export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult
 }
 
 /**
- * GetProfile returns the non-secret view of the saved active profile. When no
- * profile is saved it returns a zero ProfileView (HasKey=false) and no error.
+ * FetchProviderModels queries the stored provider's OpenAI-compatible
+ * endpoint (GET {base_url}/models with a Bearer key) and returns the sorted,
+ * de-duplicated model IDs it advertises. It is read-only: it never mutates
+ * settings — the caller decides what to do with the list. Errors are
+ * display-safe: they never include the API key, the Authorization header, or
+ * the endpoint's response body.
  */
-export function GetProfile(): $CancellablePromise<$models.ProfileView> {
-    return $Call.ByID(1851804553);
+export function FetchProviderModels(providerID: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(1566093931, providerID);
 }
 
 /**
@@ -56,13 +70,32 @@ export function Install(toolID: string): $CancellablePromise<$models.InstallResu
 }
 
 /**
+ * ListProviders returns the non-secret views of every managed provider, in
+ * stored order. With no providers configured it returns an empty list and no
+ * error.
+ */
+export function ListProviders(): $CancellablePromise<$models.ProviderView[] | null> {
+    return $Call.ByID(1125464194);
+}
+
+/**
  * ListTools returns one [ToolView] per registered adapter, in registration
- * order. Status is evaluated against the saved active profile (a zero profile
- * when none is saved). A per-tool Status error is surfaced in Detail rather than
- * failing the whole list.
+ * order. Status is evaluated against the per-tool effective provider's
+ * profile (a zero profile when none is configured). A per-tool Status error
+ * is surfaced in Detail rather than failing the whole list.
  */
 export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
     return $Call.ByID(3280393555);
+}
+
+/**
+ * RemoveProvider deletes the provider with the given ID. Removing the active
+ * provider promotes the first remaining one (none when the list empties).
+ * Per-tool overrides pointing at the removed provider are pruned so those
+ * tools fall back to the active provider.
+ */
+export function RemoveProvider(providerID: string): $CancellablePromise<void> {
+    return $Call.ByID(3145073925, providerID);
 }
 
 /**
@@ -84,24 +117,34 @@ export function RestoreOne(toolID: string): $CancellablePromise<core$0.RestoreRe
 }
 
 /**
- * SaveProfile validates and persists p as the active profile. An empty incoming
- * APIKey is treated as "keep the existing key" so the masked UI can submit the
- * form without re-sending the secret; the merged profile is then validated via
- * [core.Profile.Validate] and an invalid profile is rejected with an error.
+ * SetActiveProvider selects the provider with the given ID as the globally
+ * active one, used by every tool without a per-tool override.
  */
-export function SaveProfile(p: core$0.Profile): $CancellablePromise<void> {
-    return $Call.ByID(4257341798, p);
+export function SetActiveProvider(providerID: string): $CancellablePromise<void> {
+    return $Call.ByID(4084510071, providerID);
 }
 
 /**
- * SetToolModel records (or clears) the per-tool model selection for toolID. An
- * empty model deletes the selection so the tool uses the profile default. A
- * non-empty model must be a member of the active profile's Models, otherwise a
- * clear error is returned. The toolID must be a registered tool. The selection
- * is persisted via the settings store.
+ * SetToolModel records (or clears) the per-tool model selection for toolID.
+ * An empty model deletes the selection so the tool uses the effective
+ * provider's default. A non-empty model must be a member of the EFFECTIVE
+ * provider's Models (the tool's provider override when set, else the active
+ * provider), otherwise a clear error is returned. The toolID must be a
+ * registered tool. The selection is persisted via the settings store.
  */
 export function SetToolModel(toolID: string, model: string): $CancellablePromise<void> {
     return $Call.ByID(2858844647, toolID, model);
+}
+
+/**
+ * SetToolProvider records (or clears) the per-tool provider selection for
+ * toolID. An empty providerID deletes the selection so the tool uses the
+ * active provider. A non-empty providerID must reference a managed provider,
+ * otherwise a clear error is returned. The toolID must be a registered tool.
+ * The selection is persisted via the settings store.
+ */
+export function SetToolProvider(toolID: string, providerID: string): $CancellablePromise<void> {
+    return $Call.ByID(4162388903, toolID, providerID);
 }
 
 /**
@@ -124,4 +167,16 @@ export function SweepLegacyMarkers(): $CancellablePromise<void> {
  */
 export function Uninstall(toolID: string): $CancellablePromise<$models.InstallResult> {
     return $Call.ByID(3584833602, toolID);
+}
+
+/**
+ * UpdateProvider validates and persists changes to the provider identified by
+ * p.ID. An empty incoming APIKey means "keep the stored one", so the UI can
+ * submit the form without ever round-tripping a secret. Stale per-tool model
+ * selections that pointed at models this provider no longer offers are pruned
+ * (for tools whose effective provider is this one) so they fall back to the
+ * provider default.
+ */
+export function UpdateProvider(p: core$0.Provider): $CancellablePromise<void> {
+    return $Call.ByID(2461295976, p);
 }

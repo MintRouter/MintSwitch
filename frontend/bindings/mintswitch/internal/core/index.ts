@@ -3,6 +3,6 @@
 
 export type {
     ApplyResult,
-    Profile,
+    Provider,
     RestoreResult
 } from "./models.js";
