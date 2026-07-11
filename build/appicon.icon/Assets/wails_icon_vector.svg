@@ -1,19 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
-  <g transform="translate(24 24) scale(0.8) translate(-24 -24)">
-    <g stroke="#135bec" stroke-width="3" stroke-linecap="round">
-      <line x1="24" y1="24" x2="31.5" y2="11"/>
-      <line x1="24" y1="24" x2="39" y2="24"/>
-      <line x1="24" y1="24" x2="31.5" y2="37"/>
-      <line x1="24" y1="24" x2="16.5" y2="37"/>
-      <line x1="24" y1="24" x2="9" y2="24"/>
-      <line x1="24" y1="24" x2="16.5" y2="11"/>
-    </g>
-    <circle cx="31.5" cy="11" r="3.5" fill="#135bec"/>
-    <circle cx="39" cy="24" r="3.5" fill="#135bec"/>
-    <circle cx="31.5" cy="37" r="3.5" fill="#135bec"/>
-    <circle cx="16.5" cy="37" r="3.5" fill="#135bec"/>
-    <circle cx="9" cy="24" r="3.5" fill="#135bec"/>
-    <circle cx="16.5" cy="11" r="3.5" fill="#135bec"/>
-    <circle cx="24" cy="24" r="5.5" fill="#135bec"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <!-- MintSwitch Route Switch mark (from design/logo-final/app-icon.svg), transparent
+       canvas: the tile gradient comes from the .icon background fill, so this layer
+       must not add its own background. -->
+  <g transform="translate(128 128) scale(16)">
+    <path d="M20 24C27 24 27 36 34 36H38" stroke="#9fe8dc" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M8.5 24H20C27 24 27 12 34 12H38" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
+    <circle cx="8.5" cy="24" r="4" fill="#ffffff"/>
+    <circle cx="38" cy="12" r="4" fill="#ffffff"/>
+    <circle cx="38" cy="36" r="4" fill="#9fe8dc"/>
   </g>
 </svg>

@@ -1,25 +1,14 @@
 {
   "fill" : {
-    "automatic-gradient" : "extended-gray:1.00000,1.00000"
+    "linear-gradient" : [
+      "srgb:0.18431,0.43529,0.94902,1.00000",
+      "srgb:0.05882,0.30980,0.83922,1.00000"
+    ]
   },
   "groups" : [
     {
       "layers" : [
         {
-          "fill-specializations" : [
-            {
-              "appearance" : "dark",
-              "value" : {
-                "solid" : "srgb:0.92143,0.92145,0.92144,1.00000"
-              }
-            },
-            {
-              "appearance" : "tinted",
-              "value" : {
-                "solid" : "srgb:0.83742,0.83744,0.83743,1.00000"
-              }
-            }
-          ],
           "image-name" : "wails_icon_vector.svg",
           "name" : "wails_icon_vector",
           "position" : {

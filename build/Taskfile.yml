@@ -191,23 +191,26 @@ tasks:
       - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
 
   generate:icons:
-    summary: Generates Windows `.ico` and Mac `.icns` from an image; on macOS, `-iconcomposerinput appicon.icon -macassetdir darwin` also produces `Assets.car` from a `.icon` file (skipped on other platforms).
+    summary: Generates Windows `.ico` and Mac `.icns` from `appicon.png`.
     desc: |
-      The committed icon artifacts (darwin/icons.icns, darwin/Assets.car,
-      windows/icon.ico) are canonical: this task is skipped while they exist,
-      so CI ships them as-is instead of regenerating with the runner's
-      toolchain (fresh checkouts have no .task fingerprint cache, which used
-      to force a regeneration that produced a broken icns/Assets.car).
-      To regenerate after changing appicon.png/appicon.icon, delete the three
-      output files and rerun (Assets.car requires macOS).
+      The committed icon artifacts (darwin/icons.icns, windows/icon.ico) are
+      canonical: this task is skipped while they exist, so CI ships them as-is
+      instead of regenerating with the runner's toolchain (fresh checkouts
+      have no .task fingerprint cache, which used to force a regeneration that
+      produced a broken icns).
+      To regenerate after changing appicon.png, delete the two output files
+      and rerun.
+      Assets.car is intentionally not generated or bundled: compiling the
+      appicon.icon source requires macOS 26 + Xcode 26 (actool >= 26), so the
+      app relies on the CFBundleIconFile icns fallback. The appicon.icon
+      source is kept for a follow-up once that toolchain is available.
     run: once
     dir: build
     status:
       - test -f darwin/icons.icns
-      - test -f darwin/Assets.car
       - test -f windows/icon.ico
     cmds:
-      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico -iconcomposerinput appicon.icon -macassetdir darwin
+      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico
 
   dev:frontend:
     summary: Runs the frontend in development mode
