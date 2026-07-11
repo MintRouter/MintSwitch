@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"sync"
 
@@ -34,11 +33,6 @@ import (
 	"mintswitch/internal/adapters/zed"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
-	mcpclaudecode "mintswitch/internal/injectors/claudecode"
-	mcpcodex "mintswitch/internal/injectors/codex"
-	mcpdroid "mintswitch/internal/injectors/droid"
-	mcpkilo "mintswitch/internal/injectors/kilo"
-	mcpopencode "mintswitch/internal/injectors/opencode"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
@@ -52,18 +46,11 @@ type Service struct {
 	store *settings.Store
 	inst  *installer.Installer
 	// mu serializes every operation that mutates state — the settings file
-	// (save profile, per-tool models, MCP toggles/key) and the managed tool
-	// config files (apply/restore/inject) — so concurrent UI calls cannot
-	// interleave their load-modify-save cycles. Read-only methods do not take
-	// it, so long-running mutations never block the UI's status polling.
+	// (save profile, per-tool models) and the managed tool config files
+	// (apply/restore) — so concurrent UI calls cannot interleave their
+	// load-modify-save cycles. Read-only methods do not take it, so
+	// long-running mutations never block the UI's status polling.
 	mu sync.Mutex
-	// mcp holds the registered MCP injectors (separate from the endpoint tool
-	// registry) in registration order.
-	mcp []core.MCPInjector
-	// mcpClient is the HTTP client used by TestMCPConnection. It is nil for the
-	// production constructors (a 10s-timeout client is built on demand); tests
-	// may set it to an httptest client.
-	mcpClient *http.Client
 	// sweepMu guards sweepErrs, which is written by SweepLegacyMarkers (at
 	// construction, or when re-invoked) and read by viewFor, which deliberately
 	// runs without taking mu.
@@ -172,22 +159,6 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
 	store := settings.NewStore(r.SettingsPath())
 	s := NewWithInstaller(reg, store, inst)
-	// Register the MCP injectors. This is a distinct registry from the endpoint
-	// tool adapters above: MCP injection is independent of the active profile.
-	// The injectors get their OWN backup engine (rooted at r.MCPBackupsDir())
-	// so their snapshots never mix with the adapters' — an adapter and an
-	// injector touching the same file each keep their own pristine original.
-	// Zed deliberately has NO injector: its context_servers settings schema is
-	// not yet verified, and Zed forbids writing secrets (the API key) into
-	// settings.json, so there is no safe place to inject the MCP entry.
-	me := backup.NewEngine(r.MCPBackupsDir())
-	s.mcp = []core.MCPInjector{
-		mcpclaudecode.New(r, me),
-		mcpopencode.New(r, me),
-		mcpcodex.New(r, me),
-		mcpdroid.New(r, me),
-		mcpkilo.New(r, me),
-	}
 	s.SweepLegacyMarkers()
 	return s
 }
@@ -502,58 +473,7 @@ func (s *Service) effectiveProfileFor(toolID string) (core.Profile, error) {
 	return p, nil
 }
 
-// contextEngineEnabled reports the persisted Context Engine master toggle,
-// defaulting to false (no MCP work) when the store cannot be read so a settings
-// error never turns a successful Apply into an unexpected MCP mutation.
-func (s *Service) contextEngineEnabled() bool {
-	st, err := s.store.Load()
-	if err != nil {
-		return false
-	}
-	return st.ContextEngineEnabled()
-}
-
-// injectMCPIfEnabled is the best-effort Context Engine step run after a
-// successful Apply. It injects the MintRouter MCP server into toolID only when
-// the master toggle is enabled, the tool has a registered injector, and a key is
-// available. It never returns an error and never aborts Apply: an injection
-// failure is reported as a display-safe note to fold into the Apply message, and
-// an empty string means nothing noteworthy happened (silent no-op or success).
-func (s *Service) injectMCPIfEnabled(toolID string, enabled bool) string {
-	if !enabled {
-		return ""
-	}
-	inj, ok := s.mcpInjector(toolID)
-	if !ok {
-		return ""
-	}
-	spec, hasKey, err := s.mcpSpec()
-	if err != nil || !hasKey {
-		return ""
-	}
-	if _, err := inj.InjectMCP(spec); err != nil {
-		return fmt.Sprintf("Context Engine not injected: %v", err)
-	}
-	return ""
-}
-
-// removeMCPIfCapable is the best-effort Context Engine step run after a
-// successful Restore. It removes the MintRouter MCP server from toolID when the
-// tool has a registered injector (a safe no-op when nothing was injected). It
-// never returns an error and never aborts Restore: a removal failure is reported
-// as a display-safe note to fold into the Restore message.
-func (s *Service) removeMCPIfCapable(toolID string) string {
-	inj, ok := s.mcpInjector(toolID)
-	if !ok {
-		return ""
-	}
-	if _, err := inj.RemoveMCP(); err != nil {
-		return fmt.Sprintf("Context Engine not removed: %v", err)
-	}
-	return ""
-}
-
-// joinMessage folds an optional MCP note onto a base message, separating them
+// joinMessage folds an optional note onto a base message, separating them
 // with a space so both remain readable. Either side may be empty.
 func joinMessage(base, note string) string {
 	switch {
@@ -568,10 +488,7 @@ func joinMessage(base, note string) string {
 
 // ApplyOne applies the active profile to the single tool identified by toolID,
 // honoring the per-tool model selection. It first validates the saved profile
-// and returns an error for an unknown tool or an invalid/missing profile. After
-// a successful Apply it injects the Context Engine MCP server when the master
-// toggle is enabled; an MCP failure never aborts Apply (it is folded into the
-// result message).
+// and returns an error for an unknown tool or an invalid/missing profile.
 func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -583,21 +500,12 @@ func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
-	res, err := a.Apply(p)
-	if err != nil {
-		return res, err
-	}
-	if note := s.injectMCPIfEnabled(toolID, s.contextEngineEnabled()); note != "" {
-		res.Message = joinMessage(res.Message, note)
-	}
-	return res, nil
+	return a.Apply(p)
 }
 
 // RestoreOne restores the single tool identified by toolID to its pre-apply
 // state. It returns an error for an unknown tool; a tool with nothing to restore
-// is a safe no-op handled by the adapter. After a successful Restore it removes
-// the Context Engine MCP server for capable tools; an MCP failure never aborts
-// Restore (it is folded into the result message).
+// is a safe no-op handled by the adapter.
 func (s *Service) RestoreOne(toolID string) (core.RestoreResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -605,14 +513,7 @@ func (s *Service) RestoreOne(toolID string) (core.RestoreResult, error) {
 	if !ok {
 		return core.RestoreResult{}, fmt.Errorf("service: unknown tool %q", toolID)
 	}
-	res, err := a.Restore()
-	if err != nil {
-		return res, err
-	}
-	if note := s.removeMCPIfCapable(toolID); note != "" {
-		res.Message = joinMessage(res.Message, note)
-	}
-	return res, nil
+	return a.Restore()
 }
 
 // ApplyAll applies the active profile to every registered tool and returns a
@@ -625,7 +526,6 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 	if _, err := s.activeProfile(); err != nil {
 		return nil, err
 	}
-	enabled := s.contextEngineEnabled()
 	adapters := s.reg.All()
 	out := make([]ToolOpResult, 0, len(adapters))
 	for _, a := range adapters {
@@ -639,7 +539,7 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 		if aerr != nil {
 			r.Error = aerr.Error()
 		} else {
-			r.Message = joinMessage(res.Message, s.injectMCPIfEnabled(a.ID(), enabled))
+			r.Message = res.Message
 		}
 		out = append(out, r)
 	}
@@ -715,7 +615,7 @@ func (s *Service) RestoreAll() ([]ToolOpResult, error) {
 		if aerr != nil {
 			r.Error = aerr.Error()
 		} else {
-			r.Message = joinMessage(res.Message, s.removeMCPIfCapable(a.ID()))
+			r.Message = res.Message
 		}
 		out = append(out, r)
 	}
