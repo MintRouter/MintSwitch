@@ -137,6 +137,8 @@
     fetchAttempted = false;
     fetchError = "";
     fetchedModels = [];
+    dropdownOpen = false;
+    activeIndex = -1;
     formOpen = true;
     // Edit opens with a stored endpoint + key, so the model list can appear
     // with zero extra clicks.
@@ -150,6 +152,7 @@
     clearTimeout(fetchTimer);
     fetchSeq++;
     fetching = false;
+    closeDropdown();
   }
 
   // ---- Auto-fetch of the endpoint's advertised models ----
@@ -184,6 +187,9 @@
       fetchedModels = ids;
       fetchAttempted = true;
       fetching = false;
+      // Fresh suggestions open the dropdown so the checkbox list is visible
+      // without an extra click.
+      if (ids.length) dropdownOpen = true;
     } catch (e) {
       if (seq !== fetchSeq) return;
       fetchError = errMsg(e);
@@ -192,9 +198,57 @@
     }
   }
 
-  // Fetched IDs not yet selected — the pickable dropdown list under the chips
-  // (already-selected entries are hidden so picking never duplicates).
-  const pickableModels = $derived(fetchedModels.filter((m) => !fModels.includes(m)));
+  // ---- Models combobox (chips-in-field + checkbox dropdown) ----
+  // The dropdown lists every fetched model with a checkbox that mirrors
+  // selection; the inline input live-filters the list and Enter adds a manual
+  // ID when nothing matches. Esc / outside click close it.
+  let dropdownOpen = $state(false);
+  let activeIndex = $state(-1);
+  let comboEl = $state<HTMLDivElement | null>(null);
+
+  const modelQuery = $derived(modelInput.trim().toLowerCase());
+  const filteredModels = $derived(
+    modelQuery ? fetchedModels.filter((m) => m.toLowerCase().includes(modelQuery)) : fetchedModels,
+  );
+
+  function openDropdown(): void {
+    dropdownOpen = true;
+  }
+
+  function closeDropdown(): void {
+    dropdownOpen = false;
+    activeIndex = -1;
+  }
+
+  function toggleModel(m: string): void {
+    if (fModels.includes(m)) removeModel(m);
+    else addModelId(m);
+    modelInputEl?.focus();
+  }
+
+  // Clicking bare space inside the field behaves like clicking the input.
+  function onFieldPointerdown(e: PointerEvent): void {
+    if (e.target !== e.currentTarget) return;
+    e.preventDefault();
+    modelInputEl?.focus();
+    openDropdown();
+  }
+
+  function onModelInput(e: Event): void {
+    dropdownOpen = true;
+    const q = (e.currentTarget as HTMLInputElement).value.trim().toLowerCase();
+    activeIndex = q && fetchedModels.some((m) => m.toLowerCase().includes(q)) ? 0 : -1;
+  }
+
+  // ArrowUp/Down wrap through the visible rows and keep the row in view.
+  function moveActive(delta: number): void {
+    dropdownOpen = true;
+    const n = filteredModels.length;
+    if (n === 0) return;
+    activeIndex = activeIndex < 0 ? (delta > 0 ? 0 : n - 1) : (activeIndex + delta + n) % n;
+    const rowId = `pv-model-opt-${activeIndex}`;
+    requestAnimationFrame(() => document.getElementById(rowId)?.scrollIntoView({ block: "nearest" }));
+  }
 
   // What the UI shows for a model: its optional display name, falling back to
   // the canonical ID.
@@ -220,10 +274,20 @@
   }
 
   function onModelKeydown(e: KeyboardEvent): void {
-    if (e.key === "Enter") {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      addTypedModel();
+      moveActive(e.key === "ArrowDown" ? 1 : -1);
+      return;
     }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (dropdownOpen && activeIndex >= 0 && activeIndex < filteredModels.length) {
+      toggleModel(filteredModels[activeIndex]);
+      modelInput = "";
+      activeIndex = -1;
+      return;
+    }
+    if (modelInput.trim()) addTypedModel();
   }
 
   // Remove a chip (and its display name); if it was the default, fall back to
@@ -278,6 +342,16 @@
     }
   });
 
+  // Close the models dropdown on any pointer press outside the combobox.
+  $effect(() => {
+    if (!dropdownOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (comboEl && !comboEl.contains(e.target as Node)) closeDropdown();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  });
+
   // Esc closes the open dialog view (the form falls back to the provider
   // list); Tab is trapped inside the visible dialog while open.
   function onDialogKeydown(e: KeyboardEvent): void {
@@ -286,7 +360,8 @@
     const dialogEl = inForm ? formDialogEl : manageDialogEl;
     if (e.key === "Escape") {
       e.preventDefault();
-      if (inForm) closeForm();
+      if (inForm && dropdownOpen) closeDropdown();
+      else if (inForm) closeForm();
       else closeManage();
       return;
     }
@@ -468,8 +543,8 @@
               </button>
             {/if}
           </div>
-          {#if fModels.length}
-            <div class="chips" role="group" aria-label="Selected models">
+          <div class="combo" bind:this={comboEl}>
+            <div class="combo-field" role="presentation" onpointerdown={onFieldPointerdown}>
               {#each fModels as m (m)}
                 <span class="chip" class:default={m === fModel}>
                   <button class="chip-label" type="button" aria-pressed={m === fModel}
@@ -482,31 +557,57 @@
                     aria-label={`Remove ${displayName(m)}`} title={`Remove ${displayName(m)}`}>×</button>
                 </span>
               {/each}
+              <input class="combo-input" id="pv-form-model-input" type="text" bind:value={modelInput}
+                bind:this={modelInputEl}
+                placeholder={fModels.length ? "Search or add models" : "Search models or type an ID"}
+                autocomplete="off" spellcheck="false"
+                role="combobox" aria-expanded={dropdownOpen} aria-controls="pv-model-listbox"
+                aria-autocomplete="list"
+                aria-activedescendant={dropdownOpen && activeIndex >= 0 && activeIndex < filteredModels.length
+                  ? `pv-model-opt-${activeIndex}` : undefined}
+                onfocus={openDropdown} oninput={onModelInput} onkeydown={onModelKeydown} />
+              <svg class="combo-search" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5" />
+                <path d="m10.7 10.7 2.8 2.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              </svg>
             </div>
-          {/if}
-          <div class="model-entry">
-            <input class="field-input" id="pv-form-model-input" type="text" bind:value={modelInput}
-              bind:this={modelInputEl}
-              placeholder="Type a model ID and press Enter" autocomplete="off" spellcheck="false"
-              onkeydown={onModelKeydown} />
-            <button class="btn-ghost sm" type="button" onclick={addTypedModel}
-              disabled={!modelInput.trim()}>Add</button>
+            {#if dropdownOpen}
+              <div class="combo-pop" id="pv-model-listbox" role="listbox" aria-label="Available models"
+                aria-multiselectable="true">
+                {#if fetching}
+                  <div class="combo-note" role="status">
+                    <span class="combo-spinner" aria-hidden="true"></span>Fetching models…
+                  </div>
+                {:else if filteredModels.length === 0}
+                  <div class="combo-note">
+                    {modelQuery
+                      ? `No matches — press Enter to add “${modelInput.trim()}”`
+                      : "No models from endpoint — type to add manually"}
+                  </div>
+                {:else}
+                  {#each filteredModels as m, i (m)}
+                    <button class="combo-option" type="button" role="option" id={`pv-model-opt-${i}`}
+                      tabindex="-1" aria-selected={fModels.includes(m)}
+                      class:checked={fModels.includes(m)} class:active={i === activeIndex}
+                      onmousedown={(e) => e.preventDefault()} onclick={() => toggleModel(m)}
+                      title={fModels.includes(m) ? `Remove ${m}` : `Add ${m}`}>
+                      <span class="combo-check" aria-hidden="true">
+                        {#if fModels.includes(m)}
+                          <svg viewBox="0 0 10 8" fill="none">
+                            <path d="M1 4.2 3.8 7 9 1" stroke="currentColor" stroke-width="1.8"
+                              stroke-linecap="round" stroke-linejoin="round" />
+                          </svg>
+                        {/if}
+                      </span>
+                      <span class="combo-id">{m}</span>
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
           </div>
           {#if fetchError}
             <p class="field-hint" role="status">Couldn't fetch models — add manually. ({fetchError})</p>
-          {/if}
-          {#if fetchAttempted && !fetchError && fetchedModels.length === 0}
-            <p class="field-hint">The endpoint didn't advertise any models — add them manually.</p>
-          {/if}
-          {#if pickableModels.length}
-            <div class="fetch-list" role="group" aria-label="Available models">
-              {#each pickableModels as m (m)}
-                <button class="fetch-item" type="button" onclick={() => addModelId(m)}
-                  title={`Add ${m}`}>
-                  <span class="fetch-id">{m}</span>
-                </button>
-              {/each}
-            </div>
           {/if}
           {#if fModels.length && !fModels.includes(fModel)}
             <p class="field-hint">Pick a default model by clicking one of the chips above.</p>
@@ -815,9 +916,51 @@
     line-height: var(--lh-tight);
   }
 
-  /* Selected models as chips: click the label to make it the default (accent
-     fill + "default" tag), click × to remove. */
-  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  /* AionUI-style combobox: selected models live as chips inside one bordered
+     field next to an inline filter input, with a search glyph at the right
+     edge and an attached checkbox dropdown below. */
+  .combo { display: flex; flex-direction: column; min-width: 0; }
+  .combo-field {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-height: 38px;
+    padding: 4px 30px 4px 5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: text;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .combo-field:hover { border-color: var(--border-strong); }
+  .combo-field:focus-within { border-color: var(--accent); box-shadow: var(--focus); }
+  .combo-input {
+    flex: 1 1 7rem;
+    min-width: 5rem;
+    padding: 0.15rem 0.2rem;
+    font-size: 16px; /* matches .field-input (guards against iOS focus-zoom) */
+    line-height: var(--lh);
+    color: var(--text);
+    background: transparent;
+    border: none;
+    outline: none;
+  }
+  .combo-input::placeholder { color: var(--muted); opacity: 0.8; }
+  .combo-search {
+    position: absolute;
+    top: 50%;
+    right: 9px;
+    width: 15px;
+    height: 15px;
+    transform: translateY(-50%);
+    color: var(--muted);
+    pointer-events: none;
+  }
+
+  /* Chips: click the label to make it the default (accent fill + "default"
+     tag), click × to remove. */
   .chip {
     display: inline-flex;
     align-items: stretch;
@@ -876,40 +1019,74 @@
   .chip.default .chip-remove { color: var(--accent-text); }
   .chip.default .chip-remove:hover { color: var(--accent-text); opacity: 0.75; }
 
-  /* Manual model entry: text input with a quiet Add button level with it. */
-  .model-entry { display: flex; gap: var(--s-1); align-items: center; }
-  .model-entry .field-input { flex: 1 1 auto; min-width: 0; }
-  .model-entry .btn-ghost { flex: 0 0 auto; }
-
-  /* Suggestions from the endpoint: a scroll-capped list of advertised model
-     IDs not yet selected — each row is a button that adds it as a chip. */
-  .fetch-list {
+  /* Attached dropdown: a scroll-capped listbox of the endpoint's advertised
+     models — the checkbox mirrors selection, the full row toggles it, and
+     hover/keyboard rows highlight; quiet rows cover the fetching / empty /
+     no-match states. */
+  .combo-pop {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    max-height: 11rem;
+    gap: 1px;
+    margin-top: 4px;
+    max-height: 280px;
     overflow-y: auto;
     padding: 4px;
-    background: var(--surface-2);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
   }
-  .fetch-item {
+  .combo-option {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    padding: 0.28rem 0.4rem;
+    gap: 0.5rem;
+    padding: 0.32rem 0.45rem;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-xs);
     background: transparent;
     text-align: left;
     font-size: var(--fs-sm);
     color: var(--text);
     line-height: var(--lh-tight);
     cursor: pointer;
+    transition: background-color 0.1s ease;
   }
-  .fetch-item:hover { background: var(--surface); }
-  .fetch-item .fetch-id { min-width: 0; overflow-wrap: anywhere; }
+  .combo-option:hover, .combo-option.active { background: var(--surface-2); }
+  .combo-check {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--accent-text);
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+  .combo-option.checked .combo-check { background: var(--accent); border-color: var(--accent); }
+  .combo-check svg { width: 9px; height: 8px; }
+  .combo-id { min-width: 0; overflow-wrap: anywhere; }
+  .combo-note {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.4rem 0.45rem;
+    font-size: var(--fs-sm);
+    color: var(--muted);
+    line-height: var(--lh);
+  }
+  .combo-spinner {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: combo-spin 0.7s linear infinite;
+  }
+  @keyframes combo-spin { to { transform: rotate(360deg); } }
 
   /* Per-tool provider overrides: one compact row per installed tool — tool
      name left, a small select right listing providers by name only. */
