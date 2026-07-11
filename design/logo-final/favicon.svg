@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 4 40 40" role="img" aria-label="MintSwitch">
+  <!-- MintSwitch favicon composition (proposal — does NOT replace frontend/public/favicon.svg).
+       Optical square crop 4 4 40 40: visual center (24,24) compensates the right-heavy fork.
+       Adapts to browser UI theme via prefers-color-scheme (Chromium/Firefox SVG favicons). -->
+  <style>
+    .ra{stroke:#135bec}.na{fill:#135bec}
+    .rb{stroke:#0d9488}.nb{fill:#0d9488}
+    @media (prefers-color-scheme: dark){
+      .ra{stroke:#4d8dff}.na{fill:#4d8dff}
+      .rb{stroke:#2dd4bf}.nb{fill:#2dd4bf}
+    }
+  </style>
+  <g fill="none" stroke-width="4.5" stroke-linecap="round">
+    <path class="rb" d="M20 24C27 24 27 36 34 36H38"/>
+    <path class="ra" d="M8.5 24H20C27 24 27 12 34 12H38"/>
+  </g>
+  <circle class="na" cx="8.5" cy="24" r="4"/>
+  <circle class="na" cx="38" cy="12" r="4"/>
+  <circle class="nb" cx="38" cy="36" r="4"/>
+</svg>

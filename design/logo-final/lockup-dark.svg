@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="204" height="48" viewBox="0 0 204 48" fill="none" role="img" aria-label="MintSwitch">
+  <!-- MintSwitch wordmark lockup — dark backgrounds. Same construction as lockup-light.svg. -->
+  <path d="M20 24C27 24 27 36 34 36H38" stroke="#2dd4bf" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M8.5 24H20C27 24 27 12 34 12H38" stroke="#4d8dff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="8.5" cy="24" r="4" fill="#4d8dff"/>
+  <circle cx="38" cy="12" r="4" fill="#4d8dff"/>
+  <circle cx="38" cy="36" r="4" fill="#2dd4bf"/>
+  <text x="52" y="33" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="25" font-weight="700" letter-spacing="-0.25" fill="#f2f2f4">MintSwitch</text>
+</svg>
