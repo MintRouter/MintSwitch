@@ -8,11 +8,8 @@
     saving: boolean;
     onSave: (p: Profile) => Promise<boolean>;
     onAutoSave: (p: Profile) => Promise<string | null>;
-    mcpEnabled: boolean;
-    hasMcpKey: boolean;
-    onToggleEnabled: (enabled: boolean) => void;
   }
-  let { profile, saving, onSave, onAutoSave, mcpEnabled, hasMcpKey, onToggleEnabled }: Props = $props();
+  let { profile, saving, onSave, onAutoSave }: Props = $props();
 
   let label = $state("");
   let baseUrl = $state("");
@@ -305,25 +302,7 @@
     {/if}
   </div>
 
-  <div class="ce-intro">
-    <span class="micro-label">Context Engine</span>
-    <p class="ce-intro-text">
-      Semantic code search for your AI coding tools, powered by MintRouter.AI's
-      MCP server. Enable the toggle below to inject it when you Apply.
-    </p>
-  </div>
-
   <div class="profile-footer">
-    <label class="mcp-switch" class:is-disabled={!hasMcpKey}
-      title={hasMcpKey ? undefined : "Save your MintRouter API key in the profile first"}>
-      <input class="mcp-switch-input" type="checkbox" role="switch"
-        checked={mcpEnabled} disabled={!hasMcpKey}
-        onchange={(e) => onToggleEnabled(e.currentTarget.checked)} />
-      <span class="mcp-switch-track" aria-hidden="true">
-        <span class="mcp-switch-thumb"></span>
-      </span>
-      <span class="mcp-switch-label">Context Engine</span>
-    </label>
     <button class="btn-primary" type="submit" disabled={saving}>
       {saving ? "Saving…" : "Save"}
     </button>
@@ -410,106 +389,19 @@
     font-weight: var(--fw-medium);
     color: var(--muted);
   }
-  /* The Context Engine toggle and Save action share a footer row. A hairline
-     plus extra top space sets the actions apart from the fields above. The
-     auto top margin anchors the row to the card's bottom (feedback #32) so
-     the stretched card has no dead space mid-card; when content is tall the
-     auto margin collapses to 0 and the row follows the fields as before. */
+  /* The Save action sits in a footer row. A hairline plus extra top space
+     sets the action apart from the fields above. The auto top margin anchors
+     the row to the card's bottom (feedback #32) so the stretched card has no
+     dead space mid-card; when content is tall the auto margin collapses to 0
+     and the row follows the fields as before. */
   .profile-footer {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
     gap: var(--s-1);
     margin-top: auto;
     border-top: 1px solid var(--border);
     padding-top: 10px;
-  }
-
-  /* Master Context Engine ON/OFF switch, shared with the Save row. A native
-     checkbox (role="switch") drives an accent track + sliding thumb; the visible
-     label is the switch's accessible name via the wrapping <label>. */
-  /* Chromeless: just the track + label, structured by the footer hairline. */
-  .mcp-switch {
-    display: inline-flex;
-    align-items: center;
-    min-width: 0;
-    gap: 0.45rem;
-    padding: 0;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    user-select: none;
-  }
-  .mcp-switch.is-disabled { cursor: not-allowed; opacity: 0.6; }
-  /* Visually-hidden but focusable: the ring is drawn on the track instead. */
-  .mcp-switch-input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border: 0;
-  }
-  .mcp-switch-track {
-    position: relative;
-    flex: 0 0 auto;
-    width: 42px;
-    height: 24px;
-    border-radius: 999px;
-    /* Off state: solid muted fill so the control clears 3:1 against the card. */
-    background: var(--muted);
-    transition: background-color 0.15s ease;
-  }
-  .mcp-switch-thumb {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-    transition: transform 0.15s ease;
-  }
-  .mcp-switch-input:checked + .mcp-switch-track { background: var(--accent); }
-  .mcp-switch-input:checked + .mcp-switch-track .mcp-switch-thumb {
-    transform: translateX(18px);
-  }
-  .mcp-switch-input:focus-visible + .mcp-switch-track { box-shadow: var(--focus); }
-  .mcp-switch-input:disabled + .mcp-switch-track { opacity: 0.5; }
-  .mcp-switch-label {
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-semibold);
-    color: var(--text);
-    line-height: var(--lh-tight);
-    white-space: nowrap;
-  }
-  .mcp-switch.is-disabled .mcp-switch-label { color: var(--muted); }
-  @media (prefers-reduced-motion: reduce) {
-    .mcp-switch-track,
-    .mcp-switch-thumb { transition: none; }
-  }
-  /* Context Engine intro (feedback #34): fills the card's former dead zone
-     between the Models row and the anchored footer. A hairline (same separator
-     language as the footer's) sits right under Models/Manage, then a
-     micro-heading + short muted marketing blurb. Small type + roomy leading so
-     it reads as supporting copy, not a field. Copy is capped at ~3 wrapped
-     lines (feedback #36): the saved-key state adds a hint line under API key,
-     and the card must keep ≥8px slack without scrolling. */
-  .ce-intro {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    border-top: 1px solid var(--border);
-    padding-top: 10px;
-  }
-  .ce-intro-text {
-    margin: 0;
-    font-size: 0.8rem;
-    line-height: 1.5;
-    color: var(--muted);
   }
 
   .field-notice { margin: 0; font-size: 0.78rem; color: var(--warn); }

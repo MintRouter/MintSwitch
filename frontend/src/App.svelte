@@ -5,7 +5,6 @@
     ToolView,
     ProfileView,
     InstallResult,
-    MCPState,
   } from "../bindings/mintswitch/internal/service";
   import type { Profile } from "../bindings/mintswitch/internal/core";
   import { errMsg, npmCommand } from "./lib/ui";
@@ -25,7 +24,6 @@
   let saving = $state(false);
   let refreshing = $state(false);
   let busyIds = $state<string[]>([]);
-  let mcpState = $state<MCPState | null>(null);
   let installLog = $state<InstallResult | null>(null);
   let toast = $state<{ msg: string } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout>;
@@ -59,12 +57,6 @@
     !!(profile.base_url && profile.model && profile.has_key),
   );
 
-  // MCP state lives here (App is the single source) so the left panel's master
-  // toggle stays in sync from one GetMCPState() fetch. Per-tool Context Engine
-  // wiring is handled by the backend via Apply/Restore, not in the UI.
-  const mcpEnabled = $derived(!!mcpState?.enabled);
-  const hasMcpKey = $derived(!!mcpState?.has_key);
-
   function flash(msg: string): void {
     toast = { msg };
     clearTimeout(toastTimer);
@@ -74,14 +66,12 @@
   onDestroy(() => clearTimeout(toastTimer));
 
   async function refresh(): Promise<void> {
-    const [t, p, m] = await Promise.all([
+    const [t, p] = await Promise.all([
       Service.ListTools(),
       Service.GetProfile(),
-      Service.GetMCPState(),
     ]);
     tools = t ?? [];
     profile = p ?? emptyProfile;
-    mcpState = m ?? null;
   }
 
   async function load(): Promise<void> {
@@ -188,17 +178,6 @@
       clearTimeout(timer);
       if (!timedOut) busyIds = busyIds.filter((x) => x !== id);
     }
-  }
-
-  // Master Context Engine toggle (left panel). Persists the global flag then
-  // refreshes so the per-card inject controls appear/disappear accordingly.
-  async function toggleMcpEnabled(enabled: boolean): Promise<void> {
-    try {
-      await Service.SetMCPEnabled(enabled);
-    } catch (e) {
-      flash(errMsg(e));
-    }
-    await refresh();
   }
 
   function applyOne(id: string): void {
@@ -370,7 +349,7 @@
   <div class="layout">
     <section class="col-form" aria-label="Profile">
       <div class="col-scroll">
-        <ProfileForm {profile} {saving} onSave={saveProfile} onAutoSave={saveProfileQuiet} {mcpEnabled} {hasMcpKey} onToggleEnabled={toggleMcpEnabled} />
+        <ProfileForm {profile} {saving} onSave={saveProfile} onAutoSave={saveProfileQuiet} />
       </div>
     </section>
 
@@ -455,8 +434,8 @@
     display: flex;
     flex-direction: column;
   }
-  /* Both inspector cards (profile + MCP) scroll together as one region so the
-     shell itself never scrolls; each card sizes to its content. */
+  /* The inspector column scrolls as one region so the shell itself never
+     scrolls; each card sizes to its content. */
   .col-scroll {
     flex: 1 1 auto;
     min-height: 0;
