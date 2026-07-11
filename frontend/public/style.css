@@ -51,6 +51,7 @@
     --brand: #2f6ff2;          /* slightly brighter blue for identity moments */
     --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--surface));
     --accent-soft-text: #0f4fd6; /* 5.65:1 on --accent-soft (AA) */
+    --logo-alt: #0d9488;       /* Route Switch alternate branch (mint teal) */
 
     --border: rgba(22, 24, 31, 0.10);      /* cool hairline */
     --border-strong: rgba(22, 24, 31, 0.16);
@@ -87,6 +88,7 @@
     --brand: #7ab3ff;          /* luminous blue for identity moments */
     --accent-soft: color-mix(in srgb, var(--accent) 14%, var(--surface));
     --accent-soft-text: #82b4ff; /* 6.24:1 on --accent-soft (AA) */
+    --logo-alt: #2dd4bf;       /* Route Switch alternate branch (mint teal, dark) */
 
     --border: rgba(240, 240, 245, 0.10);
     --border-strong: rgba(240, 240, 245, 0.18);

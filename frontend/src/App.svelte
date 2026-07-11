@@ -283,30 +283,17 @@
          .topbar-brand-col rules below. -->
     <div class="topbar-brand-col">
       <div class="topbar-brand">
-        <!-- viewBox cropped to the hub mark's ink bounds (feedback #39): the old
-             0 0 48 48 box carried ~5px of transparent padding per side, so the
-             visual logo ↔ wordmark whitespace read ~13px despite the 7px flex
-             gap. The 9 9 30 30 crop keeps the mark's rendered size (~16px ink)
-             while making the 7px gap real. -->
-        <svg class="logo-mark" viewBox="9 9 30 30" width="16" height="16" fill="none" aria-hidden="true" focusable="false">
-          <rect width="48" height="48" rx="10" fill="var(--surface)" />
-          <g transform="translate(24 24) scale(0.8) translate(-24 -24)">
-            <g stroke="var(--accent)" stroke-width="3" stroke-linecap="round">
-              <line x1="24" y1="24" x2="31.5" y2="11" />
-              <line x1="24" y1="24" x2="39" y2="24" />
-              <line x1="24" y1="24" x2="31.5" y2="37" />
-              <line x1="24" y1="24" x2="16.5" y2="37" />
-              <line x1="24" y1="24" x2="9" y2="24" />
-              <line x1="24" y1="24" x2="16.5" y2="11" />
-            </g>
-            <circle cx="31.5" cy="11" r="3.5" fill="var(--accent)" />
-            <circle cx="39" cy="24" r="3.5" fill="var(--accent)" />
-            <circle cx="31.5" cy="37" r="3.5" fill="var(--accent)" />
-            <circle cx="16.5" cy="37" r="3.5" fill="var(--accent)" />
-            <circle cx="9" cy="24" r="3.5" fill="var(--accent)" />
-            <circle cx="16.5" cy="11" r="3.5" fill="var(--accent)" />
-            <circle cx="24" cy="24" r="5.5" fill="var(--accent)" />
-          </g>
+        <!-- Route Switch mark (design/logo-final/mark-master.svg geometry):
+             optical square crop 4 4 40 40 keeps the mark's ink filling the
+             16px box, so the 7px flex gap stays the real visual whitespace
+             (feedback #39). Active route/nodes use --accent (brand blue per
+             theme); the alternate branch uses --logo-alt (mint teal). -->
+        <svg class="logo-mark" viewBox="4 4 40 40" width="16" height="16" fill="none" aria-hidden="true" focusable="false">
+          <path d="M20 24C27 24 27 36 34 36H38" stroke="var(--logo-alt)" stroke-width="4.5" stroke-linecap="round" />
+          <path d="M8.5 24H20C27 24 27 12 34 12H38" stroke="var(--accent)" stroke-width="4.5" stroke-linecap="round" />
+          <circle cx="8.5" cy="24" r="4" fill="var(--accent)" />
+          <circle cx="38" cy="12" r="4" fill="var(--accent)" />
+          <circle cx="38" cy="36" r="4" fill="var(--logo-alt)" />
         </svg>
         <span class="wordmark">MintSwitch</span>
       </div>
