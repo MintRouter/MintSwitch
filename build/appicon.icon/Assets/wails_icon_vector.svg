@@ -1,8 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
   <!-- MintSwitch Route Switch mark (from design/logo-final/app-icon.svg), transparent
-       canvas: the tile gradient comes from the .icon background fill, so this layer
-       must not add its own background. -->
-  <g transform="translate(128 128) scale(16)">
+       canvas: the tile gradient comes from the .icon background fill and macOS applies
+       its own squircle mask over the full canvas, so this layer must not add its own
+       background or bake in the squircle/inset. Mark scaled so ink width ≈64% of the
+       tile (matches the icns composition: 562.5/880), with the 0.75-unit optical
+       left shift. -->
+  <g transform="translate(93.2 93.2) scale(17.45)">
     <path d="M20 24C27 24 27 36 34 36H38" stroke="#9fe8dc" stroke-width="4.5" stroke-linecap="round"/>
     <path d="M8.5 24H20C27 24 27 12 34 12H38" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
     <circle cx="8.5" cy="24" r="4" fill="#ffffff"/>
