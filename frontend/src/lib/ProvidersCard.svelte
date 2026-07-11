@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { Service } from "../../bindings/mintswitch/internal/service";
   import type { ProviderView, ToolView } from "../../bindings/mintswitch/internal/service";
   import type { Provider } from "../../bindings/mintswitch/internal/core";
-  import { isHttpUrl, normalizeBaseUrl } from "./ui";
+  import { errMsg, isHttpUrl, normalizeBaseUrl } from "./ui";
 
   interface Props {
     providers: ProviderView[];
@@ -66,6 +67,7 @@
   function openManage(): void {
     dialogError = "";
     toolProviderError = "";
+    autoFetchNotice = "";
     manageOpen = true;
   }
 
@@ -90,12 +92,15 @@
   async function addProvider(): Promise<void> {
     if (!canAdd || saving) return;
     dialogError = "";
+    autoFetchNotice = "";
+    const addedName = newName.trim();
+    const addedBase = newBase.url;
     const err = await onAdd({
       id: "",
-      name: newName.trim(),
+      name: addedName,
       note: newNote.trim(),
       api_key: newKey,
-      base_url: newBase.url,
+      base_url: addedBase,
       models: [],
       model_names: {},
       model: newModel.trim(),
@@ -111,6 +116,7 @@
     newModel = "";
     newNote = "";
     addNameEl?.focus();
+    void autoFetchFor(addedName, addedBase);
   }
 
   function onAddKeydown(e: KeyboardEvent): void {
@@ -198,6 +204,19 @@
   let newModelName = $state("");
   let modelsError = $state("");
 
+  // ---- Fetch models from the provider's endpoint ----
+  // Read-only fetch of GET {base_url}/models via the backend; results feed a
+  // checkbox picker for bulk-add. Errors are display-safe and never blocking:
+  // the manual add-model input keeps working regardless.
+  let fetching = $state(false);
+  let fetchAttempted = $state(false);
+  let fetchError = $state("");
+  let fetchedModels = $state<string[]>([]);
+  let fetchedSelected = $state<Record<string, boolean>>({});
+  // Gentle notice on the provider list for the auto-fetch that runs right
+  // after a provider is added (progress, or its non-blocking failure).
+  let autoFetchNotice = $state("");
+
   const modelsProvider = $derived(providers.find((p) => p.id === modelsProviderId) ?? null);
   // A provider always needs one model (the backend refuses an empty list), so
   // the last entry can't be removed.
@@ -215,6 +234,11 @@
     newModelId = "";
     newModelName = "";
     modelsError = "";
+    fetching = false;
+    fetchAttempted = false;
+    fetchError = "";
+    fetchedModels = [];
+    fetchedSelected = {};
   }
 
   function closeModels(): void {
@@ -288,6 +312,67 @@
     if (mModel === m) return;
     mModel = m;
     void persistModels();
+  }
+
+  // Fetch (or refetch) the model IDs the provider's endpoint advertises. The
+  // result replaces the previous picker; already-added models render marked
+  // and disabled so bulk-add can never duplicate.
+  async function fetchModels(): Promise<void> {
+    const p = modelsProvider;
+    if (!p || fetching) return;
+    fetching = true;
+    fetchError = "";
+    try {
+      fetchedModels = (await Service.FetchProviderModels(p.id)) ?? [];
+      fetchedSelected = {};
+      fetchAttempted = true;
+    } catch (e) {
+      fetchError = errMsg(e);
+    } finally {
+      fetching = false;
+    }
+  }
+
+  const selectedFetchCount = $derived(
+    fetchedModels.filter((m) => fetchedSelected[m] && !mModels.includes(m)).length,
+  );
+
+  // Bulk-add the checked fetched models (dedupe against the existing list);
+  // the first model ever added becomes the default, same as manual add.
+  function addSelectedModels(): void {
+    const picked = fetchedModels.filter((m) => fetchedSelected[m] && !mModels.includes(m));
+    if (picked.length === 0) return;
+    mModels = [...mModels, ...picked];
+    if (!mModel) mModel = mModels[0];
+    fetchedSelected = {};
+    void persistModels();
+  }
+
+  // Auto-fetch right after a provider is added: locate the new provider in
+  // the refreshed list (by name, preferring an exact base URL match), then on
+  // success open its Models dialog pre-populated with the fetched picker. Any
+  // failure degrades to a gentle notice — the manual flow stays untouched.
+  async function autoFetchFor(name: string, base: string): Promise<void> {
+    const byName = providers.filter((x) => x.name === name);
+    const added = byName.filter((x) => x.base_url === base).pop() ?? byName.pop();
+    if (!added) return;
+    autoFetchNotice = `Checking ${added.name} for available models…`;
+    let ids: string[];
+    try {
+      ids = (await Service.FetchProviderModels(added.id)) ?? [];
+    } catch {
+      autoFetchNotice = `Couldn't fetch models from ${added.name} — you can add them manually via Models.`;
+      return;
+    }
+    autoFetchNotice = "";
+    if (!manageOpen || modelsProviderId) return;
+    if (ids.length === 0) {
+      autoFetchNotice = `${added.name} didn't advertise any models — you can add them manually via Models.`;
+      return;
+    }
+    openModels(providers.find((x) => x.id === added.id) ?? added);
+    fetchedModels = ids;
+    fetchAttempted = true;
   }
 
   // Focus the first input whenever a dialog (or dialog view) opens; runs
@@ -414,6 +499,9 @@
             <button class="btn-primary sm" type="button" onclick={() => void addProvider()}
               disabled={!canAdd || saving}>Add provider</button>
           </div>
+          {#if autoFetchNotice}
+            <p class="field-hint" role="status">{autoFetchNotice}</p>
+          {/if}
         </div>
 
         {#if providers.length}
@@ -550,6 +638,49 @@
             <button class="btn-primary sm" type="button" onclick={addModel}
               disabled={!newModelId.trim() || saving}>Add</button>
           </div>
+        </div>
+        <div class="field">
+          <div class="fetch-head">
+            <span class="micro-label">From the endpoint</span>
+            <button class="btn-ghost sm" type="button" onclick={() => void fetchModels()}
+              disabled={fetching || saving} aria-busy={fetching}
+              title="List the models the provider's /models endpoint advertises">
+              {fetching ? "Fetching…" : fetchAttempted || fetchError ? "Refetch models" : "Fetch models"}
+            </button>
+          </div>
+          {#if fetchError}
+            <p class="field-notice" role="alert">
+              Couldn't fetch models: {fetchError} — you can still add models manually above.
+            </p>
+          {/if}
+          {#if fetchAttempted && !fetchError}
+            {#if fetchedModels.length === 0}
+              <p class="field-hint">The endpoint didn't advertise any models.</p>
+            {:else}
+              <div class="fetch-list" role="group" aria-label="Fetched models">
+                {#each fetchedModels as m (m)}
+                  {#if mModels.includes(m)}
+                    <label class="fetch-item added">
+                      <input type="checkbox" checked disabled />
+                      <span class="fetch-id">{m}</span>
+                      <span class="badge tone-success">Added</span>
+                    </label>
+                  {:else}
+                    <label class="fetch-item">
+                      <input type="checkbox" bind:checked={fetchedSelected[m]} />
+                      <span class="fetch-id">{m}</span>
+                    </label>
+                  {/if}
+                {/each}
+              </div>
+              <div class="add-actions">
+                <button class="btn-primary sm" type="button" onclick={addSelectedModels}
+                  disabled={selectedFetchCount === 0 || saving}>
+                  Add selected{selectedFetchCount > 0 ? ` (${selectedFetchCount})` : ""}
+                </button>
+              </div>
+            {/if}
+          {/if}
         </div>
         {#if mModels.length}
           <div class="seg-group" role="group" aria-label="Default model">
@@ -844,6 +975,54 @@
     padding-top: 0.6rem;
     margin: 0 0 0;
   }
+
+  /* Fetch-from-endpoint block: quiet header row (label + ghost fetch button),
+     then a scroll-capped checkbox list of the advertised model IDs; rows for
+     already-added models are muted with an "Added" badge and can't be
+     re-checked, so bulk-add never duplicates. */
+  .fetch-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .fetch-head .btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--accent-soft-text);
+  }
+  .fetch-head .btn-ghost:hover:not(:disabled) {
+    background: var(--accent-soft);
+    border-color: transparent;
+  }
+  .fetch-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 14rem;
+    overflow-y: auto;
+    padding: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .fetch-item {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.28rem 0.4rem;
+    border-radius: 6px;
+    font-size: var(--fs-sm);
+    color: var(--text);
+    line-height: var(--lh-tight);
+    cursor: pointer;
+  }
+  .fetch-item:hover { background: var(--surface); }
+  .fetch-item.added { color: var(--muted); cursor: default; }
+  .fetch-item.added:hover { background: transparent; }
+  .fetch-item input { flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
+  .fetch-item .fetch-id { min-width: 0; overflow-wrap: anywhere; }
+  .fetch-item .badge { flex: 0 0 auto; margin-left: auto; }
 
   /* Models add row: Model ID + optional Display name side by side with the Add
      button pinned level to the input boxes. */
