@@ -22,27 +22,6 @@ export interface ApplyResult {
 }
 
 /**
- * MCPResult summarizes the outcome of an inject/remove operation. It mirrors
- * [ApplyResult] and carries only display-safe fields (never a secret).
- */
-export interface MCPResult {
-    /**
-     * ChangedPath is the tool config file that was written.
-     */
-    "changed_path"?: string;
-
-    /**
-     * BackupPath is the backup created/used, if any.
-     */
-    "backup_path"?: string;
-
-    /**
-     * Message is a human-readable summary, safe to display (no secrets).
-     */
-    "message"?: string;
-}
-
-/**
  * Profile is a single OpenAI-compatible endpoint configuration that the user
  * wants to apply to one or more AI coding tools.
  * 

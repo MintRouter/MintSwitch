@@ -3,7 +3,6 @@
 
 export type {
     ApplyResult,
-    MCPResult,
     Profile,
     RestoreResult
 } from "./models.js";

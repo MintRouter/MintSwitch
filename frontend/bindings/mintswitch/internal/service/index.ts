@@ -8,9 +8,6 @@ export {
 
 export type {
     InstallResult,
-    MCPState,
-    MCPTestResult,
-    MCPToolView,
     ProfileView,
     ToolOpResult,
     ToolView

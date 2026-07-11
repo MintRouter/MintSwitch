@@ -860,6 +860,319 @@ func TestSaveProfilePrunesToolModels(t *testing.T) {
 	}
 }
 
+// multiKeyProfile is a valid profile carrying a managed key list for
+// multi-key tests. The first entry is active.
+func multiKeyProfile() core.Profile {
+	p := validProfile()
+	p.APIKey = ""
+	p.APIKeys = []core.APIKeyEntry{
+		{ID: "k1", Provider: "OpenAI", Key: "sk-one"},
+		{ID: "k2", Provider: "MintRouter", Key: "sk-two"},
+	}
+	p.ActiveKeyID = "k1"
+	return p
+}
+
+// TestSaveProfileMultiKeyAndViewsHideValues: a multi-key profile saves, the
+// effective APIKey mirrors the active entry, and neither ProfileView nor
+// ToolView ever carries a key value — only provider names + active flag.
+func TestSaveProfileMultiKeyAndViewsHideValues(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if !view.HasKey || len(view.Keys) != 2 {
+		t.Fatalf("Keys view wrong: %+v", view)
+	}
+	if view.Keys[0].Provider != "OpenAI" || !view.Keys[0].Active ||
+		view.Keys[1].Provider != "MintRouter" || view.Keys[1].Active {
+		t.Fatalf("provider/active mapping wrong: %+v", view.Keys)
+	}
+
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	tv := views[0]
+	if len(tv.Keys) != 2 || tv.SelectedKeyID != "k1" || tv.KeyProvider != "OpenAI" || tv.KeyOverridden {
+		t.Fatalf("tool key fields wrong: %+v", tv)
+	}
+
+	// The applied profile carries the active entry's value.
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-one" {
+		t.Fatalf("effective key not applied: %+v", a.lastApplied)
+	}
+}
+
+// TestSaveProfileKeepsStoredKeyValues: re-submitting the key list with empty
+// Key values (the UI never round-trips secrets) keeps every stored value, and
+// a legacy submission without APIKeys keeps the whole managed list.
+func TestSaveProfileKeepsStoredKeyValues(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+
+	// UI resubmits the list without values, switching the active key.
+	update := multiKeyProfile()
+	for i := range update.APIKeys {
+		update.APIKeys[i].Key = ""
+	}
+	update.ActiveKeyID = "k2"
+	if err := svc.SaveProfile(update); err != nil {
+		t.Fatalf("update save: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-two" {
+		t.Fatalf("stored value not preserved on empty resubmit: %+v", a.lastApplied)
+	}
+
+	// Legacy submission (no APIKeys, empty APIKey) keeps the managed list.
+	legacy := validProfile()
+	legacy.APIKey = ""
+	legacy.Model = "gpt-new"
+	if err := svc.SaveProfile(legacy); err != nil {
+		t.Fatalf("legacy save: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if len(view.Keys) != 2 || view.Model != "gpt-new" {
+		t.Fatalf("legacy save dropped keys or model: %+v", view)
+	}
+}
+
+// TestSaveProfileGeneratesKeyIDs: entries submitted without an ID (newly added
+// in the UI) get unique generated IDs.
+func TestSaveProfileGeneratesKeyIDs(t *testing.T) {
+	svc := newTestService(t)
+	p := multiKeyProfile()
+	p.APIKeys = append(p.APIKeys, core.APIKeyEntry{Provider: "New", Key: "sk-three"})
+	if err := svc.SaveProfile(p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if len(view.Keys) != 3 {
+		t.Fatalf("Keys = %+v, want 3 entries", view.Keys)
+	}
+	seen := map[string]bool{}
+	for _, k := range view.Keys {
+		if k.ID == "" || seen[k.ID] {
+			t.Fatalf("missing or duplicate generated ID: %+v", view.Keys)
+		}
+		seen[k.ID] = true
+	}
+}
+
+// TestV1ProfileMigratesToDefaultKey: a v1 single-key on-disk profile surfaces
+// as one active entry labeled "Default" with zero user action, and still
+// applies.
+func TestV1ProfileMigratesToDefaultKey(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	st := &settings.State{ActiveProfile: &core.Profile{
+		APIKey: "sk-v1", BaseURL: "https://api.example.com/v1", Model: "m",
+	}}
+	if err := storeFrom(svc).Save(st); err != nil {
+		t.Fatalf("seed save: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if len(view.Keys) != 1 || view.Keys[0].ID != core.DefaultKeyID ||
+		view.Keys[0].Provider != "Default" || !view.Keys[0].Active {
+		t.Fatalf("v1 migration view wrong: %+v", view.Keys)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-v1" {
+		t.Fatalf("v1 key not applied: %+v", a.lastApplied)
+	}
+}
+
+// TestSetToolKeyPersistsAndValidates: a member key persists, a non-member is
+// rejected, "" clears the entry, and an unknown tool errors.
+func TestSetToolKeyPersistsAndValidates(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	if err := svc.SetToolKey("alpha", "k2"); err != nil {
+		t.Fatalf("SetToolKey member: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "k2" {
+		t.Fatalf("ToolKeys = %v, want alpha=k2", st.ToolKeys)
+	}
+
+	if err := svc.SetToolKey("alpha", "nope"); err == nil {
+		t.Fatal("SetToolKey non-member want error")
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "k2" {
+		t.Fatalf("rejected key mutated state: %v", st.ToolKeys)
+	}
+
+	if err := svc.SetToolKey("alpha", ""); err != nil {
+		t.Fatalf("SetToolKey clear: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "" {
+		t.Fatalf("clear did not delete entry: %v", st.ToolKeys)
+	}
+
+	if err := svc.SetToolKey("missing", "k2"); err == nil {
+		t.Fatal("SetToolKey unknown tool want error")
+	}
+}
+
+// TestApplyOneUsesPerToolKey: ApplyOne writes the per-tool key when one is
+// selected, falls back to the active key otherwise, and ListTools surfaces
+// the override.
+func TestApplyOneUsesPerToolKey(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne default: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-one" {
+		t.Fatalf("default apply key = %+v, want sk-one", a.lastApplied)
+	}
+
+	if err := svc.SetToolKey("alpha", "k2"); err != nil {
+		t.Fatalf("SetToolKey: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne override: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-two" {
+		t.Fatalf("override apply key = %+v, want sk-two", a.lastApplied)
+	}
+
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	tv := views[0]
+	if tv.SelectedKeyID != "k2" || tv.KeyProvider != "MintRouter" || !tv.KeyOverridden {
+		t.Fatalf("override not surfaced: %+v", tv)
+	}
+}
+
+// TestSaveProfilePrunesToolKeys: removing a key entry from the saved profile
+// drops per-tool selections that point at it, while valid ones are kept.
+func TestSaveProfilePrunesToolKeys(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	b := &fakeAdapter{id: "beta", name: "Beta"}
+	svc := newTestService(t, a, b)
+	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := svc.SetToolKey("alpha", "k1"); err != nil {
+		t.Fatalf("SetToolKey alpha: %v", err)
+	}
+	if err := svc.SetToolKey("beta", "k2"); err != nil {
+		t.Fatalf("SetToolKey beta: %v", err)
+	}
+
+	// Re-save without k2; beta's selection must be pruned.
+	shrunk := multiKeyProfile()
+	shrunk.APIKeys = shrunk.APIKeys[:1]
+	if err := svc.SaveProfile(shrunk); err != nil {
+		t.Fatalf("SaveProfile shrink: %v", err)
+	}
+	st, err := storeFrom(svc).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if st.ToolKeys["alpha"] != "k1" {
+		t.Fatalf("alpha selection should survive: %v", st.ToolKeys)
+	}
+	if _, ok := st.ToolKeys["beta"]; ok {
+		t.Fatalf("beta selection should be pruned: %v", st.ToolKeys)
+	}
+}
+
+// TestAddRemoveSetActiveAPIKey exercises the key-management methods: add
+// returns a fresh ID, set-active mirrors into the effective key, removing the
+// active key promotes another entry (and prunes tool overrides), and removing
+// the last key is rejected.
+func TestAddRemoveSetActiveAPIKey(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	if err := svc.SaveProfile(validProfile()); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	id, err := svc.AddAPIKey("MintRouter", "sk-new")
+	if err != nil || id == "" {
+		t.Fatalf("AddAPIKey = %q, %v", id, err)
+	}
+	if _, err := svc.AddAPIKey("", "sk-x"); err == nil {
+		t.Fatal("AddAPIKey without provider want error")
+	}
+	if _, err := svc.AddAPIKey("X", ""); err == nil {
+		t.Fatal("AddAPIKey without key want error")
+	}
+
+	if err := svc.SetActiveAPIKey(id); err != nil {
+		t.Fatalf("SetActiveAPIKey: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-new" {
+		t.Fatalf("active key not applied: %+v", a.lastApplied)
+	}
+	if err := svc.SetActiveAPIKey("nope"); err == nil {
+		t.Fatal("SetActiveAPIKey unknown ID want error")
+	}
+
+	if err := svc.SetToolKey("alpha", id); err != nil {
+		t.Fatalf("SetToolKey: %v", err)
+	}
+	if err := svc.RemoveAPIKey(id); err != nil {
+		t.Fatalf("RemoveAPIKey: %v", err)
+	}
+	view, err := svc.GetProfile()
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if len(view.Keys) != 1 || !view.Keys[0].Active {
+		t.Fatalf("remaining key must be active: %+v", view.Keys)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "" {
+		t.Fatalf("tool override on removed key must be pruned: %v", st.ToolKeys)
+	}
+	if err := svc.RemoveAPIKey(view.Keys[0].ID); err == nil {
+		t.Fatal("RemoveAPIKey last key want error")
+	}
+	if err := svc.RemoveAPIKey("nope"); err == nil {
+		t.Fatal("RemoveAPIKey unknown ID want error")
+	}
+}
+
 // reg builds a registry from adapters for ad-hoc service construction in tests.
 func reg(adapters ...*fakeAdapter) *core.Registry {
 	r := core.NewRegistry()

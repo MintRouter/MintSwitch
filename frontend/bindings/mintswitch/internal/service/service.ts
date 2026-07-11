@@ -31,24 +31,10 @@ export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[] | null> {
 /**
  * ApplyOne applies the active profile to the single tool identified by toolID,
  * honoring the per-tool model selection. It first validates the saved profile
- * and returns an error for an unknown tool or an invalid/missing profile. After
- * a successful Apply it injects the Context Engine MCP server when the master
- * toggle is enabled; an MCP failure never aborts Apply (it is folded into the
- * result message).
+ * and returns an error for an unknown tool or an invalid/missing profile.
  */
 export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult> {
     return $Call.ByID(1465759944, toolID);
-}
-
-/**
- * GetMCPState returns the redacted MCP state: whether a key is available, whether
- * the Context Engine master toggle is enabled, the endpoint that would be
- * injected, and each injector's current status. HasKey reflects the active
- * profile's APIKey (the primary source), falling back to the legacy settings
- * MCPKey. It never returns the raw key.
- */
-export function GetMCPState(): $CancellablePromise<$models.MCPState> {
-    return $Call.ByID(2725053381);
 }
 
 /**
@@ -57,14 +43,6 @@ export function GetMCPState(): $CancellablePromise<$models.MCPState> {
  */
 export function GetProfile(): $CancellablePromise<$models.ProfileView> {
     return $Call.ByID(1851804553);
-}
-
-/**
- * InjectMCPOne injects the MintRouter MCP server into the single tool identified
- * by toolID. It fails when no key is saved or the tool is unknown.
- */
-export function InjectMCPOne(toolID: string): $CancellablePromise<core$0.MCPResult> {
-    return $Call.ByID(575156053, toolID);
 }
 
 /**
@@ -88,14 +66,6 @@ export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
 }
 
 /**
- * RemoveMCPOne removes the MintRouter MCP server from the single tool identified
- * by toolID. It is a safe no-op when nothing was injected.
- */
-export function RemoveMCPOne(toolID: string): $CancellablePromise<core$0.MCPResult> {
-    return $Call.ByID(2841344080, toolID);
-}
-
-/**
  * RestoreAll restores every registered tool to its pre-apply state and returns a
  * per-tool outcome. It needs no profile; individual adapter failures are
  * captured per tool and do not abort the run.
@@ -107,9 +77,7 @@ export function RestoreAll(): $CancellablePromise<$models.ToolOpResult[] | null>
 /**
  * RestoreOne restores the single tool identified by toolID to its pre-apply
  * state. It returns an error for an unknown tool; a tool with nothing to restore
- * is a safe no-op handled by the adapter. After a successful Restore it removes
- * the Context Engine MCP server for capable tools; an MCP failure never aborts
- * Restore (it is folded into the result message).
+ * is a safe no-op handled by the adapter.
  */
 export function RestoreOne(toolID: string): $CancellablePromise<core$0.RestoreResult> {
     return $Call.ByID(2514822234, toolID);
@@ -123,28 +91,6 @@ export function RestoreOne(toolID: string): $CancellablePromise<core$0.RestoreRe
  */
 export function SaveProfile(p: core$0.Profile): $CancellablePromise<void> {
     return $Call.ByID(4257341798, p);
-}
-
-/**
- * SetMCPEnabled persists the Context Engine master toggle. It loads the store,
- * updates only the toggle (never the key or endpoint), and saves. The inverse is
- * stored so the feature defaults to enabled when unset (see settings.State).
- */
-export function SetMCPEnabled(enabled: boolean): $CancellablePromise<void> {
-    return $Call.ByID(2140142229, enabled);
-}
-
-/**
- * SetMCPKey persists the legacy MintRouter API key used for MCP injection. The
- * key is trimmed; an empty value clears the stored key. The key is never logged.
- * 
- * This is now a legacy/fallback path: the active profile's APIKey is the primary
- * source of the MintRouter key (see [Service.mcpSpec]) and the UI no longer calls
- * this method. It remains exported for binding stability and to keep existing
- * setups that saved a standalone key working.
- */
-export function SetMCPKey(key: string): $CancellablePromise<void> {
-    return $Call.ByID(106943507, key);
 }
 
 /**
@@ -162,19 +108,11 @@ export function SetToolModel(toolID: string, model: string): $CancellablePromise
  * SweepLegacyMarkers strips the legacy in-file "mintswitchManaged" key from
  * every registered adapter that implements [core.LegacyMarkerStripper]
  * (migrating the marker into the sidecar store). It is best-effort: a failure
- * on one tool is logged and never blocks the others or app startup.
+ * on one tool is logged, recorded per tool so ListTools surfaces it in that
+ * tool's Detail, and never blocks the others or app startup.
  */
 export function SweepLegacyMarkers(): $CancellablePromise<void> {
     return $Call.ByID(4002993474);
-}
-
-/**
- * TestMCPConnection probes the MintRouter MCP endpoint with the saved key via a
- * JSON-RPC initialize request and maps the HTTP status to a user-facing meaning.
- * The key/Authorization header are never logged or included in the result.
- */
-export function TestMCPConnection(): $CancellablePromise<$models.MCPTestResult> {
-    return $Call.ByID(2075638960);
 }
 
 /**

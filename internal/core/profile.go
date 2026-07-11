@@ -58,6 +58,26 @@ func isLocalOrPrivateHost(host string) bool {
 	return false
 }
 
+// DefaultKeyID is the APIKeyEntry ID assigned when a legacy single-key
+// profile is upgraded to the multi-key shape (one active entry named
+// "Default").
+const DefaultKeyID = "default"
+
+// APIKeyEntry is one named API key in a profile's managed key list. The
+// Provider name is the only part of an entry that may ever be shown to the
+// user or sent over bindings; the Key value must never be logged or returned
+// to the frontend, not even masked.
+type APIKeyEntry struct {
+	// ID uniquely identifies the entry within the profile.
+	ID string `json:"id"`
+	// Provider is the user-chosen display name for the key (e.g. "OpenAI").
+	Provider string `json:"provider"`
+	// Key is the secret value. It is persisted like APIKey (keychain-first
+	// with a settings-file fallback). Adapters never read it; they consume
+	// the resolved Profile.APIKey.
+	Key string `json:"key,omitempty"`
+}
+
 // Profile is a single OpenAI-compatible endpoint configuration that the user
 // wants to apply to one or more AI coding tools.
 //
@@ -65,7 +85,9 @@ func isLocalOrPrivateHost(host string) bool {
 type Profile struct {
 	// Label is an optional human-friendly name for the profile.
 	Label string `json:"label,omitempty"`
-	// APIKey is the secret bearer token for the endpoint. Required.
+	// APIKey is the secret bearer token for the endpoint. Required. It is the
+	// effective key adapters consume; when APIKeys is non-empty it mirrors the
+	// entry selected by ActiveKeyID (see [Profile.NormalizeKeys]).
 	APIKey string `json:"api_key"`
 	// BaseURL is the OpenAI-compatible base URL (http or https). Required.
 	BaseURL string `json:"base_url"`
@@ -83,6 +105,46 @@ type Profile struct {
 	// SmallFastModel is an optional secondary model used by some tools for
 	// lightweight/background tasks. It need not be a member of Models.
 	SmallFastModel string `json:"small_fast_model,omitempty"`
+	// APIKeys is the managed list of named keys. The entry selected by
+	// ActiveKeyID is mirrored into APIKey, which stays the single value
+	// adapters consume — mirroring the Models/Model pattern.
+	APIKeys []APIKeyEntry `json:"api_keys,omitempty"`
+	// ActiveKeyID selects the active member of APIKeys. It must reference a
+	// member when APIKeys is non-empty.
+	ActiveKeyID string `json:"active_key_id,omitempty"`
+}
+
+// KeyEntry returns the API key entry with the given ID and whether it exists.
+func (p Profile) KeyEntry(id string) (APIKeyEntry, bool) {
+	for _, e := range p.APIKeys {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return APIKeyEntry{}, false
+}
+
+// NormalizeKeys reconciles the managed key list with the effective APIKey, in
+// place. A legacy single-key profile (non-empty APIKey, no APIKeys) is
+// upgraded to one active entry labeled "Default" so v1 profiles load without
+// user action. When APIKeys is non-empty, a missing or stale ActiveKeyID
+// falls back to the first entry, and APIKey is synced to the active entry's
+// key value when that value is available (an empty value — e.g. keychain
+// unavailable — leaves APIKey untouched so Validate reports the problem).
+func (p *Profile) NormalizeKeys() {
+	if len(p.APIKeys) == 0 {
+		if strings.TrimSpace(p.APIKey) != "" {
+			p.APIKeys = []APIKeyEntry{{ID: DefaultKeyID, Provider: "Default", Key: p.APIKey}}
+			p.ActiveKeyID = DefaultKeyID
+		}
+		return
+	}
+	if _, ok := p.KeyEntry(p.ActiveKeyID); !ok {
+		p.ActiveKeyID = p.APIKeys[0].ID
+	}
+	if e, ok := p.KeyEntry(p.ActiveKeyID); ok && strings.TrimSpace(e.Key) != "" {
+		p.APIKey = e.Key
+	}
 }
 
 // Validate reports whether the profile carries the minimum information needed
@@ -118,6 +180,21 @@ func (p Profile) Validate() error {
 		}
 		if !found {
 			return errors.New("core: profile model must be one of models")
+		}
+	}
+	if len(p.APIKeys) > 0 {
+		seen := make(map[string]bool, len(p.APIKeys))
+		for _, e := range p.APIKeys {
+			if strings.TrimSpace(e.ID) == "" {
+				return errors.New("core: profile api key entries need an id")
+			}
+			if seen[e.ID] {
+				return errors.New("core: profile api key ids must be unique")
+			}
+			seen[e.ID] = true
+		}
+		if !seen[p.ActiveKeyID] {
+			return errors.New("core: profile active_key_id must be one of api_keys")
 		}
 	}
 	return nil

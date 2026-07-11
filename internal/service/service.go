@@ -8,17 +8,20 @@
 // (web) build; it holds no UI state and returns plain structs and errors so the
 // Wails binding generator can produce typed TypeScript for it.
 //
-// API-key handling over the wire: the stored Profile contains a secret APIKey.
-// [Service.GetProfile] deliberately never returns that secret — it returns a
-// [ProfileView] carrying only non-secret fields plus a HasKey flag — so the key
-// is never sent to a browser in server mode (and never logged). The UI shows a
-// masked field. On [Service.SaveProfile], an empty incoming APIKey means "keep
-// the existing key", letting the UI submit the form without ever round-tripping
-// the secret.
+// API-key handling over the wire: the stored Profile contains secret key
+// values (APIKey and the managed APIKeys entries). [Service.GetProfile]
+// deliberately never returns those secrets — it returns a [ProfileView]
+// carrying only non-secret fields (key entries are reduced to provider name +
+// active flag, never a value, not even masked) — so no key is ever sent to a
+// browser in server mode (and never logged). On [Service.SaveProfile], an
+// empty incoming key value means "keep the stored one", letting the UI submit
+// the form without ever round-tripping a secret.
 package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -80,6 +83,20 @@ type ToolView struct {
 	// this tool: the per-tool override when set, otherwise the profile default.
 	// It is empty when no profile is saved.
 	SelectedModel string `json:"selected_model"`
+	// Keys is the profile's key list (provider names + active flag, never key
+	// values), used to populate the per-tool key dropdown. It is empty when no
+	// profile is saved.
+	Keys []APIKeyView `json:"keys"`
+	// SelectedKeyID is the ID of the key entry in effect for this tool: the
+	// per-tool override when set and still a member, otherwise the profile's
+	// active key. It is empty when no valid profile is saved.
+	SelectedKeyID string `json:"selected_key_id"`
+	// KeyProvider is the Provider display name of the key entry in effect for
+	// this tool. It never carries any part of the key value.
+	KeyProvider string `json:"key_provider"`
+	// KeyOverridden is true when the key in effect comes from a per-tool
+	// override rather than the profile's active key.
+	KeyOverridden bool `json:"key_overridden"`
 	// Installable is true when the tool has a whitelisted npm package the
 	// installer can install/uninstall. It is false for tools distributed only as
 	// a standalone binary, so the UI can hide the Install action for those.
@@ -94,8 +111,19 @@ type ToolOpResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// APIKeyView is the non-secret view of one managed API key entry. It exposes
+// only the entry ID, the user-chosen provider name and whether the entry is
+// the profile's active key — never any part of the key value, not even
+// masked.
+type APIKeyView struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	Active   bool   `json:"active"`
+}
+
 // ProfileView is the non-secret view of the active profile returned to the
-// frontend. It never carries the API key; HasKey reports whether one is stored.
+// frontend. It never carries any API key value; HasKey reports whether one is
+// stored and Keys lists the managed entries by provider name only.
 type ProfileView struct {
 	Label   string   `json:"label"`
 	BaseURL string   `json:"base_url"`
@@ -106,6 +134,20 @@ type ProfileView struct {
 	Model          string            `json:"model"`
 	SmallFastModel string            `json:"small_fast_model"`
 	HasKey         bool              `json:"has_key"`
+	// Keys is the managed key list (provider names + active flag only).
+	Keys []APIKeyView `json:"keys"`
+}
+
+// keyViews maps the profile's key entries to their non-secret views.
+func keyViews(p core.Profile) []APIKeyView {
+	if len(p.APIKeys) == 0 {
+		return nil
+	}
+	out := make([]APIKeyView, 0, len(p.APIKeys))
+	for _, e := range p.APIKeys {
+		out = append(out, APIKeyView{ID: e.ID, Provider: e.Provider, Active: e.ID == p.ActiveKeyID})
+	}
+	return out
 }
 
 // InstallResult is the structured outcome of an Install/Uninstall operation,
@@ -237,9 +279,17 @@ func (s *Service) ListTools() ([]ToolView, error) {
 func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
 	p := fallback
 	selectedModel := ""
+	selectedKeyID := ""
+	keyProvider := ""
+	keyOverridden := false
 	if eff, err := s.effectiveProfileFor(a.ID()); err == nil {
 		p = eff
 		selectedModel = eff.Model
+		selectedKeyID = eff.ActiveKeyID
+		if e, ok := eff.KeyEntry(eff.ActiveKeyID); ok {
+			keyProvider = e.Provider
+		}
+		keyOverridden = eff.ActiveKeyID != fallback.ActiveKeyID
 	}
 	installed, _ := a.Detect()
 	status, detail, serr := a.Status(p)
@@ -266,6 +316,10 @@ func (s *Service) viewFor(a core.ToolAdapter, fallback core.Profile) ToolView {
 		Models:        models,
 		ModelNames:    p.ModelNames,
 		SelectedModel: selectedModel,
+		Keys:          keyViews(fallback),
+		SelectedKeyID: selectedKeyID,
+		KeyProvider:   keyProvider,
+		KeyOverridden: keyOverridden,
 		Installable:   installable,
 	}
 }
@@ -295,13 +349,17 @@ func (s *Service) GetProfile() (ProfileView, error) {
 		Model:          p.Model,
 		SmallFastModel: p.SmallFastModel,
 		HasKey:         strings.TrimSpace(p.APIKey) != "",
+		Keys:           keyViews(*p),
 	}, nil
 }
 
-// SaveProfile validates and persists p as the active profile. An empty incoming
-// APIKey is treated as "keep the existing key" so the masked UI can submit the
-// form without re-sending the secret; the merged profile is then validated via
-// [core.Profile.Validate] and an invalid profile is rejected with an error.
+// SaveProfile validates and persists p as the active profile. Empty incoming
+// key values mean "keep the stored ones" so the UI can submit the form without
+// ever round-tripping a secret: an APIKeys entry with an empty Key inherits
+// the stored entry's value (matched by ID), and a legacy submission with no
+// APIKeys and an empty APIKey keeps the stored key material entirely. The
+// merged profile is then validated via [core.Profile.Validate] and an invalid
+// profile is rejected with an error.
 func (s *Service) SaveProfile(p core.Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -314,9 +372,7 @@ func (s *Service) SaveProfile(p core.Profile) error {
 	p.SmallFastModel = strings.TrimSpace(p.SmallFastModel)
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
-	if strings.TrimSpace(p.APIKey) == "" && st.ActiveProfile != nil {
-		p.APIKey = st.ActiveProfile.APIKey
-	}
+	mergeKeys(&p, st.ActiveProfile)
 	if err := p.Validate(); err != nil {
 		return err
 	}
@@ -333,8 +389,90 @@ func (s *Service) SaveProfile(p core.Profile) error {
 			}
 		}
 	}
+	// Prune stale per-tool key selections likewise, so a removed key entry
+	// falls back to the profile's active key.
+	for tid, kid := range st.ToolKeys {
+		if _, ok := p.KeyEntry(kid); !ok {
+			delete(st.ToolKeys, tid)
+		}
+	}
 	st.ActiveProfile = &p
 	return s.store.Save(st)
+}
+
+// mergeKeys reconciles the incoming profile's key material with the stored
+// profile so secrets never have to round-trip through the UI. Entries are
+// trimmed, entries without an ID (newly added in the UI) get a fresh unique
+// one, and an entry with an empty Key inherits the stored entry's value by
+// ID. A legacy submission (no APIKeys) inherits the stored managed list when
+// one exists — a non-empty incoming APIKey then updates the active entry —
+// or falls back to the v1 "empty means keep" single-key behaviour. The
+// result is normalized via [core.Profile.NormalizeKeys], so APIKey always
+// mirrors the active entry.
+func mergeKeys(p *core.Profile, stored *core.Profile) {
+	if len(p.APIKeys) > 0 {
+		taken := make(map[string]bool, len(p.APIKeys))
+		for i := range p.APIKeys {
+			p.APIKeys[i].ID = strings.TrimSpace(p.APIKeys[i].ID)
+			p.APIKeys[i].Provider = strings.TrimSpace(p.APIKeys[i].Provider)
+			p.APIKeys[i].Key = strings.TrimSpace(p.APIKeys[i].Key)
+			taken[p.APIKeys[i].ID] = true
+		}
+		for i := range p.APIKeys {
+			if p.APIKeys[i].ID == "" {
+				p.APIKeys[i].ID = newKeyID(taken)
+				taken[p.APIKeys[i].ID] = true
+			}
+			if p.APIKeys[i].Key == "" && stored != nil {
+				if e, ok := stored.KeyEntry(p.APIKeys[i].ID); ok {
+					p.APIKeys[i].Key = e.Key
+				}
+			}
+		}
+		// APIKey is a computed mirror of the active entry: never trust the
+		// incoming value, resync it from the merged list.
+		p.APIKey = ""
+		p.ActiveKeyID = strings.TrimSpace(p.ActiveKeyID)
+		p.NormalizeKeys()
+		return
+	}
+	if stored != nil && len(stored.APIKeys) > 0 {
+		p.APIKeys = make([]core.APIKeyEntry, len(stored.APIKeys))
+		copy(p.APIKeys, stored.APIKeys)
+		if strings.TrimSpace(p.ActiveKeyID) == "" {
+			p.ActiveKeyID = stored.ActiveKeyID
+		}
+		if k := strings.TrimSpace(p.APIKey); k != "" {
+			for i := range p.APIKeys {
+				if p.APIKeys[i].ID == p.ActiveKeyID {
+					p.APIKeys[i].Key = k
+				}
+			}
+		}
+		p.APIKey = ""
+		p.NormalizeKeys()
+		return
+	}
+	if strings.TrimSpace(p.APIKey) == "" && stored != nil {
+		p.APIKey = stored.APIKey
+	}
+	p.NormalizeKeys()
+}
+
+// newKeyID returns a fresh API key entry ID not present in taken.
+func newKeyID(taken map[string]bool) string {
+	for i := 1; ; i++ {
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			if id := fmt.Sprintf("key-%d", len(taken)+i); !taken[id] {
+				return id
+			}
+			continue
+		}
+		if id := "key-" + hex.EncodeToString(b[:]); !taken[id] {
+			return id
+		}
+	}
 }
 
 // SetToolModel records (or clears) the per-tool model selection for toolID. An
@@ -375,6 +513,142 @@ func (s *Service) SetToolModel(toolID, model string) error {
 		st.ToolModels = make(map[string]string)
 	}
 	st.ToolModels[toolID] = model
+	return s.store.Save(st)
+}
+
+// SetToolKey records (or clears) the per-tool API key selection for toolID. An
+// empty keyID deletes the selection so the tool uses the profile's active key.
+// A non-empty keyID must reference a member of the active profile's APIKeys,
+// otherwise a clear error is returned. The toolID must be a registered tool.
+// The selection is persisted via the settings store.
+func (s *Service) SetToolKey(toolID, keyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.reg.Get(toolID); !ok {
+		return fmt.Errorf("service: unknown tool %q", toolID)
+	}
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		delete(st.ToolKeys, toolID)
+		return s.store.Save(st)
+	}
+	p, err := s.activeProfile()
+	if err != nil {
+		return err
+	}
+	if _, ok := p.KeyEntry(keyID); !ok {
+		return fmt.Errorf("service: key %q is not one of the profile's api keys", keyID)
+	}
+	if st.ToolKeys == nil {
+		st.ToolKeys = make(map[string]string)
+	}
+	st.ToolKeys[toolID] = keyID
+	return s.store.Save(st)
+}
+
+// AddAPIKey appends a new named key entry to the active profile's managed
+// list and returns its generated ID. The provider name and key value are
+// required; when the profile has no keys yet the new entry becomes active.
+// The key value is only persisted (keychain-first), never echoed back.
+func (s *Service) AddAPIKey(provider, key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.store.Load()
+	if err != nil {
+		return "", err
+	}
+	if st.ActiveProfile == nil {
+		return "", errors.New("service: no profile saved; save a profile before adding keys")
+	}
+	provider = strings.TrimSpace(provider)
+	key = strings.TrimSpace(key)
+	if provider == "" {
+		return "", errors.New("service: key provider name is required")
+	}
+	if key == "" {
+		return "", errors.New("service: key value is required")
+	}
+	p := *st.ActiveProfile
+	taken := make(map[string]bool, len(p.APIKeys))
+	for _, e := range p.APIKeys {
+		taken[e.ID] = true
+	}
+	id := newKeyID(taken)
+	p.APIKeys = append(append([]core.APIKeyEntry{}, p.APIKeys...), core.APIKeyEntry{ID: id, Provider: provider, Key: key})
+	p.NormalizeKeys()
+	st.ActiveProfile = &p
+	if err := s.store.Save(st); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// RemoveAPIKey deletes the key entry with the given ID from the active
+// profile's managed list. Removing the last key is rejected (a profile always
+// needs one); removing the active key promotes the first remaining entry.
+// Per-tool selections pointing at the removed entry are pruned so those tools
+// fall back to the active key.
+func (s *Service) RemoveAPIKey(keyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	if st.ActiveProfile == nil {
+		return errors.New("service: no profile saved")
+	}
+	p := *st.ActiveProfile
+	if _, ok := p.KeyEntry(keyID); !ok {
+		return fmt.Errorf("service: key %q is not one of the profile's api keys", keyID)
+	}
+	if len(p.APIKeys) == 1 {
+		return errors.New("service: cannot remove the last api key")
+	}
+	kept := make([]core.APIKeyEntry, 0, len(p.APIKeys)-1)
+	for _, e := range p.APIKeys {
+		if e.ID != keyID {
+			kept = append(kept, e)
+		}
+	}
+	p.APIKeys = kept
+	if p.ActiveKeyID == keyID {
+		p.ActiveKeyID = ""
+		p.APIKey = ""
+	}
+	p.NormalizeKeys()
+	for tid, kid := range st.ToolKeys {
+		if kid == keyID {
+			delete(st.ToolKeys, tid)
+		}
+	}
+	st.ActiveProfile = &p
+	return s.store.Save(st)
+}
+
+// SetActiveAPIKey selects the key entry with the given ID as the profile's
+// active key, mirroring it into the effective APIKey adapters consume.
+func (s *Service) SetActiveAPIKey(keyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	if st.ActiveProfile == nil {
+		return errors.New("service: no profile saved")
+	}
+	p := *st.ActiveProfile
+	if _, ok := p.KeyEntry(keyID); !ok {
+		return fmt.Errorf("service: key %q is not one of the profile's api keys", keyID)
+	}
+	p.ActiveKeyID = keyID
+	p.NormalizeKeys()
+	st.ActiveProfile = &p
 	return s.store.Save(st)
 }
 
@@ -446,13 +720,16 @@ func (s *Service) activeProfile() (core.Profile, error) {
 	return p, nil
 }
 
-// effectiveProfileFor returns the active profile with its selected Model
-// overridden by the per-tool selection for toolID, when one is set and is still
-// a member of the profile's Models. It reuses [Service.activeProfile] (which
-// normalizes the base URL and validates), so it returns that helper's error when
-// no valid profile is saved. A stale or absent selection is never an error: the
-// profile default Model is left in place. This single helper is used by Apply
-// and by status computation so the fingerprint stays consistent across both.
+// effectiveProfileFor returns the active profile with its selected Model and
+// API key overridden by the per-tool selections for toolID, when set and
+// still members of the profile's Models/APIKeys. It reuses
+// [Service.activeProfile] (which normalizes the base URL and validates), so it
+// returns that helper's error when no valid profile is saved. A stale or
+// absent selection is never an error: the profile defaults are left in place
+// (a key override whose entry has no loadable value also falls back, so an
+// unavailable keychain never blanks the applied key). This single helper is
+// used by Apply and by status computation so the fingerprint stays consistent
+// across both.
 func (s *Service) effectiveProfileFor(toolID string) (core.Profile, error) {
 	p, err := s.activeProfile()
 	if err != nil {
@@ -468,6 +745,12 @@ func (s *Service) effectiveProfileFor(toolID string) (core.Profile, error) {
 				p.Model = sel
 				break
 			}
+		}
+	}
+	if sel := st.ToolKeys[toolID]; sel != "" {
+		if e, ok := p.KeyEntry(sel); ok && strings.TrimSpace(e.Key) != "" {
+			p.ActiveKeyID = e.ID
+			p.APIKey = e.Key
 		}
 	}
 	return p, nil

@@ -16,40 +16,6 @@ export interface InstallResult {
 }
 
 /**
- * MCPState is the redacted MCP state returned to the frontend. It carries a
- * HasKey flag (never the key itself) and the per-tool status list, plus the
- * non-secret endpoint that would be injected.
- */
-export interface MCPState {
-    "has_key": boolean;
-    "enabled": boolean;
-    "endpoint": string;
-    "tools": MCPToolView[] | null;
-}
-
-/**
- * MCPTestResult is the structured outcome of [Service.TestMCPConnection]. It
- * carries only display-safe fields and never includes the key or Authorization
- * header.
- */
-export interface MCPTestResult {
-    "ok": boolean;
-    "status": number;
-    "meaning": string;
-}
-
-/**
- * MCPToolView is the per-tool MCP status returned by [Service.GetMCPState].
- */
-export interface MCPToolView {
-    "id": string;
-    "installed": boolean;
-    "status": string;
-    "detail": string;
-    "config_paths": string[] | null;
-}
-
-/**
  * ProfileView is the non-secret view of the active profile returned to the
  * frontend. It never carries the API key; HasKey reports whether one is stored.
  */
