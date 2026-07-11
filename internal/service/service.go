@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -62,6 +63,10 @@ type Service struct {
 	// the error is surfaced in the tool's Detail via ListTools instead of only
 	// being logged.
 	sweepErrs map[string]string
+	// modelsClient is the HTTP client used by FetchProviderModels. It is nil
+	// for the real Service (a default client with a timeout is built per call);
+	// tests inject one pointed at an httptest server.
+	modelsClient *http.Client
 }
 
 // ToolView is the per-tool summary returned by [Service.ListTools].

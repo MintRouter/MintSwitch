@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -1113,5 +1116,163 @@ func TestSweepFailureSurfacesInToolDetail(t *testing.T) {
 	}
 	if strings.Contains(views[0].Detail, want) {
 		t.Fatalf("Detail = %q must clear after a clean sweep", views[0].Detail)
+	}
+}
+
+
+// newModelsService builds a Service with one provider pointed at the given
+// httptest server (loopback http URLs are preserved by normalization) and
+// wires the server's client in as the injected models HTTP client. It returns
+// the service and the provider's ID.
+func newModelsService(t *testing.T, srv *httptest.Server) (*Service, string) {
+	t.Helper()
+	svc := newTestService(t)
+	p := validProvider()
+	p.BaseURL = srv.URL
+	id := addProvider(t, svc, p)
+	svc.modelsClient = srv.Client()
+	return svc, id
+}
+
+// TestFetchProviderModels: a well-behaved OpenAI-style endpoint yields the
+// sorted, de-duplicated model IDs; the key travels only in the Authorization
+// header; the call mutates no settings.
+func TestFetchProviderModels(t *testing.T) {
+	var gotAuth, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"object":"list","data":[{"id":"zeta"},{"id":"alpha"},{"id":"alpha"},{"id":""}]}`))
+	}))
+	defer srv.Close()
+	svc, id := newModelsService(t, srv)
+
+	before, err := os.ReadFile(storeFrom(svc).Path)
+	if err != nil {
+		t.Fatalf("read settings before: %v", err)
+	}
+	models, err := svc.FetchProviderModels(id)
+	if err != nil {
+		t.Fatalf("FetchProviderModels: %v", err)
+	}
+	if !equalStrings(models, []string{"alpha", "zeta"}) {
+		t.Fatalf("models = %v, want [alpha zeta]", models)
+	}
+	if gotPath != "/models" {
+		t.Fatalf("path = %q, want /models", gotPath)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Fatalf("Authorization = %q, want the bearer key", gotAuth)
+	}
+	after, err := os.ReadFile(storeFrom(svc).Path)
+	if err != nil {
+		t.Fatalf("read settings after: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("FetchProviderModels must not mutate settings:\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+// TestFetchProviderModelsVariants: bare-string arrays, a "models" key and a
+// top-level array all parse.
+func TestFetchProviderModelsVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"data of strings", `{"data":["b","a"]}`, []string{"a", "b"}},
+		{"models key", `{"models":[{"id":"m1"},{"name":"m0"}]}`, []string{"m0", "m1"}},
+		{"top-level array", `[{"id":"x"},"y"]`, []string{"x", "y"}},
+		{"empty data", `{"data":[]}`, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			svc, id := newModelsService(t, srv)
+			models, err := svc.FetchProviderModels(id)
+			if err != nil {
+				t.Fatalf("FetchProviderModels: %v", err)
+			}
+			if !equalStrings(models, tt.want) {
+				t.Fatalf("models = %v, want %v", models, tt.want)
+			}
+		})
+	}
+}
+
+// TestFetchProviderModelsNon200: a non-200 status yields a display-safe error
+// carrying the status but never the key or the response body.
+func TestFetchProviderModelsNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"bad key sk-test junk-echo"}`))
+	}))
+	defer srv.Close()
+	svc, id := newModelsService(t, srv)
+	_, err := svc.FetchProviderModels(id)
+	if err == nil {
+		t.Fatal("FetchProviderModels: want error for HTTP 401")
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("error = %q, want it to name HTTP 401", err)
+	}
+	if strings.Contains(err.Error(), "sk-test") || strings.Contains(err.Error(), "junk-echo") {
+		t.Fatalf("error = %q must not echo the key or response body", err)
+	}
+}
+
+// TestFetchProviderModelsInvalidJSON: an unparsable or unrecognizable body
+// yields a display-safe error that never echoes the body.
+func TestFetchProviderModelsInvalidJSON(t *testing.T) {
+	for _, body := range []string{"not json at all", `{"object":"list"}`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(body))
+		}))
+		svc, id := newModelsService(t, srv)
+		_, err := svc.FetchProviderModels(id)
+		srv.Close()
+		if err == nil {
+			t.Fatalf("FetchProviderModels(%q): want error", body)
+		}
+		if strings.Contains(err.Error(), "not json") {
+			t.Fatalf("error = %q must not echo the response body", err)
+		}
+	}
+}
+
+// TestFetchProviderModelsTimeout: a hung endpoint fails with a timeout
+// message instead of blocking, and the error stays display-safe.
+func TestFetchProviderModelsTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-release
+	}))
+	defer func() { close(release); srv.Close() }()
+	svc, id := newModelsService(t, srv)
+	svc.modelsClient = &http.Client{Timeout: 50 * time.Millisecond}
+	_, err := svc.FetchProviderModels(id)
+	if err == nil {
+		t.Fatal("FetchProviderModels: want timeout error")
+	}
+	if !strings.Contains(err.Error(), "did not respond") {
+		t.Fatalf("error = %q, want the timeout message", err)
+	}
+	if strings.Contains(err.Error(), srv.URL) {
+		t.Fatalf("error = %q must not embed the raw transport error", err)
+	}
+}
+
+// TestFetchProviderModelsUnknownProvider: an unknown ID is a clear error and
+// no request is attempted.
+func TestFetchProviderModelsUnknownProvider(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.FetchProviderModels("nope")
+	if err == nil || !strings.Contains(err.Error(), `unknown provider "nope"`) {
+		t.Fatalf("FetchProviderModels = %v, want unknown provider error", err)
 	}
 }
