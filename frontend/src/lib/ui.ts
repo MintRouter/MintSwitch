@@ -36,13 +36,14 @@ export function statusMeta(status: string): StatusMeta {
  * side never includes the API key), so we only normalise the shape here.
  */
 export function errMsg(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
+  const fallback = "Something went wrong. Please try again.";
+  if (e instanceof Error) return e.message || fallback;
+  if (typeof e === "string") return e || fallback;
   if (e && typeof e === "object" && "message" in e) {
     const m = (e as { message?: unknown }).message;
-    if (typeof m === "string") return m;
+    if (typeof m === "string" && m) return m;
   }
-  return "Something went wrong. Please try again.";
+  return fallback;
 }
 
 /**

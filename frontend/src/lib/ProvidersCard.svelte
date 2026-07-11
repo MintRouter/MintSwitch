@@ -106,7 +106,7 @@
       model: newModel.trim(),
       small_fast_model: "",
     });
-    if (err) {
+    if (err != null) {
       dialogError = err;
       return;
     }
@@ -160,7 +160,7 @@
       base_url: editBase.url,
       api_key: editKey,
     }));
-    if (err) {
+    if (err != null) {
       dialogError = err;
       return;
     }
@@ -171,14 +171,14 @@
     dialogError = "";
     if (editingId === id) cancelEdit();
     const err = await onRemove(id);
-    if (err) dialogError = err;
+    if (err != null) dialogError = err;
   }
 
   async function setActive(id: string): Promise<void> {
     if (active?.id === id) return;
     dialogError = "";
     const err = await onSetActive(id);
-    if (err) dialogError = err;
+    if (err != null) dialogError = err;
   }
 
   // Per-tool provider override: persisted immediately via the parent's
@@ -187,7 +187,7 @@
   async function changeToolProvider(toolID: string, providerID: string): Promise<void> {
     toolProviderError = "";
     const err = await onToolProviderChange(toolID, providerID);
-    if (err) toolProviderError = err;
+    if (err != null) toolProviderError = err;
   }
 
   // ---- Models dialog (one provider's model list) ----
@@ -261,7 +261,7 @@
       model_names: mModelNames,
       model: mModel,
     }));
-    if (err) modelsError = err;
+    if (err != null) modelsError = err;
   }
 
   // Add the typed model to the list (trimmed, deduped by ID). The optional
