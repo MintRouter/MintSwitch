@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <!-- Concept B — monochrome (uses currentColor). -->
+  <g fill="none" stroke-linecap="round" stroke-width="5" stroke="currentColor">
+    <path d="M8 33C15 33 18.5 27.5 20.6 25.2"/>
+    <path d="M27.4 22.8C29.5 20.5 33 15 40 15"/>
+    <path d="M8 15C16 15 20 24 24 24C28 24 32 33 40 33"/>
+  </g>
+</svg>

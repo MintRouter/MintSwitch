@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <!-- Concept A — "Route Switch": one input line splits into two routes (active blue / alternate mint). -->
+  <g fill="none" stroke-linecap="round" stroke-width="4.5">
+    <path d="M8.5 24H20 M20 24C27 24 26.5 12 34.5 12" stroke="#135bec"/>
+    <path d="M20 24C27 24 26.5 36 34.5 36" stroke="#0d9488"/>
+  </g>
+  <circle cx="8.5" cy="24" r="4" fill="#135bec"/>
+  <circle cx="38" cy="12" r="4" fill="#135bec"/>
+  <circle cx="38" cy="36" r="4" fill="#0d9488"/>
+</svg>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <!-- Concept C — "M-Route monogram": the letter M drawn as one continuous routed trace, mint node at the junction. -->
+  <path d="M10.5 37V13L24 28.5L37.5 13V37" fill="none" stroke="#135bec" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="24" cy="28.5" r="3.75" fill="#0d9488"/>
+</svg>
