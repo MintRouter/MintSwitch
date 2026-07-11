@@ -23,16 +23,6 @@ func TestProfileValidate(t *testing.T) {
 		{"model is one of models", Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: []string{"x", "m"}}, false},
 		{"empty models ok", Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: nil}, false},
 		{"model not in models", Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: []string{"x", "y"}}, true},
-		{"active key is a member", Profile{APIKey: "k", BaseURL: "https://h", Model: "m",
-			APIKeys: []APIKeyEntry{{ID: "a", Provider: "A", Key: "k"}}, ActiveKeyID: "a"}, false},
-		{"active key not a member", Profile{APIKey: "k", BaseURL: "https://h", Model: "m",
-			APIKeys: []APIKeyEntry{{ID: "a", Provider: "A", Key: "k"}}, ActiveKeyID: "b"}, true},
-		{"missing active key id", Profile{APIKey: "k", BaseURL: "https://h", Model: "m",
-			APIKeys: []APIKeyEntry{{ID: "a", Provider: "A", Key: "k"}}}, true},
-		{"entry without id", Profile{APIKey: "k", BaseURL: "https://h", Model: "m",
-			APIKeys: []APIKeyEntry{{Provider: "A", Key: "k"}}, ActiveKeyID: ""}, true},
-		{"duplicate entry ids", Profile{APIKey: "k", BaseURL: "https://h", Model: "m",
-			APIKeys: []APIKeyEntry{{ID: "a", Key: "k"}, {ID: "a", Key: "k2"}}, ActiveKeyID: "a"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,49 +94,66 @@ func TestFingerprintStableAndSensitive(t *testing.T) {
 	}
 }
 
-// TestNormalizeKeys covers the v1 upgrade (single APIKey becomes one active
-// "Default" entry), stale-active fallback, and APIKey syncing to the active
-// entry (leaving APIKey untouched when the entry's value is unavailable).
-func TestNormalizeKeys(t *testing.T) {
-	t.Run("v1 single key upgrades to Default entry", func(t *testing.T) {
-		p := Profile{APIKey: "sk-old"}
-		p.NormalizeKeys()
-		if len(p.APIKeys) != 1 || p.APIKeys[0].ID != DefaultKeyID ||
-			p.APIKeys[0].Provider != "Default" || p.APIKeys[0].Key != "sk-old" {
-			t.Fatalf("upgrade wrong: %+v", p.APIKeys)
-		}
-		if p.ActiveKeyID != DefaultKeyID || p.APIKey != "sk-old" {
-			t.Fatalf("active/effective wrong: %q %q", p.ActiveKeyID, p.APIKey)
-		}
-	})
-	t.Run("empty profile stays empty", func(t *testing.T) {
-		p := Profile{}
-		p.NormalizeKeys()
-		if len(p.APIKeys) != 0 || p.ActiveKeyID != "" {
-			t.Fatalf("empty profile mutated: %+v", p)
-		}
-	})
-	t.Run("stale active falls back to first entry", func(t *testing.T) {
-		p := Profile{APIKeys: []APIKeyEntry{{ID: "a", Key: "ka"}, {ID: "b", Key: "kb"}}, ActiveKeyID: "gone"}
-		p.NormalizeKeys()
-		if p.ActiveKeyID != "a" || p.APIKey != "ka" {
-			t.Fatalf("fallback wrong: %q %q", p.ActiveKeyID, p.APIKey)
-		}
-	})
-	t.Run("APIKey synced to active entry", func(t *testing.T) {
-		p := Profile{APIKey: "stale", APIKeys: []APIKeyEntry{{ID: "a", Key: "ka"}, {ID: "b", Key: "kb"}}, ActiveKeyID: "b"}
-		p.NormalizeKeys()
-		if p.APIKey != "kb" {
-			t.Fatalf("APIKey = %q, want kb", p.APIKey)
-		}
-	})
-	t.Run("empty active value leaves APIKey untouched", func(t *testing.T) {
-		p := Profile{APIKey: "file-key", APIKeys: []APIKeyEntry{{ID: "a"}}, ActiveKeyID: "a"}
-		p.NormalizeKeys()
-		if p.APIKey != "file-key" {
-			t.Fatalf("APIKey = %q, want file-key preserved", p.APIKey)
-		}
-	})
+// validProvider is a fully-populated provider for Provider tests.
+func validProvider() Provider {
+	return Provider{
+		ID: "p1", Name: "OpenAI", Note: "team key",
+		APIKey: "sk-1", BaseURL: "https://api.example.com/v1",
+		Models: []string{"m1", "m2"}, Model: "m1", SmallFastModel: "s",
+	}
+}
+
+func TestProviderValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Provider)
+		wantErr bool
+	}{
+		{"valid", func(*Provider) {}, false},
+		{"empty note ok", func(p *Provider) { p.Note = "" }, false},
+		{"missing id", func(p *Provider) { p.ID = "" }, true},
+		{"missing name", func(p *Provider) { p.Name = "  " }, true},
+		{"missing key", func(p *Provider) { p.APIKey = "" }, true},
+		{"missing model", func(p *Provider) { p.Model = ""; p.Models = nil }, true},
+		{"missing base url", func(p *Provider) { p.BaseURL = "" }, true},
+		{"model not in models", func(p *Provider) { p.Model = "nope" }, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := validProvider()
+			tt.mutate(&p)
+			err := p.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() err = %v, wantErr = %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestProviderProfile proves the resolved Profile carries every endpoint
+// field and is labeled with the provider name.
+func TestProviderProfile(t *testing.T) {
+	pr := validProvider()
+	p := pr.Profile()
+	if p.Label != "OpenAI" || p.APIKey != "sk-1" || p.BaseURL != pr.BaseURL ||
+		p.Model != "m1" || p.SmallFastModel != "s" || len(p.Models) != 2 {
+		t.Fatalf("resolved profile wrong: %+v", p)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("resolved profile invalid: %v", err)
+	}
+}
+
+func TestProviderHasModel(t *testing.T) {
+	pr := validProvider()
+	if !pr.HasModel("m2") || pr.HasModel("nope") {
+		t.Fatal("HasModel membership wrong")
+	}
+	// Empty Models (pre-Models provider) offers exactly the default Model.
+	pr.Models = nil
+	if !pr.HasModel("m1") || pr.HasModel("m2") || pr.HasModel("") {
+		t.Fatal("HasModel empty-list fallback wrong")
+	}
 }
 
 func TestNewMarker(t *testing.T) {

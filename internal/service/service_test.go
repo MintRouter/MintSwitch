@@ -108,14 +108,51 @@ func newTestService(t *testing.T, adapters ...*fakeAdapter) *Service {
 	return NewWithRegistry(reg, store)
 }
 
-// validProfile is a saved-and-valid profile for apply tests.
-func validProfile() core.Profile {
-	return core.Profile{
-		Label:   "test",
+// validProvider is a valid provider (no ID: AddProvider assigns one) for
+// provider-management and apply tests.
+func validProvider() core.Provider {
+	return core.Provider{
+		Name:    "Test",
 		APIKey:  "sk-test",
 		BaseURL: "https://api.example.com/v1",
 		Model:   "gpt-test",
 	}
+}
+
+// addProvider adds p via the service and returns its generated ID.
+func addProvider(t *testing.T, svc *Service, p core.Provider) string {
+	t.Helper()
+	id, err := svc.AddProvider(p)
+	if err != nil {
+		t.Fatalf("AddProvider: %v", err)
+	}
+	return id
+}
+
+// reg builds a registry from adapters for ad-hoc service construction in tests.
+func reg(adapters ...*fakeAdapter) *core.Registry {
+	r := core.NewRegistry()
+	for _, a := range adapters {
+		r.Register(a)
+	}
+	return r
+}
+
+// storeFrom returns the settings store backing an existing test Service so a
+// second Service can read the same persisted state.
+func storeFrom(s *Service) *settings.Store { return s.store }
+
+// equalStrings reports whether two string slices are element-wise equal.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestListTools(t *testing.T) {
@@ -151,32 +188,102 @@ func TestListTools(t *testing.T) {
 	}
 }
 
-func TestSaveProfileValidation(t *testing.T) {
+func TestAddProviderValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		in      core.Profile
+		mutate  func(*core.Provider)
 		wantErr bool
 	}{
-		{"valid", validProfile(), false},
-		{"missing model", core.Profile{APIKey: "k", BaseURL: "https://x.test"}, true},
-		{"missing key", core.Profile{Model: "m", BaseURL: "https://x.test"}, true},
-		{"bad url", core.Profile{APIKey: "k", Model: "m", BaseURL: "://nope"}, true},
+		{"valid", func(*core.Provider) {}, false},
+		{"missing name", func(p *core.Provider) { p.Name = "  " }, true},
+		{"missing model", func(p *core.Provider) { p.Model = "" }, true},
+		{"missing key", func(p *core.Provider) { p.APIKey = "" }, true},
+		{"bad url", func(p *core.Provider) { p.BaseURL = "://nope" }, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newTestService(t)
-			err := svc.SaveProfile(tt.in)
+			p := validProvider()
+			tt.mutate(&p)
+			_, err := svc.AddProvider(p)
 			if tt.wantErr != (err != nil) {
-				t.Fatalf("SaveProfile(%+v) err=%v, wantErr=%v", tt.in, err, tt.wantErr)
+				t.Fatalf("AddProvider(%+v) err=%v, wantErr=%v", p, err, tt.wantErr)
 			}
 		})
 	}
 }
 
-// TestSaveProfileNormalizesBaseURL: a remote http base URL with a trailing
+// TestAddProviderFirstBecomesActive: the first provider added is active; a
+// second one is not, and views never carry key values.
+func TestAddProviderFirstBecomesActive(t *testing.T) {
+	svc := newTestService(t)
+	id1 := addProvider(t, svc, validProvider())
+	p2 := validProvider()
+	p2.Name = "Second"
+	p2.Note = "backup endpoint"
+	id2 := addProvider(t, svc, p2)
+
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	if len(views) != 2 {
+		t.Fatalf("want 2 providers, got %+v", views)
+	}
+	if views[0].ID != id1 || !views[0].Active || views[1].ID != id2 || views[1].Active {
+		t.Fatalf("active flags wrong: %+v", views)
+	}
+	if views[1].Note != "backup endpoint" {
+		t.Fatalf("note not surfaced: %+v", views[1])
+	}
+	if !views[0].HasKey {
+		t.Fatal("HasKey=false after key was stored")
+	}
+	if id1 == id2 {
+		t.Fatal("generated provider IDs must be unique")
+	}
+}
+
+// TestUpdateProviderKeepsStoredKey: an empty incoming key keeps the stored
+// one (the UI never round-trips secrets); changed fields persist.
+func TestUpdateProviderKeepsStoredKey(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	id := addProvider(t, svc, validProvider())
+
+	update := validProvider()
+	update.ID = id
+	update.APIKey = ""
+	update.Model = "gpt-2"
+	if err := svc.UpdateProvider(update); err != nil {
+		t.Fatalf("UpdateProvider: %v", err)
+	}
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	if !views[0].HasKey || views[0].Model != "gpt-2" {
+		t.Fatalf("update lost key or model: %+v", views[0])
+	}
+	// ApplyOne must receive the preserved secret, proving it was kept on disk.
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-test" {
+		t.Fatalf("preserved key not applied: %+v", a.lastApplied)
+	}
+
+	unknown := validProvider()
+	unknown.ID = "nope"
+	if err := svc.UpdateProvider(unknown); err == nil {
+		t.Fatal("UpdateProvider unknown ID want error")
+	}
+}
+
+// TestSaveProviderNormalizesBaseURL: a remote http base URL with a trailing
 // slash is stored as https without the slash, while a localhost http base URL
 // is preserved on http so local model servers keep working.
-func TestSaveProfileNormalizesBaseURL(t *testing.T) {
+func TestSaveProviderNormalizesBaseURL(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -188,277 +295,113 @@ func TestSaveProfileNormalizesBaseURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newTestService(t)
-			p := validProfile()
+			p := validProvider()
 			p.BaseURL = tt.in
-			if err := svc.SaveProfile(p); err != nil {
-				t.Fatalf("SaveProfile: %v", err)
-			}
-			view, err := svc.GetProfile()
+			addProvider(t, svc, p)
+			views, err := svc.ListProviders()
 			if err != nil {
-				t.Fatalf("GetProfile: %v", err)
+				t.Fatalf("ListProviders: %v", err)
 			}
-			if view.BaseURL != tt.want {
-				t.Fatalf("stored BaseURL = %q, want %q", view.BaseURL, tt.want)
+			if views[0].BaseURL != tt.want {
+				t.Fatalf("stored BaseURL = %q, want %q", views[0].BaseURL, tt.want)
 			}
 		})
 	}
 }
 
-func TestSaveProfilePreservesKeyAndGetProfileHidesIt(t *testing.T) {
+// TestAddProviderNormalizesModels exercises trim, drop-empty, de-dupe (first
+// seen order), prepending the selected model, and model-name cleanup.
+func TestAddProviderNormalizesModels(t *testing.T) {
 	svc := newTestService(t)
-	if err := svc.SaveProfile(validProfile()); err != nil {
-		t.Fatalf("initial save: %v", err)
-	}
-	// Re-save with an empty key (masked UI submit): the stored key is kept and
-	// the changed fields are persisted.
-	update := validProfile()
-	update.APIKey = ""
-	update.Model = "gpt-2"
-	if err := svc.SaveProfile(update); err != nil {
-		t.Fatalf("update save: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if !view.HasKey {
-		t.Fatal("HasKey=false after key should have been preserved")
-	}
-	if view.Model != "gpt-2" {
-		t.Fatalf("model not updated: %q", view.Model)
-	}
-	// ApplyOne must receive the preserved secret, proving it was kept on disk.
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	svc2 := NewWithRegistry(reg(a), storeFrom(svc))
-	if _, err := svc2.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-test" {
-		t.Fatalf("preserved key not applied: %+v", a.lastApplied)
-	}
-}
-
-func TestGetProfileEmpty(t *testing.T) {
-	svc := newTestService(t)
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if view.HasKey || view.Model != "" || len(view.Models) != 0 {
-		t.Fatalf("expected zero ProfileView, got %+v", view)
-	}
-}
-
-// equalStrings reports whether two string slices are element-wise equal.
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// TestSaveProfileBackwardCompatModels: a profile saved with only a Model (no
-// Models) is read back with Models seeded from the selected Model.
-func TestSaveProfileBackwardCompatModels(t *testing.T) {
-	svc := newTestService(t)
-	// Save through the store directly to simulate pre-Models on-disk state.
-	st := &settings.State{ActiveProfile: &core.Profile{
-		APIKey: "sk-test", BaseURL: "https://api.example.com/v1", Model: "gpt-old",
-	}}
-	if err := storeFrom(svc).Save(st); err != nil {
-		t.Fatalf("seed save: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if !equalStrings(view.Models, []string{"gpt-old"}) {
-		t.Fatalf("backward-compat Models = %v, want [gpt-old]", view.Models)
-	}
-	if view.Model != "gpt-old" {
-		t.Fatalf("Model = %q, want gpt-old", view.Model)
-	}
-}
-
-// TestSaveProfileNormalizesModels exercises trim, drop-empty, de-dupe (first
-// seen order) and prepending the selected model when it is missing.
-func TestSaveProfileNormalizesModels(t *testing.T) {
-	svc := newTestService(t)
-	p := validProfile()
+	p := validProvider()
 	p.Model = "sel"
 	p.Models = []string{" a ", "b", "a", "", "  ", "b"}
-	if err := svc.SaveProfile(p); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	view, err := svc.GetProfile()
+	p.ModelNames = map[string]string{"a": "  nice  ", "b": "   ", "ghost": "gone"}
+	addProvider(t, svc, p)
+	views, err := svc.ListProviders()
 	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
+		t.Fatalf("ListProviders: %v", err)
 	}
-	if !equalStrings(view.Models, []string{"sel", "a", "b"}) {
-		t.Fatalf("normalized Models = %v, want [sel a b]", view.Models)
+	if !equalStrings(views[0].Models, []string{"sel", "a", "b"}) {
+		t.Fatalf("normalized Models = %v, want [sel a b]", views[0].Models)
 	}
-	if view.Model != "sel" {
-		t.Fatalf("Model = %q, want sel", view.Model)
+	if len(views[0].ModelNames) != 1 || views[0].ModelNames["a"] != "nice" {
+		t.Fatalf("ModelNames = %v, want map[a:nice]", views[0].ModelNames)
 	}
 }
 
-// TestSaveProfileNormalizesModelNames: display names are trimmed, and entries
-// that are blank or reference a model absent from Models are dropped. The kept
-// names round-trip through GetProfile.
-func TestSaveProfileNormalizesModelNames(t *testing.T) {
-	svc := newTestService(t)
-	p := validProfile()
-	p.Model = "a"
-	p.Models = []string{"a", "b"}
-	p.ModelNames = map[string]string{
-		"a":     "  opus4.8  ",
-		"b":     "   ",
-		"ghost": "gone",
-	}
-	if err := svc.SaveProfile(p); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if len(view.ModelNames) != 1 || view.ModelNames["a"] != "opus4.8" {
-		t.Fatalf("ModelNames = %v, want map[a:opus4.8]", view.ModelNames)
-	}
-}
-
-// TestModelNamesPersistenceRoundtrip: display names survive an app restart.
-// SaveProfile must write model_names into the settings file on disk, and a
-// brand-new Service over a brand-new Store at the same path (simulating a
-// relaunch/refresh) must read them back intact via GetProfile AND surface them
-// per tool via ListTools — including when a per-tool model override is set
-// (the effectiveProfileFor path used by viewFor).
-func TestModelNamesPersistenceRoundtrip(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+// TestRemoveProvider: removing the active provider promotes the first
+// remaining one and prunes per-tool overrides pointing at the removed one;
+// removing the last provider leaves an empty state.
+func TestRemoveProvider(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
 	svc := newTestService(t, a)
-	p := multiModelProfile("opus-id", "gpt-id")
-	p.ModelNames = map[string]string{"opus-id": "opus4.8", "gpt-id": "gpt5.5"}
-	if err := svc.SaveProfile(p); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	if err := svc.SetToolModel("alpha", "gpt-id"); err != nil {
-		t.Fatalf("SetToolModel: %v", err)
-	}
-
-	// The names must be present in the persisted settings file itself.
-	raw, err := os.ReadFile(storeFrom(svc).Path)
-	if err != nil {
-		t.Fatalf("read settings file: %v", err)
-	}
-	if !strings.Contains(string(raw), `"model_names"`) ||
-		!strings.Contains(string(raw), `"opus4.8"`) ||
-		!strings.Contains(string(raw), `"gpt5.5"`) {
-		t.Fatal("settings file does not contain the saved model_names")
+	id1 := addProvider(t, svc, validProvider())
+	p2 := validProvider()
+	p2.Name = "Second"
+	id2 := addProvider(t, svc, p2)
+	if err := svc.SetToolProvider("alpha", id2); err != nil {
+		t.Fatalf("SetToolProvider: %v", err)
 	}
 
-	// Simulate a restart: fresh Service + fresh Store over the same file.
-	reloaded := NewWithRegistry(reg(a), settings.NewStore(storeFrom(svc).Path))
-	want := map[string]string{"opus-id": "opus4.8", "gpt-id": "gpt5.5"}
-	view, err := reloaded.GetProfile()
+	if err := svc.RemoveProvider(id2); err != nil {
+		t.Fatalf("RemoveProvider: %v", err)
+	}
+	st, err := storeFrom(svc).Load()
 	if err != nil {
-		t.Fatalf("GetProfile after reload: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if !maps.Equal(view.ModelNames, want) {
-		t.Fatalf("ProfileView.ModelNames after reload = %v, want %v", view.ModelNames, want)
+	if len(st.Providers) != 1 || st.ActiveProviderID != id1 {
+		t.Fatalf("state after remove wrong: %+v", st)
 	}
-	views, err := reloaded.ListTools()
-	if err != nil {
-		t.Fatalf("ListTools after reload: %v", err)
+	if _, ok := st.ToolProviders["alpha"]; ok {
+		t.Fatalf("tool override on removed provider must be pruned: %v", st.ToolProviders)
 	}
-	if !maps.Equal(views[0].ModelNames, want) {
-		t.Fatalf("ToolView.ModelNames after reload = %v, want %v", views[0].ModelNames, want)
+
+	// Removing the active provider promotes nothing when it is the last one.
+	if err := svc.RemoveProvider(id1); err != nil {
+		t.Fatalf("RemoveProvider last: %v", err)
 	}
-	if views[0].SelectedModel != "gpt-id" {
-		t.Fatalf("SelectedModel after reload = %q, want gpt-id", views[0].SelectedModel)
+	if st, _ := storeFrom(svc).Load(); len(st.Providers) != 0 || st.ActiveProviderID != "" {
+		t.Fatalf("state after removing last provider: %+v", st)
+	}
+	if err := svc.RemoveProvider("nope"); err == nil {
+		t.Fatal("RemoveProvider unknown ID want error")
 	}
 }
 
-// TestSaveProfileModelAlreadyInModels: when the selected model is already a
-// member it is not duplicated and order is preserved.
-func TestSaveProfileModelAlreadyInModels(t *testing.T) {
-	svc := newTestService(t)
-	p := validProfile()
-	p.Model = "b"
-	p.Models = []string{"a", "b", "c"}
-	if err := svc.SaveProfile(p); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
+// TestSetActiveProvider: switching the active provider changes what ApplyOne
+// writes; an unknown ID errors.
+func TestSetActiveProvider(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	addProvider(t, svc, validProvider())
+	p2 := validProvider()
+	p2.Name = "Second"
+	p2.APIKey = "sk-second"
+	id2 := addProvider(t, svc, p2)
+
+	if err := svc.SetActiveProvider(id2); err != nil {
+		t.Fatalf("SetActiveProvider: %v", err)
 	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
 	}
-	if !equalStrings(view.Models, []string{"a", "b", "c"}) {
-		t.Fatalf("Models = %v, want [a b c]", view.Models)
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-second" {
+		t.Fatalf("active provider not applied: %+v", a.lastApplied)
+	}
+	if err := svc.SetActiveProvider("nope"); err == nil {
+		t.Fatal("SetActiveProvider unknown ID want error")
 	}
 }
 
-// TestSaveProfileEmptyModelsSeededFromModel: an empty Models list with a
-// selected Model becomes [Model].
-func TestSaveProfileEmptyModelsSeededFromModel(t *testing.T) {
-	svc := newTestService(t)
-	p := validProfile()
-	p.Model = "only"
-	p.Models = []string{"  ", ""}
-	if err := svc.SaveProfile(p); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if !equalStrings(view.Models, []string{"only"}) {
-		t.Fatalf("Models = %v, want [only]", view.Models)
-	}
-}
-
-// TestSaveProfileRoundTripModels: a multi-model profile round-trips through
-// save+reload with Models and the selected Model intact.
-func TestSaveProfileRoundTripModels(t *testing.T) {
-	svc := newTestService(t)
-	p := validProfile()
-	p.Model = "m2"
-	p.Models = []string{"m1", "m2", "m3"}
-	p.SmallFastModel = " small "
-	if err := svc.SaveProfile(p); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if !equalStrings(view.Models, []string{"m1", "m2", "m3"}) {
-		t.Fatalf("Models = %v, want [m1 m2 m3]", view.Models)
-	}
-	if view.Model != "m2" {
-		t.Fatalf("Model = %q, want m2", view.Model)
-	}
-	if view.SmallFastModel != "small" {
-		t.Fatalf("SmallFastModel = %q, want trimmed 'small'", view.SmallFastModel)
-	}
-}
-
-// TestSaveProfileRejectsModelNotInModels: when normalization cannot make the
-// selected model a member, Validate must reject it. This is reached by saving a
-// profile whose Models has entries but whose (already-present-after-prepend)
-// invariant is deliberately broken via a direct on-disk state, proving Validate
-// guards reads/applies. Here we test the SaveProfile path indirectly: since
-// normalization always prepends the selected model, SaveProfile cannot produce
-// this state, so we assert Validate (the guard) rejects it directly.
-func TestValidateRejectsModelNotInModels(t *testing.T) {
-	p := core.Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: []string{"x", "y"}}
-	if err := p.Validate(); err == nil {
-		t.Fatal("Validate accepted Model not present in non-empty Models")
-	}
+// multiModelProvider is a valid provider carrying a Models list for per-tool
+// model tests. The default Model is the first entry.
+func multiModelProvider(models ...string) core.Provider {
+	p := validProvider()
+	p.Model = models[0]
+	p.Models = models
+	return p
 }
 
 func TestApplyOneAndRestoreOne(t *testing.T) {
@@ -468,9 +411,7 @@ func TestApplyOneAndRestoreOne(t *testing.T) {
 		restoreRes: core.RestoreResult{Message: "restored"},
 	}
 	svc := newTestService(t, a)
-	if err := svc.SaveProfile(validProfile()); err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	addProvider(t, svc, validProvider())
 
 	res, err := svc.ApplyOne("alpha")
 	if err != nil || res.Message != "applied" {
@@ -492,14 +433,14 @@ func TestApplyOneAndRestoreOne(t *testing.T) {
 	}
 }
 
-func TestApplyOneNoProfile(t *testing.T) {
+func TestApplyOneNoProvider(t *testing.T) {
 	a := &fakeAdapter{id: "alpha", name: "Alpha"}
 	svc := newTestService(t, a)
 	if _, err := svc.ApplyOne("alpha"); err == nil {
-		t.Fatal("ApplyOne without saved profile want error")
+		t.Fatal("ApplyOne without provider want error")
 	}
 	if a.applyCalls != 0 {
-		t.Fatalf("adapter applied despite missing profile: %d", a.applyCalls)
+		t.Fatalf("adapter applied despite missing provider: %d", a.applyCalls)
 	}
 }
 
@@ -508,9 +449,7 @@ func TestApplyAllRestoreAllAggregation(t *testing.T) {
 	bad := &fakeAdapter{id: "bad", name: "Bad", applyErr: errors.New("apply failed"),
 		restoreErr: errors.New("restore failed")}
 	svc := newTestService(t, ok, bad)
-	if err := svc.SaveProfile(validProfile()); err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	addProvider(t, svc, validProvider())
 
 	results, err := svc.ApplyAll()
 	if err != nil {
@@ -540,10 +479,428 @@ func TestApplyAllRestoreAllAggregation(t *testing.T) {
 	}
 }
 
-func TestApplyAllNoProfile(t *testing.T) {
+func TestApplyAllNoProvider(t *testing.T) {
 	svc := newTestService(t, &fakeAdapter{id: "alpha", name: "Alpha"})
 	if results, err := svc.ApplyAll(); err == nil || results != nil {
-		t.Fatalf("ApplyAll without profile = %+v, %v; want nil + error", results, err)
+		t.Fatalf("ApplyAll without provider = %+v, %v; want nil + error", results, err)
+	}
+}
+
+// TestSetToolModelPersistsAndValidates: a member model persists, a non-member
+// is rejected, "" clears the entry, and an unknown tool errors.
+func TestSetToolModelPersistsAndValidates(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	addProvider(t, svc, multiModelProvider("gpt-test", "m2"))
+
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel member: %v", err)
+	}
+	st, err := storeFrom(svc).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if st.ToolModels["alpha"] != "m2" {
+		t.Fatalf("ToolModels = %v, want alpha=m2", st.ToolModels)
+	}
+
+	if err := svc.SetToolModel("alpha", "nope"); err == nil {
+		t.Fatal("SetToolModel non-member want error")
+	}
+	// The rejected selection must not overwrite the previously stored one.
+	if st, _ := storeFrom(svc).Load(); st.ToolModels["alpha"] != "m2" {
+		t.Fatalf("rejected model mutated state: %v", st.ToolModels)
+	}
+
+	if err := svc.SetToolModel("alpha", ""); err != nil {
+		t.Fatalf("SetToolModel clear: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolModels["alpha"] != "" {
+		t.Fatalf("clear did not delete entry: %v", st.ToolModels)
+	}
+
+	if err := svc.SetToolModel("missing", "m2"); err == nil {
+		t.Fatal("SetToolModel unknown tool want error")
+	}
+}
+
+// TestSetToolModelValidatesAgainstEffectiveProvider: with a per-tool provider
+// override in place, SetToolModel validates against THAT provider's models,
+// not the active provider's.
+func TestSetToolModelValidatesAgainstEffectiveProvider(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	addProvider(t, svc, multiModelProvider("gpt-test", "m2"))
+	p2 := multiModelProvider("other-default", "other-2")
+	p2.Name = "Other"
+	id2 := addProvider(t, svc, p2)
+	if err := svc.SetToolProvider("alpha", id2); err != nil {
+		t.Fatalf("SetToolProvider: %v", err)
+	}
+
+	if err := svc.SetToolModel("alpha", "other-2"); err != nil {
+		t.Fatalf("SetToolModel against override provider: %v", err)
+	}
+	// The active provider's model is NOT valid for this tool anymore.
+	if err := svc.SetToolModel("alpha", "m2"); err == nil {
+		t.Fatal("SetToolModel must validate against the effective provider")
+	}
+}
+
+// TestApplyOneUsesPerToolModel: ApplyOne writes the per-tool model when one is
+// selected, and falls back to the provider default otherwise.
+func TestApplyOneUsesPerToolModel(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	addProvider(t, svc, multiModelProvider("gpt-test", "m2"))
+
+	// No selection yet: provider default.
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne default: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.Model != "gpt-test" {
+		t.Fatalf("default apply model = %+v, want gpt-test", a.lastApplied)
+	}
+
+	// With a selection: the chosen model is applied.
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne selected: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.Model != "m2" {
+		t.Fatalf("selected apply model = %+v, want m2", a.lastApplied)
+	}
+}
+
+// TestSetToolProviderPersistsAndValidates: a managed provider persists, an
+// unknown one is rejected, "" clears the entry, and an unknown tool errors.
+func TestSetToolProviderPersistsAndValidates(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	addProvider(t, svc, validProvider())
+	p2 := validProvider()
+	p2.Name = "Second"
+	id2 := addProvider(t, svc, p2)
+
+	if err := svc.SetToolProvider("alpha", id2); err != nil {
+		t.Fatalf("SetToolProvider member: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolProviders["alpha"] != id2 {
+		t.Fatalf("ToolProviders = %v, want alpha=%s", st.ToolProviders, id2)
+	}
+
+	if err := svc.SetToolProvider("alpha", "nope"); err == nil {
+		t.Fatal("SetToolProvider unknown provider want error")
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolProviders["alpha"] != id2 {
+		t.Fatalf("rejected provider mutated state: %v", st.ToolProviders)
+	}
+
+	if err := svc.SetToolProvider("alpha", ""); err != nil {
+		t.Fatalf("SetToolProvider clear: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolProviders["alpha"] != "" {
+		t.Fatalf("clear did not delete entry: %v", st.ToolProviders)
+	}
+
+	if err := svc.SetToolProvider("missing", id2); err == nil {
+		t.Fatal("SetToolProvider unknown tool want error")
+	}
+}
+
+// TestApplyOneUsesPerToolProvider: ApplyOne resolves the tool's provider
+// override (endpoint + key), falls back to the active provider otherwise, and
+// ListTools surfaces the override.
+func TestApplyOneUsesPerToolProvider(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	addProvider(t, svc, validProvider())
+	p2 := validProvider()
+	p2.Name = "Second"
+	p2.APIKey = "sk-second"
+	p2.BaseURL = "https://second.example.com/v1"
+	id2 := addProvider(t, svc, p2)
+
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne default: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-test" {
+		t.Fatalf("default apply key = %+v, want sk-test", a.lastApplied)
+	}
+
+	if err := svc.SetToolProvider("alpha", id2); err != nil {
+		t.Fatalf("SetToolProvider: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne override: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-second" ||
+		a.lastApplied.BaseURL != "https://second.example.com/v1" {
+		t.Fatalf("override provider not applied: %+v", a.lastApplied)
+	}
+
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	tv := views[0]
+	if tv.SelectedProviderID != id2 || tv.ProviderName != "Second" || !tv.ProviderOverridden {
+		t.Fatalf("override not surfaced: %+v", tv)
+	}
+	if len(tv.Providers) != 2 {
+		t.Fatalf("provider refs missing: %+v", tv.Providers)
+	}
+}
+
+// TestStaleToolModelFallsBackAcrossProviders: a model selected under one
+// provider silently falls back to the new provider's default when the tool is
+// switched to a provider that does not offer it — never an error.
+func TestStaleToolModelFallsBackAcrossProviders(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	addProvider(t, svc, multiModelProvider("gpt-test", "m2"))
+	p2 := multiModelProvider("other-default")
+	p2.Name = "Other"
+	id2 := addProvider(t, svc, p2)
+
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+	if err := svc.SetToolProvider("alpha", id2); err != nil {
+		t.Fatalf("SetToolProvider: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.Model != "other-default" {
+		t.Fatalf("stale model must fall back to provider default: %+v", a.lastApplied)
+	}
+}
+
+// TestListToolsModelsAndSelectedModel: ListTools surfaces the effective
+// provider's model list and the effective per-tool selected model.
+func TestListToolsModelsAndSelectedModel(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	addProvider(t, svc, multiModelProvider("gpt-test", "m2"))
+
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if !equalStrings(views[0].Models, []string{"gpt-test", "m2"}) {
+		t.Fatalf("Models = %v, want [gpt-test m2]", views[0].Models)
+	}
+	if views[0].SelectedModel != "gpt-test" {
+		t.Fatalf("SelectedModel = %q, want default gpt-test", views[0].SelectedModel)
+	}
+
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+	views, err = svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools 2: %v", err)
+	}
+	if views[0].SelectedModel != "m2" {
+		t.Fatalf("SelectedModel = %q, want m2", views[0].SelectedModel)
+	}
+}
+
+// TestListToolsNoProviderEmptyFields: with no provider configured, the
+// listing still works and reports empty model/provider fields.
+func TestListToolsNoProviderEmptyFields(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", status: core.StatusDefault}
+	svc := newTestService(t, a)
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	v := views[0]
+	if len(v.Models) != 0 || v.SelectedModel != "" || len(v.Providers) != 0 ||
+		v.SelectedProviderID != "" || v.ProviderName != "" || v.ProviderOverridden {
+		t.Fatalf("expected empty model/provider fields, got %+v", v)
+	}
+}
+
+// TestApplyThenListToolsStaysApplied: after applying a non-default per-tool
+// model, ListTools must recompute status against the SAME effective model so
+// the badge stays applied_by_mintswitch (no false modified_externally).
+func TestApplyThenListToolsStaysApplied(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	addProvider(t, svc, multiModelProvider("gpt-test", "m2"))
+	if err := svc.SetToolModel("alpha", "m2"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.Model != "m2" {
+		t.Fatalf("applied model = %+v, want m2", a.lastApplied)
+	}
+	// The adapter persisted a fingerprint over the model it actually wrote.
+	a.statusModel = a.lastApplied.Model
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if views[0].Status != "applied_by_mintswitch" {
+		t.Fatalf("status = %q, want applied_by_mintswitch (effective model mismatch)", views[0].Status)
+	}
+}
+
+// TestUpdateProviderPrunesToolModels: shrinking a provider's Models drops
+// per-tool selections that point to a now-absent model for tools whose
+// effective provider is that one, while valid ones are kept.
+func TestUpdateProviderPrunesToolModels(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	b := &fakeAdapter{id: "beta", name: "Beta"}
+	svc := newTestService(t, a, b)
+	id := addProvider(t, svc, multiModelProvider("a", "b", "c"))
+	if err := svc.SetToolModel("alpha", "b"); err != nil {
+		t.Fatalf("SetToolModel alpha: %v", err)
+	}
+	if err := svc.SetToolModel("beta", "c"); err != nil {
+		t.Fatalf("SetToolModel beta: %v", err)
+	}
+
+	// Shrink Models to [a, b]; "c" is gone so beta's selection must be pruned.
+	shrunk := multiModelProvider("a", "b")
+	shrunk.ID = id
+	if err := svc.UpdateProvider(shrunk); err != nil {
+		t.Fatalf("UpdateProvider shrink: %v", err)
+	}
+	st, err := storeFrom(svc).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if st.ToolModels["alpha"] != "b" {
+		t.Fatalf("alpha selection should survive: %v", st.ToolModels)
+	}
+	if _, ok := st.ToolModels["beta"]; ok {
+		t.Fatalf("beta selection should be pruned: %v", st.ToolModels)
+	}
+}
+
+// TestModelNamesPersistenceRoundtrip: display names survive an app restart.
+// AddProvider must write model_names into the settings file on disk, and a
+// brand-new Service over a brand-new Store at the same path (simulating a
+// relaunch/refresh) must read them back intact via ListProviders AND surface
+// them per tool via ListTools — including when a per-tool model override is
+// set (the effectiveProfileFor path used by viewFor).
+func TestModelNamesPersistenceRoundtrip(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	p := multiModelProvider("opus-id", "gpt-id")
+	p.ModelNames = map[string]string{"opus-id": "opus4.8", "gpt-id": "gpt5.5"}
+	addProvider(t, svc, p)
+	if err := svc.SetToolModel("alpha", "gpt-id"); err != nil {
+		t.Fatalf("SetToolModel: %v", err)
+	}
+
+	// The names must be present in the persisted settings file itself.
+	raw, err := os.ReadFile(storeFrom(svc).Path)
+	if err != nil {
+		t.Fatalf("read settings file: %v", err)
+	}
+	if !strings.Contains(string(raw), `"model_names"`) ||
+		!strings.Contains(string(raw), `"opus4.8"`) ||
+		!strings.Contains(string(raw), `"gpt5.5"`) {
+		t.Fatal("settings file does not contain the saved model_names")
+	}
+
+	// Simulate a restart: fresh Service + fresh Store over the same file.
+	reloaded := NewWithRegistry(reg(a), settings.NewStore(storeFrom(svc).Path))
+	want := map[string]string{"opus-id": "opus4.8", "gpt-id": "gpt5.5"}
+	pviews, err := reloaded.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders after reload: %v", err)
+	}
+	if !maps.Equal(pviews[0].ModelNames, want) {
+		t.Fatalf("ProviderView.ModelNames after reload = %v, want %v", pviews[0].ModelNames, want)
+	}
+	views, err := reloaded.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools after reload: %v", err)
+	}
+	if !maps.Equal(views[0].ModelNames, want) {
+		t.Fatalf("ToolView.ModelNames after reload = %v, want %v", views[0].ModelNames, want)
+	}
+	if views[0].SelectedModel != "gpt-id" {
+		t.Fatalf("SelectedModel after reload = %q, want gpt-id", views[0].SelectedModel)
+	}
+}
+
+// TestV1StateMigratesToDefaultProvider: a v1 single-key on-disk state
+// surfaces as one active Provider named "Default" with zero user action, and
+// still applies.
+func TestV1StateMigratesToDefaultProvider(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha"}
+	svc := newTestService(t, a)
+	v1 := `{"active_profile": {"api_key": "sk-v1", "base_url": "https://api.example.com/v1", "model": "m"}}`
+	if err := os.WriteFile(storeFrom(svc).Path, []byte(v1), 0o600); err != nil {
+		t.Fatalf("seed v1 file: %v", err)
+	}
+	pviews, err := svc.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	if len(pviews) != 1 || pviews[0].ID != core.DefaultProviderID ||
+		pviews[0].Name != "Default" || !pviews[0].Active || !pviews[0].HasKey {
+		t.Fatalf("v1 migration view wrong: %+v", pviews)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-v1" {
+		t.Fatalf("v1 key not applied: %+v", a.lastApplied)
+	}
+}
+
+// TestWave2StateMigratesToProviders: a Wave 2 multi-key on-disk state
+// surfaces as one provider per key entry, the active key's provider is
+// active, tool_keys become per-tool provider overrides, and apply resolves
+// them.
+func TestWave2StateMigratesToProviders(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	w2 := `{
+  "active_profile": {"base_url": "https://api.example.com/v1", "model": "m", "models": ["m", "m2"],
+    "api_keys": [
+      {"id": "k1", "provider": "OpenAI", "key": "sk-one"},
+      {"id": "k2", "provider": "MintRouter", "key": "sk-two"}
+    ],
+    "active_key_id": "k2"},
+  "tool_keys": {"alpha": "k1"},
+  "tool_models": {"alpha": "m2"}
+}`
+	if err := os.WriteFile(storeFrom(svc).Path, []byte(w2), 0o600); err != nil {
+		t.Fatalf("seed wave2 file: %v", err)
+	}
+	pviews, err := svc.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	if len(pviews) != 2 || pviews[0].Name != "OpenAI" || pviews[1].Name != "MintRouter" || !pviews[1].Active {
+		t.Fatalf("wave2 migration views wrong: %+v", pviews)
+	}
+	// alpha's old key override resolves as a provider override, and its old
+	// model override stays valid.
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-one" || a.lastApplied.Model != "m2" {
+		t.Fatalf("wave2 overrides not resolved: %+v", a.lastApplied)
+	}
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if views[0].SelectedProviderID != "k1" || views[0].ProviderName != "OpenAI" || !views[0].ProviderOverridden {
+		t.Fatalf("wave2 override not surfaced: %+v", views[0])
 	}
 }
 
@@ -673,518 +1030,6 @@ func TestInstallCommandFailureReportsOutput(t *testing.T) {
 		t.Fatalf("expected failed result carrying output: %+v", res)
 	}
 }
-
-// multiModelProfile is a valid profile carrying a Models list for per-tool
-// model tests. The selected Model is the first entry.
-func multiModelProfile(models ...string) core.Profile {
-	p := validProfile()
-	p.Model = models[0]
-	p.Models = models
-	return p
-}
-
-// TestSetToolModelPersistsAndValidates: a member model persists, a non-member is
-// rejected, "" clears the entry, and an unknown tool errors.
-func TestSetToolModelPersistsAndValidates(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-
-	if err := svc.SetToolModel("alpha", "m2"); err != nil {
-		t.Fatalf("SetToolModel member: %v", err)
-	}
-	st, err := storeFrom(svc).Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if st.ToolModels["alpha"] != "m2" {
-		t.Fatalf("ToolModels = %v, want alpha=m2", st.ToolModels)
-	}
-
-	if err := svc.SetToolModel("alpha", "nope"); err == nil {
-		t.Fatal("SetToolModel non-member want error")
-	}
-	// The rejected selection must not overwrite the previously stored one.
-	if st, _ := storeFrom(svc).Load(); st.ToolModels["alpha"] != "m2" {
-		t.Fatalf("rejected model mutated state: %v", st.ToolModels)
-	}
-
-	if err := svc.SetToolModel("alpha", ""); err != nil {
-		t.Fatalf("SetToolModel clear: %v", err)
-	}
-	if st, _ := storeFrom(svc).Load(); st.ToolModels["alpha"] != "" {
-		t.Fatalf("clear did not delete entry: %v", st.ToolModels)
-	}
-
-	if err := svc.SetToolModel("missing", "m2"); err == nil {
-		t.Fatal("SetToolModel unknown tool want error")
-	}
-}
-
-// TestApplyOneUsesPerToolModel: ApplyOne writes the per-tool model when one is
-// selected, and falls back to the profile default otherwise.
-func TestApplyOneUsesPerToolModel(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-
-	// No selection yet: profile default.
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne default: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.Model != "gpt-test" {
-		t.Fatalf("default apply model = %+v, want gpt-test", a.lastApplied)
-	}
-
-	// With a selection: the chosen model is applied.
-	if err := svc.SetToolModel("alpha", "m2"); err != nil {
-		t.Fatalf("SetToolModel: %v", err)
-	}
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne selected: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.Model != "m2" {
-		t.Fatalf("selected apply model = %+v, want m2", a.lastApplied)
-	}
-}
-
-// TestListToolsModelsAndSelectedModel: ListTools surfaces the profile model list
-// and the effective per-tool selected model.
-func TestListToolsModelsAndSelectedModel(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-
-	views, err := svc.ListTools()
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	if !equalStrings(views[0].Models, []string{"gpt-test", "m2"}) {
-		t.Fatalf("Models = %v, want [gpt-test m2]", views[0].Models)
-	}
-	if views[0].SelectedModel != "gpt-test" {
-		t.Fatalf("SelectedModel = %q, want default gpt-test", views[0].SelectedModel)
-	}
-
-	if err := svc.SetToolModel("alpha", "m2"); err != nil {
-		t.Fatalf("SetToolModel: %v", err)
-	}
-	views, err = svc.ListTools()
-	if err != nil {
-		t.Fatalf("ListTools 2: %v", err)
-	}
-	if views[0].SelectedModel != "m2" {
-		t.Fatalf("SelectedModel = %q, want m2", views[0].SelectedModel)
-	}
-}
-
-// TestListToolsNoProfileEmptyModelFields: with no saved profile, the listing
-// still works and reports empty Models/SelectedModel (zero-profile behavior).
-func TestListToolsNoProfileEmptyModelFields(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha", status: core.StatusDefault}
-	svc := newTestService(t, a)
-	views, err := svc.ListTools()
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	if len(views[0].Models) != 0 || views[0].SelectedModel != "" {
-		t.Fatalf("expected empty model fields, got %+v", views[0])
-	}
-}
-
-// TestApplyThenListToolsStaysApplied: after applying a non-default per-tool
-// model, ListTools must recompute status against the SAME effective model so the
-// badge stays applied_by_mintswitch (no false modified_externally). The fake
-// adapter's statusModel simulates a Model-bearing fingerprint.
-func TestApplyThenListToolsStaysApplied(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiModelProfile("gpt-test", "m2")); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	if err := svc.SetToolModel("alpha", "m2"); err != nil {
-		t.Fatalf("SetToolModel: %v", err)
-	}
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.Model != "m2" {
-		t.Fatalf("applied model = %+v, want m2", a.lastApplied)
-	}
-	// The adapter persisted a fingerprint over the model it actually wrote.
-	a.statusModel = a.lastApplied.Model
-	views, err := svc.ListTools()
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	if views[0].Status != "applied_by_mintswitch" {
-		t.Fatalf("status = %q, want applied_by_mintswitch (effective model mismatch)", views[0].Status)
-	}
-}
-
-// TestSaveProfilePrunesToolModels: shrinking the Models list drops per-tool
-// selections that point to a now-absent model, while valid ones are kept.
-func TestSaveProfilePrunesToolModels(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	b := &fakeAdapter{id: "beta", name: "Beta"}
-	svc := newTestService(t, a, b)
-	if err := svc.SaveProfile(multiModelProfile("a", "b", "c")); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	if err := svc.SetToolModel("alpha", "b"); err != nil {
-		t.Fatalf("SetToolModel alpha: %v", err)
-	}
-	if err := svc.SetToolModel("beta", "c"); err != nil {
-		t.Fatalf("SetToolModel beta: %v", err)
-	}
-
-	// Shrink Models to [a, b]; "c" is gone so beta's selection must be pruned.
-	if err := svc.SaveProfile(multiModelProfile("a", "b")); err != nil {
-		t.Fatalf("SaveProfile shrink: %v", err)
-	}
-	st, err := storeFrom(svc).Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if st.ToolModels["alpha"] != "b" {
-		t.Fatalf("alpha selection should survive: %v", st.ToolModels)
-	}
-	if _, ok := st.ToolModels["beta"]; ok {
-		t.Fatalf("beta selection should be pruned: %v", st.ToolModels)
-	}
-}
-
-// multiKeyProfile is a valid profile carrying a managed key list for
-// multi-key tests. The first entry is active.
-func multiKeyProfile() core.Profile {
-	p := validProfile()
-	p.APIKey = ""
-	p.APIKeys = []core.APIKeyEntry{
-		{ID: "k1", Provider: "OpenAI", Key: "sk-one"},
-		{ID: "k2", Provider: "MintRouter", Key: "sk-two"},
-	}
-	p.ActiveKeyID = "k1"
-	return p
-}
-
-// TestSaveProfileMultiKeyAndViewsHideValues: a multi-key profile saves, the
-// effective APIKey mirrors the active entry, and neither ProfileView nor
-// ToolView ever carries a key value — only provider names + active flag.
-func TestSaveProfileMultiKeyAndViewsHideValues(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if !view.HasKey || len(view.Keys) != 2 {
-		t.Fatalf("Keys view wrong: %+v", view)
-	}
-	if view.Keys[0].Provider != "OpenAI" || !view.Keys[0].Active ||
-		view.Keys[1].Provider != "MintRouter" || view.Keys[1].Active {
-		t.Fatalf("provider/active mapping wrong: %+v", view.Keys)
-	}
-
-	views, err := svc.ListTools()
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	tv := views[0]
-	if len(tv.Keys) != 2 || tv.SelectedKeyID != "k1" || tv.KeyProvider != "OpenAI" || tv.KeyOverridden {
-		t.Fatalf("tool key fields wrong: %+v", tv)
-	}
-
-	// The applied profile carries the active entry's value.
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-one" {
-		t.Fatalf("effective key not applied: %+v", a.lastApplied)
-	}
-}
-
-// TestSaveProfileKeepsStoredKeyValues: re-submitting the key list with empty
-// Key values (the UI never round-trips secrets) keeps every stored value, and
-// a legacy submission without APIKeys keeps the whole managed list.
-func TestSaveProfileKeepsStoredKeyValues(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
-		t.Fatalf("initial save: %v", err)
-	}
-
-	// UI resubmits the list without values, switching the active key.
-	update := multiKeyProfile()
-	for i := range update.APIKeys {
-		update.APIKeys[i].Key = ""
-	}
-	update.ActiveKeyID = "k2"
-	if err := svc.SaveProfile(update); err != nil {
-		t.Fatalf("update save: %v", err)
-	}
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-two" {
-		t.Fatalf("stored value not preserved on empty resubmit: %+v", a.lastApplied)
-	}
-
-	// Legacy submission (no APIKeys, empty APIKey) keeps the managed list.
-	legacy := validProfile()
-	legacy.APIKey = ""
-	legacy.Model = "gpt-new"
-	if err := svc.SaveProfile(legacy); err != nil {
-		t.Fatalf("legacy save: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if len(view.Keys) != 2 || view.Model != "gpt-new" {
-		t.Fatalf("legacy save dropped keys or model: %+v", view)
-	}
-}
-
-// TestSaveProfileGeneratesKeyIDs: entries submitted without an ID (newly added
-// in the UI) get unique generated IDs.
-func TestSaveProfileGeneratesKeyIDs(t *testing.T) {
-	svc := newTestService(t)
-	p := multiKeyProfile()
-	p.APIKeys = append(p.APIKeys, core.APIKeyEntry{Provider: "New", Key: "sk-three"})
-	if err := svc.SaveProfile(p); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if len(view.Keys) != 3 {
-		t.Fatalf("Keys = %+v, want 3 entries", view.Keys)
-	}
-	seen := map[string]bool{}
-	for _, k := range view.Keys {
-		if k.ID == "" || seen[k.ID] {
-			t.Fatalf("missing or duplicate generated ID: %+v", view.Keys)
-		}
-		seen[k.ID] = true
-	}
-}
-
-// TestV1ProfileMigratesToDefaultKey: a v1 single-key on-disk profile surfaces
-// as one active entry labeled "Default" with zero user action, and still
-// applies.
-func TestV1ProfileMigratesToDefaultKey(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	svc := newTestService(t, a)
-	st := &settings.State{ActiveProfile: &core.Profile{
-		APIKey: "sk-v1", BaseURL: "https://api.example.com/v1", Model: "m",
-	}}
-	if err := storeFrom(svc).Save(st); err != nil {
-		t.Fatalf("seed save: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if len(view.Keys) != 1 || view.Keys[0].ID != core.DefaultKeyID ||
-		view.Keys[0].Provider != "Default" || !view.Keys[0].Active {
-		t.Fatalf("v1 migration view wrong: %+v", view.Keys)
-	}
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-v1" {
-		t.Fatalf("v1 key not applied: %+v", a.lastApplied)
-	}
-}
-
-// TestSetToolKeyPersistsAndValidates: a member key persists, a non-member is
-// rejected, "" clears the entry, and an unknown tool errors.
-func TestSetToolKeyPersistsAndValidates(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-
-	if err := svc.SetToolKey("alpha", "k2"); err != nil {
-		t.Fatalf("SetToolKey member: %v", err)
-	}
-	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "k2" {
-		t.Fatalf("ToolKeys = %v, want alpha=k2", st.ToolKeys)
-	}
-
-	if err := svc.SetToolKey("alpha", "nope"); err == nil {
-		t.Fatal("SetToolKey non-member want error")
-	}
-	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "k2" {
-		t.Fatalf("rejected key mutated state: %v", st.ToolKeys)
-	}
-
-	if err := svc.SetToolKey("alpha", ""); err != nil {
-		t.Fatalf("SetToolKey clear: %v", err)
-	}
-	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "" {
-		t.Fatalf("clear did not delete entry: %v", st.ToolKeys)
-	}
-
-	if err := svc.SetToolKey("missing", "k2"); err == nil {
-		t.Fatal("SetToolKey unknown tool want error")
-	}
-}
-
-// TestApplyOneUsesPerToolKey: ApplyOne writes the per-tool key when one is
-// selected, falls back to the active key otherwise, and ListTools surfaces
-// the override.
-func TestApplyOneUsesPerToolKey(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne default: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-one" {
-		t.Fatalf("default apply key = %+v, want sk-one", a.lastApplied)
-	}
-
-	if err := svc.SetToolKey("alpha", "k2"); err != nil {
-		t.Fatalf("SetToolKey: %v", err)
-	}
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne override: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-two" {
-		t.Fatalf("override apply key = %+v, want sk-two", a.lastApplied)
-	}
-
-	views, err := svc.ListTools()
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	tv := views[0]
-	if tv.SelectedKeyID != "k2" || tv.KeyProvider != "MintRouter" || !tv.KeyOverridden {
-		t.Fatalf("override not surfaced: %+v", tv)
-	}
-}
-
-// TestSaveProfilePrunesToolKeys: removing a key entry from the saved profile
-// drops per-tool selections that point at it, while valid ones are kept.
-func TestSaveProfilePrunesToolKeys(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	b := &fakeAdapter{id: "beta", name: "Beta"}
-	svc := newTestService(t, a, b)
-	if err := svc.SaveProfile(multiKeyProfile()); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-	if err := svc.SetToolKey("alpha", "k1"); err != nil {
-		t.Fatalf("SetToolKey alpha: %v", err)
-	}
-	if err := svc.SetToolKey("beta", "k2"); err != nil {
-		t.Fatalf("SetToolKey beta: %v", err)
-	}
-
-	// Re-save without k2; beta's selection must be pruned.
-	shrunk := multiKeyProfile()
-	shrunk.APIKeys = shrunk.APIKeys[:1]
-	if err := svc.SaveProfile(shrunk); err != nil {
-		t.Fatalf("SaveProfile shrink: %v", err)
-	}
-	st, err := storeFrom(svc).Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if st.ToolKeys["alpha"] != "k1" {
-		t.Fatalf("alpha selection should survive: %v", st.ToolKeys)
-	}
-	if _, ok := st.ToolKeys["beta"]; ok {
-		t.Fatalf("beta selection should be pruned: %v", st.ToolKeys)
-	}
-}
-
-// TestAddRemoveSetActiveAPIKey exercises the key-management methods: add
-// returns a fresh ID, set-active mirrors into the effective key, removing the
-// active key promotes another entry (and prunes tool overrides), and removing
-// the last key is rejected.
-func TestAddRemoveSetActiveAPIKey(t *testing.T) {
-	a := &fakeAdapter{id: "alpha", name: "Alpha"}
-	svc := newTestService(t, a)
-	if err := svc.SaveProfile(validProfile()); err != nil {
-		t.Fatalf("SaveProfile: %v", err)
-	}
-
-	id, err := svc.AddAPIKey("MintRouter", "sk-new")
-	if err != nil || id == "" {
-		t.Fatalf("AddAPIKey = %q, %v", id, err)
-	}
-	if _, err := svc.AddAPIKey("", "sk-x"); err == nil {
-		t.Fatal("AddAPIKey without provider want error")
-	}
-	if _, err := svc.AddAPIKey("X", ""); err == nil {
-		t.Fatal("AddAPIKey without key want error")
-	}
-
-	if err := svc.SetActiveAPIKey(id); err != nil {
-		t.Fatalf("SetActiveAPIKey: %v", err)
-	}
-	if _, err := svc.ApplyOne("alpha"); err != nil {
-		t.Fatalf("ApplyOne: %v", err)
-	}
-	if a.lastApplied == nil || a.lastApplied.APIKey != "sk-new" {
-		t.Fatalf("active key not applied: %+v", a.lastApplied)
-	}
-	if err := svc.SetActiveAPIKey("nope"); err == nil {
-		t.Fatal("SetActiveAPIKey unknown ID want error")
-	}
-
-	if err := svc.SetToolKey("alpha", id); err != nil {
-		t.Fatalf("SetToolKey: %v", err)
-	}
-	if err := svc.RemoveAPIKey(id); err != nil {
-		t.Fatalf("RemoveAPIKey: %v", err)
-	}
-	view, err := svc.GetProfile()
-	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
-	}
-	if len(view.Keys) != 1 || !view.Keys[0].Active {
-		t.Fatalf("remaining key must be active: %+v", view.Keys)
-	}
-	if st, _ := storeFrom(svc).Load(); st.ToolKeys["alpha"] != "" {
-		t.Fatalf("tool override on removed key must be pruned: %v", st.ToolKeys)
-	}
-	if err := svc.RemoveAPIKey(view.Keys[0].ID); err == nil {
-		t.Fatal("RemoveAPIKey last key want error")
-	}
-	if err := svc.RemoveAPIKey("nope"); err == nil {
-		t.Fatal("RemoveAPIKey unknown ID want error")
-	}
-}
-
-// reg builds a registry from adapters for ad-hoc service construction in tests.
-func reg(adapters ...*fakeAdapter) *core.Registry {
-	r := core.NewRegistry()
-	for _, a := range adapters {
-		r.Register(a)
-	}
-	return r
-}
-
-// storeFrom returns the settings store backing an existing test Service so a
-// second Service can read the same persisted state.
-func storeFrom(s *Service) *settings.Store { return s.store }
 
 // TestNewWithDepsSweepsLegacyMarkers is the startup-sweep integration test: a
 // user's settings.json broken by the legacy in-file marker is healed (key
