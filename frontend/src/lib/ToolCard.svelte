@@ -120,6 +120,15 @@
     </div>
   {/if}
 
+  {#if tool.installed && tool.key_provider}
+    <p class="tool-key"
+      title={tool.key_overridden
+        ? "This tool uses its own key instead of the profile's active key"
+        : "This tool uses the profile's active key"}>
+      Key: {tool.key_provider}{tool.key_overridden ? " · override" : ""}
+    </p>
+  {/if}
+
   <div class="tool-actions">
     {#if !tool.installed && tool.installable}
       <button class="btn-primary sm soft" type="button" onclick={() => onInstall(tool.id)}
@@ -281,6 +290,16 @@
   }
   .tool-status.tone-success .dot { background: var(--ok); }
   .tool-status.tone-warning .dot { background: var(--warn); }
+
+  /* Which key Apply will use: the entry's provider name only (never any part
+     of the key value), flagged when it comes from a per-tool override. */
+  .tool-key {
+    margin: 0;
+    font-size: var(--fs-micro);
+    font-weight: var(--fw-semibold);
+    color: var(--muted);
+    line-height: 1.3;
+  }
 
   /* Not-installed: an intentional recessed treatment (inset surface + muted
      title) that reads as "inactive" while keeping all text at readable

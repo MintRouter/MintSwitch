@@ -14,7 +14,7 @@
   import PromoBanner from "./lib/PromoBanner.svelte";
 
   const emptyProfile: ProfileView = {
-    label: "", base_url: "", models: [], model_names: {}, model: "", small_fast_model: "", has_key: false,
+    label: "", base_url: "", models: [], model_names: {}, model: "", small_fast_model: "", has_key: false, keys: [],
   };
 
   let tools = $state<ToolView[]>([]);
@@ -267,6 +267,21 @@
     await refresh();
   }
 
+  // Persist (or clear, with an empty keyID) a per-tool API key override, then
+  // refresh so the keys dialog and the tool cards' key line pick up the
+  // change. Returns the error message (instead of flashing) so the dialog can
+  // show it inline; always refreshes to re-sync the select on failure.
+  async function changeToolKey(id: string, keyID: string): Promise<string | null> {
+    let err: string | null = null;
+    try {
+      await Service.SetToolKey(id, keyID);
+    } catch (e) {
+      err = errMsg(e);
+    }
+    await refresh();
+    return err;
+  }
+
 </script>
 
 <svelte:window onfocus={onWindowFocus} />
@@ -336,7 +351,8 @@
   <div class="layout">
     <section class="col-form" aria-label="Profile">
       <div class="col-scroll">
-        <ProfileForm {profile} {saving} onSave={saveProfile} onAutoSave={saveProfileQuiet} />
+        <ProfileForm {profile} {tools} {saving} onSave={saveProfile} onAutoSave={saveProfileQuiet}
+          onToolKeyChange={changeToolKey} />
       </div>
     </section>
 

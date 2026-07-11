@@ -1,19 +1,26 @@
 <script lang="ts">
-  import type { ProfileView } from "../../bindings/mintswitch/internal/service";
+  import type { ProfileView, ToolView } from "../../bindings/mintswitch/internal/service";
   import type { Profile } from "../../bindings/mintswitch/internal/core";
   import { isHttpUrl, normalizeBaseUrl } from "./ui";
 
   interface Props {
     profile: ProfileView;
+    tools: ToolView[];
     saving: boolean;
     onSave: (p: Profile) => Promise<boolean>;
     onAutoSave: (p: Profile) => Promise<string | null>;
+    onToolKeyChange: (toolID: string, keyID: string) => Promise<string | null>;
   }
-  let { profile, saving, onSave, onAutoSave }: Props = $props();
+  let { profile, tools, saving, onSave, onAutoSave, onToolKeyChange }: Props = $props();
 
   let label = $state("");
   let baseUrl = $state("");
-  let apiKey = $state("");
+  // Managed API keys: entry ID + provider name only. The `key` field holds a
+  // just-typed secret for entries added locally this session and is "" for
+  // saved entries — the backend never sends key values back, not even masked.
+  type LocalKey = { id: string; provider: string; key: string };
+  let keys = $state<LocalKey[]>([]);
+  let activeKeyId = $state("");
   let models = $state<string[]>([]);
   let modelNames = $state<Record<string, string>>({});
   let model = $state("");
@@ -26,9 +33,9 @@
   // so a reference change alone must NOT reseed or it would wipe in-progress
   // edits (e.g. blur the window to copy an API key, focus back, form cleared).
   // Instead we snapshot the seeded content and only reseed when the profile
-  // data actually changed (initial load / post-save refresh). The API key is
-  // never seeded — the backend never sends it — so the field starts blank and
-  // an empty submit keeps the stored key.
+  // data actually changed (initial load / post-save refresh). Key values are
+  // never seeded — the backend only sends entry IDs + provider names — so
+  // saved entries carry an empty value and a save keeps the stored secrets.
   let seededSnapshot: string | null = null;
 
   function profileSnapshot(p: ProfileView): string {
@@ -38,6 +45,7 @@
       models: p.models ?? [],
       model_names: p.model_names ?? {},
       model: p.model ?? "",
+      keys: p.keys ?? [],
     });
   }
 
@@ -54,7 +62,8 @@
     }
     modelNames = seeded;
     model = profile.model ?? "";
-    apiKey = "";
+    keys = (profile.keys ?? []).map((k) => ({ id: k.id, provider: k.provider, key: "" }));
+    activeKeyId = (profile.keys ?? []).find((k) => k.active)?.id ?? "";
   });
 
   // What the UI shows for a model: its optional display name, falling back to
@@ -63,19 +72,23 @@
     return modelNames[m] || m;
   }
 
-  // Builds the SaveProfile payload from the current form state. api_key is the
-  // caller's choice: the typed key on explicit Save, "" (= keep the stored key)
-  // on auto-save. The Small / fast model field was removed from the UI; always
-  // send "" so the Profile/binding shape stays unchanged (the old "None").
-  function payload(key: string): Profile {
+  // Builds the SaveProfile payload from the current form state. Key values are
+  // only present for entries added this session; saved entries go up with an
+  // empty value, which the backend treats as "keep the stored key" (merged by
+  // entry ID). api_key always goes up "" — the backend recomputes it as a
+  // mirror of the active entry. The Small / fast model field was removed from
+  // the UI; always send "" so the Profile/binding shape stays unchanged.
+  function payload(): Profile {
     return {
       label: label.trim(),
-      api_key: key,
+      api_key: "",
       base_url: normalizedBase.url,
       models: models,
       model_names: modelNames,
       model: model,
       small_fast_model: "",
+      api_keys: keys.map((k) => ({ id: k.id, provider: k.provider, key: k.key })),
+      active_key_id: activeKeyId,
     };
   }
 
@@ -99,7 +112,7 @@
   async function autoSave(): Promise<void> {
     if (!canAutoSave()) return;
     autoSaveError = "";
-    const err = await onAutoSave(payload(""));
+    const err = await onAutoSave(payload());
     if (err) autoSaveError = err;
   }
 
@@ -155,11 +168,80 @@
     void autoSave();
   }
 
-  // Models are managed in a popup so the card shows only a compact summary.
-  // Esc / backdrop / Done all close it.
+  // API keys follow the same pattern as models: mutations persist immediately
+  // via the quiet auto-save when the profile is already saved; on a brand-new
+  // profile the entries stay local (their typed values ride along in
+  // `keys[].key`) until the explicit Save.
+  let newKeyProvider = $state("");
+  let newKeyValue = $state("");
+
+  function localKeyID(): string {
+    let id = "";
+    do {
+      id = "key-" + Math.random().toString(16).slice(2, 10);
+    } while (keys.some((k) => k.id === id));
+    return id;
+  }
+
+  function addKey(): void {
+    const provider = newKeyProvider.trim();
+    const value = newKeyValue.trim();
+    if (!provider || !value) return;
+    const id = localKeyID();
+    keys = [...keys, { id, provider, key: value }];
+    if (!activeKeyId) activeKeyId = id;
+    newKeyProvider = "";
+    newKeyValue = "";
+    keyProviderInputEl?.focus();
+    void autoSave();
+  }
+
+  function onKeyAddKeydown(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addKey();
+    }
+  }
+
+  // A saved profile always needs one key (the backend refuses to shrink the
+  // stored list to zero), so the last entry can't be removed once saved.
+  const canRemoveKey = $derived(keys.length > 1 || !profile.has_key);
+
+  function removeKey(id: string): void {
+    if (!canRemoveKey) return;
+    keys = keys.filter((k) => k.id !== id);
+    if (activeKeyId === id) activeKeyId = keys[0]?.id ?? "";
+    void autoSave();
+  }
+
+  // Switching the active key in the dialog also persists immediately.
+  function setActiveKey(id: string): void {
+    if (activeKeyId === id) return;
+    activeKeyId = id;
+    void autoSave();
+  }
+
+  // Per-tool key override: persisted immediately via the parent's SetToolKey
+  // call (an empty selection clears the override so the tool follows the
+  // active key). Failures surface inline in the dialog like autoSaveError.
+  let toolKeyError = $state("");
+
+  async function changeToolKey(toolID: string, keyID: string): Promise<void> {
+    toolKeyError = "";
+    const err = await onToolKeyChange(toolID, keyID);
+    if (err) toolKeyError = err;
+  }
+
+  const installedTools = $derived(tools.filter((t) => t.installed));
+
+  // Models and keys are each managed in a popup so the card shows only compact
+  // summaries. Esc / backdrop / Done all close them.
   let modelsOpen = $state(false);
   let modelInputEl = $state<HTMLInputElement | null>(null);
   let modelsDialogEl = $state<HTMLDivElement | null>(null);
+  let keysOpen = $state(false);
+  let keyProviderInputEl = $state<HTMLInputElement | null>(null);
+  let keysDialogEl = $state<HTMLDivElement | null>(null);
 
   function openModels(): void {
     autoSaveError = "";
@@ -170,7 +252,17 @@
     modelsOpen = false;
   }
 
-  // Focus the model input whenever the modal opens; runs after the dialog is
+  function openKeys(): void {
+    autoSaveError = "";
+    toolKeyError = "";
+    keysOpen = true;
+  }
+
+  function closeKeys(): void {
+    keysOpen = false;
+  }
+
+  // Focus the first input whenever a modal opens; runs after the dialog is
   // rendered so the element ref exists.
   $effect(() => {
     if (modelsOpen) {
@@ -178,17 +270,25 @@
     }
   });
 
-  // Esc closes the modal; Tab is trapped inside the dialog while it's open.
-  function onModelsKeydown(e: KeyboardEvent): void {
-    if (!modelsOpen) return;
+  $effect(() => {
+    if (keysOpen) {
+      queueMicrotask(() => keyProviderInputEl?.focus());
+    }
+  });
+
+  // Esc closes the open modal; Tab is trapped inside its dialog while open.
+  function onDialogKeydown(e: KeyboardEvent): void {
+    if (!modelsOpen && !keysOpen) return;
+    const dialogEl = modelsOpen ? modelsDialogEl : keysDialogEl;
     if (e.key === "Escape") {
       e.preventDefault();
-      closeModels();
+      if (modelsOpen) closeModels();
+      else closeKeys();
       return;
     }
-    if (e.key !== "Tab" || !modelsDialogEl) return;
-    const focusables = modelsDialogEl.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled])',
+    if (e.key !== "Tab" || !dialogEl) return;
+    const focusables = dialogEl.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled])',
     );
     if (focusables.length === 0) return;
     const first = focusables[0];
@@ -213,8 +313,8 @@
     } else if (!model.trim() || !models.includes(model)) {
       next.model = "Choose a default model.";
     }
-    if (!profile.has_key && !apiKey.trim()) {
-      next.apiKey = "An API key is required to save a new profile.";
+    if (keys.length === 0) {
+      next.apiKey = "Add at least one API key.";
     }
     errors = next;
     return Object.keys(next).length === 0;
@@ -223,13 +323,8 @@
   async function submit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     if (saving || !validate()) return;
-    const ok = await onSave(payload(apiKey));
-    if (ok) apiKey = "";
+    await onSave(payload());
   }
-
-  const keyPlaceholder = $derived(
-    profile.has_key ? "••••••••" : "Enter your API key",
-  );
 
   // Live preview of the backend normalization. When a public http endpoint is
   // upgraded to https we surface a non-blocking notice so the user sees the
@@ -243,6 +338,15 @@
     models.length === 0
       ? "No models yet"
       : `${models.length} model${models.length > 1 ? "s" : ""}${model ? ` · default ${displayName(model)}` : ""}`,
+  );
+
+  // Same one-line summary for the key list: count plus the active entry's
+  // provider name (never any part of a key value).
+  const activeKeyProvider = $derived(keys.find((k) => k.id === activeKeyId)?.provider ?? "");
+  const keysSummary = $derived(
+    keys.length === 0
+      ? "No keys yet"
+      : `${keys.length} key${keys.length > 1 ? "s" : ""}${activeKeyProvider ? ` · ${activeKeyProvider} active` : ""}`,
   );
 </script>
 
@@ -272,19 +376,18 @@
 
   <div class="field">
     <div class="label-row">
-      <label class="micro-label" for="pf-key">API key</label>
+      <span class="micro-label" id="pf-keys-label">API keys</span>
       {#if profile.has_key}
         <span class="badge tone-success">Saved</span>
       {/if}
     </div>
-    <input class="field-input" id="pf-key" type="password" bind:value={apiKey}
-      placeholder={keyPlaceholder} autocomplete="off"
-      aria-invalid={!!errors.apiKey}
-      aria-describedby={errors.apiKey ? "err-key" : profile.has_key ? "hint-key" : undefined} />
+    <div class="models-summary">
+      <span class="models-summary-text" class:is-empty={keys.length === 0}
+        aria-describedby="pf-keys-label">{keysSummary}</span>
+      <button class="btn-ghost sm" type="button" onclick={openKeys}>Manage</button>
+    </div>
     {#if errors.apiKey}
       <p class="field-error" id="err-key">{errors.apiKey}</p>
-    {:else if profile.has_key}
-      <p class="field-hint" id="hint-key">Leave blank to keep the saved key.</p>
     {/if}
   </div>
 
@@ -309,7 +412,7 @@
   </div>
 </form>
 
-<svelte:window onkeydown={onModelsKeydown} />
+<svelte:window onkeydown={onDialogKeydown} />
 
 {#if modelsOpen}
   <div class="backdrop" role="presentation"
@@ -365,6 +468,88 @@
       </div>
       <div class="actions">
         <button class="btn-primary" type="button" onclick={closeModels}>Done</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if keysOpen}
+  <div class="backdrop" role="presentation"
+    onclick={(e) => e.target === e.currentTarget && closeKeys()}>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pf-keys-title"
+      tabindex="-1" bind:this={keysDialogEl}>
+      <h2 class="title" id="pf-keys-title">API keys</h2>
+      <div class="add-body">
+        <div class="field">
+          <span class="micro-label">Add a key</span>
+          <div class="model-add">
+            <div class="model-add-field">
+              <label class="model-add-label" for="pf-key-add-provider">Provider</label>
+              <input class="field-input" id="pf-key-add-provider" type="text" bind:value={newKeyProvider}
+                bind:this={keyProviderInputEl}
+                placeholder="MintRouter.AI" autocomplete="off" spellcheck="false"
+                onkeydown={onKeyAddKeydown}
+                aria-invalid={!!errors.apiKey}
+                aria-describedby={errors.apiKey ? "err-key" : undefined} />
+            </div>
+            <div class="model-add-field">
+              <label class="model-add-label" for="pf-key-add-value">Key</label>
+              <input class="field-input" id="pf-key-add-value" type="password" bind:value={newKeyValue}
+                placeholder="Enter the API key" autocomplete="off"
+                onkeydown={onKeyAddKeydown} />
+            </div>
+            <button class="btn-primary sm" type="button" onclick={addKey}
+              disabled={!newKeyProvider.trim() || !newKeyValue.trim() || saving}>Add</button>
+          </div>
+        </div>
+        {#if keys.length}
+          <div class="seg-group" role="group" aria-label="Active key">
+            {#each keys as k (k.id)}
+              <div class="seg" class:selected={k.id === activeKeyId}>
+                <button class="seg-select" type="button" aria-pressed={k.id === activeKeyId}
+                  onclick={() => setActiveKey(k.id)} title={`Set ${k.provider} as the active key`}>
+                  <span class="seg-name">{k.provider}</span>
+                </button>
+                <button class="seg-remove" type="button" disabled={!canRemoveKey}
+                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); removeKey(k.id); }}
+                  aria-label={`Remove ${k.provider}`}
+                  title={canRemoveKey ? `Remove ${k.provider}` : "A profile needs at least one key"}>×</button>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="field-hint">No keys yet — add your first one above.</p>
+        {/if}
+        {#if profile.has_key && keys.length && installedTools.length}
+          <div class="field">
+            <span class="micro-label">Per-tool key</span>
+            <p class="field-hint">Each tool follows the active key unless you pick a specific one.</p>
+            <div class="tool-keys">
+              {#each installedTools as t (t.id)}
+                <div class="tool-key-row">
+                  <label class="tool-key-name" for={`pf-toolkey-${t.id}`}>{t.name}</label>
+                  <select class="tool-key-select" id={`pf-toolkey-${t.id}`}
+                    value={t.key_overridden ? t.selected_key_id : ""}
+                    onchange={(e) => void changeToolKey(t.id, e.currentTarget.value)}>
+                    <option value="">Active key (default)</option>
+                    {#each t.keys ?? [] as tk (tk.id)}
+                      <option value={tk.id}>{tk.provider}</option>
+                    {/each}
+                  </select>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if autoSaveError}
+          <p class="field-error" role="alert">Couldn't save: {autoSaveError}</p>
+        {/if}
+        {#if toolKeyError}
+          <p class="field-error" role="alert">Couldn't save: {toolKeyError}</p>
+        {/if}
+      </div>
+      <div class="actions">
+        <button class="btn-primary" type="button" onclick={closeKeys}>Done</button>
       </div>
     </div>
   </div>
@@ -604,4 +789,53 @@
   .seg-remove:hover { color: var(--danger-strong); }
   .seg.selected .seg-remove { color: var(--accent-text); }
   .seg.selected .seg-remove:hover { color: var(--accent-text); opacity: 0.75; }
+  /* The last key of a saved profile can't be removed — keep the × visible but
+     quiet so the seg layout doesn't jump. */
+  .seg-remove:disabled { opacity: 0.4; cursor: default; }
+  .seg-remove:disabled:hover { color: var(--muted); }
+  .seg.selected .seg-remove:disabled:hover { color: var(--accent-text); }
+
+  /* Per-tool key overrides inside the keys dialog: one compact row per
+     installed tool — tool name left, a small select right listing keys by
+     provider name only. The select mirrors the tool-card model select. */
+  .tool-keys { display: flex; flex-direction: column; gap: 6px; }
+  .tool-key-row { display: flex; align-items: center; gap: 0.5rem; }
+  .tool-key-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+    color: var(--text);
+  }
+  .tool-key-select {
+    flex: 0 0 auto;
+    max-width: 55%;
+    height: var(--control-h-sm);
+    padding: 0 1.8rem 0 0.7rem;
+    font-size: var(--fs-sm);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+    background-color: var(--surface-2);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 12px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  :global([data-theme="dark"]) .tool-key-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%2398989d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  .tool-key-select:hover { border-color: var(--border-strong); }
+  .tool-key-select:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
 </style>
