@@ -12,6 +12,7 @@
   import ProvidersCard from "./lib/ProvidersCard.svelte";
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
+  import PromoBanner from "./lib/PromoBanner.svelte";
 
   let tools = $state<ToolView[]>([]);
   let providers = $state<ProviderView[]>([]);
@@ -380,6 +381,8 @@
         </section>
       </div>
 
+      <PromoBanner />
+
       <div class="sidebar-footer">
         <div class="security-note">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="3" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
@@ -449,6 +452,7 @@
   .app-shell{height:100dvh;display:flex;flex-direction:column;background:var(--ink);overflow:hidden}.titlebar{flex:0 0 30px;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--border);background:var(--chrome);color:var(--muted);font-size:11px;font-weight:600;--wails-draggable:drag}.workspace{flex:1;min-height:0;display:grid;grid-template-columns:292px minmax(0,1fr)}
   .sidebar{min-height:0;display:flex;flex-direction:column;padding:16px 14px 12px;background:var(--sidebar);border-right:1px solid var(--border)}.brand-block{display:flex;align-items:center;gap:10px;padding:0 4px 16px}.brand-mark{width:38px;height:38px;display:grid;place-items:center;color:var(--accent);border-radius:11px;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 18%,transparent)}.brand-name{margin:0;font-size:16px;line-height:1.15;font-weight:750;letter-spacing:-.025em}.brand-tagline{margin:3px 0 0;color:var(--muted);font-size:11px}.sidebar-scroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:11px;padding:1px 2px 12px}.sidebar-scroll::-webkit-scrollbar,.content-scroll::-webkit-scrollbar{width:7px}.sidebar-scroll::-webkit-scrollbar-thumb,.content-scroll::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:99px;border:2px solid transparent;background-clip:padding-box}
   .health-card{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card)}.section-label,.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.health-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}.health-stat{padding:10px 2px;text-align:center;border-radius:10px;background:var(--surface-2)}.health-stat strong{display:block;font-size:18px;line-height:1}.health-stat span{display:block;margin-top:6px;color:var(--muted);font-size:11px}.health-stat.success strong{color:var(--ok)}.health-stat.warning strong{color:var(--warn)}
+  aside.sidebar :global(.promo-row.promo-row){margin:0 2px 12px}
   .sidebar-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 2px 0;border-top:1px solid var(--border)}.security-note{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11.5px}.security-note svg{color:var(--ok)}.icon-button{width:34px;min-height:34px;padding:0;display:inline-grid;place-items:center;flex:0 0 auto;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:9px;cursor:pointer;transition:.15s}.icon-button:hover:not(:disabled){color:var(--text);border-color:var(--border-strong);background:var(--surface-hover)}.icon-button:disabled{opacity:.45;cursor:default}
   .main-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.main-header{flex:0 0 auto;min-height:94px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--border)}.heading-copy h1{margin:4px 0 3px;font-size:22px;line-height:1.15;font-weight:760;letter-spacing:-.035em}.heading-copy p{margin:0;color:var(--muted);font-size:12px}.header-actions{display:flex;align-items:center;gap:7px}.header-actions .btn-primary,.header-actions .btn-ghost{min-height:34px}.bulk-apply{box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 24%,transparent)}.spinning{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
   .content-scroll{flex:1;min-height:0;overflow-y:auto;padding:16px 22px 24px}.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
