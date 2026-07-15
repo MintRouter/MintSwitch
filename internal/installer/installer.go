@@ -60,6 +60,8 @@ var binaries = map[string]binSpec{
 	"claude-code": {bin: "claude", brew: "claude"},
 	"codex":       {bin: "codex", brew: "codex"},
 	"opencode":    {bin: "opencode", brew: "opencode"},
+	"droid":       {bin: "droid", brew: "droid"},
+	"kilo":        {bin: "kilo", brew: "kilo"},
 }
 
 // brewPrefixes are the Homebrew install prefixes used as a secondary signal when
@@ -209,21 +211,42 @@ func (i *Installer) Install(ctx context.Context, toolID string) ([]string, strin
 	return args, out, runErr
 }
 
-// Uninstall removes toolID using the method it was actually installed with. It
-// resolves the tool's CLI binary, classifies the install method from the
-// resolved path, and runs the matching action:
-//   - Homebrew  -> "brew uninstall <name>" (args + ErrBrewMissing when brew absent)
-//   - npm-global -> "npm uninstall -g <pkg>" (args + ErrNpmMissing when npm absent)
-//   - standalone -> deletes the exact resolved binary file (returned as ["rm", path])
-//
-// For an unknown tool it returns ErrUnknownTool. When the binary cannot be
-// resolved or the method is indeterminate, it does nothing destructive and
-// returns a clear, user-facing message with ErrUnknownMethod. The return
-// contract otherwise matches [Installer.Install].
-func (i *Installer) Uninstall(ctx context.Context, toolID string) ([]string, string, error) {
+// Uninstall method values returned by [Installer.PlanUninstall].
+const (
+	UninstallMethodNPM        = "npm"
+	UninstallMethodHomebrew   = "homebrew"
+	UninstallMethodStandalone = "standalone"
+	UninstallMethodUnknown    = "unknown"
+)
+
+// Uninstall action values returned by [Installer.PlanUninstall].
+const (
+	UninstallActionRunCommand = "run_command"
+	UninstallActionDeleteFile = "delete_file"
+	UninstallActionManual     = "manual"
+)
+
+// UninstallPlan is a read-only description of the action the installer would
+// take for a tool in the environment as it exists now. Args contains only
+// installer-built, whitelisted argv and is never accepted back from callers.
+// Target is the npm package, Homebrew formula/cask, or resolved binary path.
+type UninstallPlan struct {
+	Method     string
+	Action     string
+	Args       []string
+	Target     string
+	Warning    string
+	CanExecute bool
+}
+
+// PlanUninstall resolves and classifies toolID without running a command or
+// deleting a file. Missing npm/brew and unknown methods return a populated plan
+// plus their sentinel error so callers can render a useful, non-destructive
+// preview. Unknown tool IDs return ErrUnknownTool and an empty plan.
+func (i *Installer) PlanUninstall(toolID string) (UninstallPlan, error) {
 	spec, ok := binaries[toolID]
 	if !ok {
-		return nil, "", ErrUnknownTool
+		return UninstallPlan{}, ErrUnknownTool
 	}
 	resolve := i.resolve
 	if resolve == nil {
@@ -237,36 +260,90 @@ func (i *Installer) Uninstall(ctx context.Context, toolID string) ([]string, str
 	}
 	resolved, found := resolve(spec.bin)
 	if !found {
-		return nil, fmt.Sprintf("Could not determine how %s was installed: the %q binary was not found. Remove it manually.", toolID, spec.bin), ErrUnknownMethod
+		warning := fmt.Sprintf("Could not determine how %s was installed: the %q binary was not found. Remove it manually.", toolID, spec.bin)
+		return UninstallPlan{
+			Method:  UninstallMethodUnknown,
+			Action:  UninstallActionManual,
+			Target:  spec.bin,
+			Warning: warning,
+		}, ErrUnknownMethod
 	}
 
 	switch classifyMethod(resolved, i.userBinDirs) {
 	case methodHomebrew:
-		args := []string{"brew", "uninstall", spec.brew}
-		if _, err := i.lookPath("brew"); err != nil {
-			return args, "", ErrBrewMissing
+		plan := UninstallPlan{
+			Method:     UninstallMethodHomebrew,
+			Action:     UninstallActionRunCommand,
+			Args:       []string{"brew", "uninstall", spec.brew},
+			Target:     spec.brew,
+			CanExecute: true,
 		}
-		out, runErr := i.runner.Run(ctx, args[0], args[1:]...)
-		return args, out, runErr
+		if _, err := i.lookPath("brew"); err != nil {
+			plan.CanExecute = false
+			plan.Warning = "Homebrew (brew) is required to uninstall this tool. Install Homebrew, then retry."
+			return plan, ErrBrewMissing
+		}
+		return plan, nil
 	case methodNpm:
 		args, _ := UninstallArgs(toolID)
-		if _, err := i.lookPath("npm"); err != nil {
-			return args, "", ErrNpmMissing
+		pkg, _ := Spec(toolID)
+		plan := UninstallPlan{
+			Method:     UninstallMethodNPM,
+			Action:     UninstallActionRunCommand,
+			Args:       args,
+			Target:     pkg.NpmPackage,
+			CanExecute: true,
 		}
-		out, runErr := i.runner.Run(ctx, args[0], args[1:]...)
-		return args, out, runErr
+		if _, err := i.lookPath("npm"); err != nil {
+			plan.CanExecute = false
+			plan.Warning = "Node.js / npm is required. Install Node.js, then retry."
+			return plan, ErrNpmMissing
+		}
+		return plan, nil
 	case methodStandalone:
+		return UninstallPlan{
+			Method:     UninstallMethodStandalone,
+			Action:     UninstallActionDeleteFile,
+			Args:       []string{"rm", resolved},
+			Target:     resolved,
+			Warning:    "This will permanently delete the standalone executable file.",
+			CanExecute: true,
+		}, nil
+	default:
+		warning := fmt.Sprintf("Could not determine how %s was installed (%s). Remove it manually.", toolID, resolved)
+		return UninstallPlan{
+			Method:  UninstallMethodUnknown,
+			Action:  UninstallActionManual,
+			Target:  resolved,
+			Warning: warning,
+		}, ErrUnknownMethod
+	}
+}
+
+// Uninstall removes toolID using a plan freshly resolved at execution time.
+// It deliberately accepts only toolID: preview paths/commands are never trusted
+// or replayed, avoiding a preview-to-execution TOCTOU contract.
+func (i *Installer) Uninstall(ctx context.Context, toolID string) ([]string, string, error) {
+	plan, err := i.PlanUninstall(toolID)
+	if err != nil {
+		return plan.Args, plan.Warning, err
+	}
+
+	switch plan.Action {
+	case UninstallActionRunCommand:
+		out, runErr := i.runner.Run(ctx, plan.Args[0], plan.Args[1:]...)
+		return plan.Args, out, runErr
+	case UninstallActionDeleteFile:
 		remove := i.remove
 		if remove == nil {
 			remove = os.Remove
 		}
-		args := []string{"rm", resolved}
-		if err := remove(resolved); err != nil {
-			return args, "", err
+		if err := remove(plan.Target); err != nil {
+			return plan.Args, "", err
 		}
-		return args, fmt.Sprintf("Removed standalone binary %s", resolved), nil
+		return plan.Args, fmt.Sprintf("Removed standalone binary %s", plan.Target), nil
 	default:
-		return nil, fmt.Sprintf("Could not determine how %s was installed (%s). Remove it manually.", toolID, resolved), ErrUnknownMethod
+		return plan.Args, plan.Warning, ErrUnknownMethod
 	}
 }
 

@@ -260,19 +260,33 @@ func TestSaveDropsLegacyShape(t *testing.T) {
 // fakeSecrets is an in-memory SecretStore. A non-nil setErr makes Set fail,
 // simulating an unavailable keychain (e.g. headless Linux).
 type fakeSecrets struct {
-	key    string
-	has    bool
-	sets   int
-	setErr error
+	key       string
+	has       bool
+	sets      int
+	deletes   int
+	setErr    error
+	setErrAt  map[int]error
+	deleteErr error
 }
 
 func (f *fakeSecrets) Get() (string, bool, error) { return f.key, f.has, nil }
 func (f *fakeSecrets) Set(v string) error {
 	f.sets++
+	if err := f.setErrAt[f.sets]; err != nil {
+		return err
+	}
 	if f.setErr != nil {
 		return f.setErr
 	}
 	f.key, f.has = v, true
+	return nil
+}
+func (f *fakeSecrets) Delete() error {
+	f.deletes++
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.key, f.has = "", false
 	return nil
 }
 
@@ -486,5 +500,103 @@ func TestWave2KeychainBlobHydratesMigratedProviders(t *testing.T) {
 	}
 	if len(out.Providers) != 2 || out.Providers[0].APIKey != "sk-one" || out.Providers[1].APIKey != "sk-two" {
 		t.Fatalf("wave2 blob not hydrated into providers: %+v", out.Providers)
+	}
+}
+
+func failingRename(want error) func(string, string) error {
+	return func(string, string) error { return want }
+}
+
+// TestSaveRollsBackExistingBlobOnPersistenceFailure exercises states produced
+// by Add, Update, and Remove. A failed settings rename must leave the original
+// keychain blob intact, matching the settings file that remains on disk.
+func TestSaveRollsBackExistingBlobOnPersistenceFailure(t *testing.T) {
+	oldBlob := `{"keys":{"p1":"sk-old","p2":"sk-two"}}`
+	cases := []struct {
+		name      string
+		providers []core.Provider
+	}{
+		{"add", []core.Provider{prov("p1", "A", "sk-old"), prov("p2", "B", "sk-two"), prov("p3", "C", "sk-three")}},
+		{"update", []core.Provider{prov("p1", "A", "sk-new"), prov("p2", "B", "sk-two")}},
+		{"remove", []core.Provider{prov("p1", "A", "sk-old")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			persistErr := errors.New("injected settings persistence failure")
+			fs := &fakeSecrets{key: oldBlob, has: true}
+			s := NewStore(filepath.Join(t.TempDir(), "settings.json"))
+			s.Secrets, s.rename = fs, failingRename(persistErr)
+
+			err := s.Save(&State{Providers: tc.providers, ActiveProviderID: "p1"})
+			if !errors.Is(err, persistErr) {
+				t.Fatalf("Save error = %v, want persistence failure", err)
+			}
+			if fs.key != oldBlob || !fs.has {
+				t.Fatal("failed persistence did not restore the previous keychain blob")
+			}
+			if fs.sets != 2 {
+				t.Fatalf("keychain sets = %d, want write + rollback", fs.sets)
+			}
+		})
+	}
+}
+
+// TestSaveRollsBackNewKeychainEntryOnPersistenceFailure proves an Add from an
+// empty keychain deletes the newly-created entry when settings persistence
+// fails.
+func TestSaveRollsBackNewKeychainEntryOnPersistenceFailure(t *testing.T) {
+	persistErr := errors.New("injected settings persistence failure")
+	fs := &fakeSecrets{}
+	s := NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	s.Secrets, s.rename = fs, failingRename(persistErr)
+
+	err := s.Save(&State{Providers: []core.Provider{prov("p1", "A", "sk-new")}, ActiveProviderID: "p1"})
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("Save error = %v, want persistence failure", err)
+	}
+	if fs.has || fs.deletes != 1 {
+		t.Fatal("failed persistence did not remove the newly-created keychain entry")
+	}
+}
+
+// TestSaveSurfacesRollbackFailure verifies both failures are observable and
+// that returned error text does not contain key material.
+func TestSaveSurfacesRollbackFailure(t *testing.T) {
+	persistErr := errors.New("injected settings persistence failure")
+	rollbackErr := errors.New("injected keychain rollback failure")
+	fs := &fakeSecrets{
+		key: `{"keys":{"p1":"sk-old"}}`, has: true,
+		setErrAt: map[int]error{2: rollbackErr},
+	}
+	s := NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	s.Secrets, s.rename = fs, failingRename(persistErr)
+
+	err := s.Save(&State{Providers: []core.Provider{prov("p1", "A", "sk-new")}, ActiveProviderID: "p1"})
+	if !errors.Is(err, persistErr) || !errors.Is(err, rollbackErr) {
+		t.Fatalf("Save error = %v, want persistence and rollback failures", err)
+	}
+	if !strings.Contains(err.Error(), "keychain rollback failed") {
+		t.Fatalf("Save error lacks rollback context: %v", err)
+	}
+	if strings.Contains(err.Error(), "sk-old") || strings.Contains(err.Error(), "sk-new") {
+		t.Fatal("Save error exposed api key material")
+	}
+}
+
+// TestSaveRemoveLastRollsBackKeychainDelete proves Remove of the final
+// provider restores the old blob when the settings file cannot be persisted.
+func TestSaveRemoveLastRollsBackKeychainDelete(t *testing.T) {
+	persistErr := errors.New("injected settings persistence failure")
+	oldBlob := `{"keys":{"p1":"sk-old"}}`
+	fs := &fakeSecrets{key: oldBlob, has: true}
+	s := NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	s.Secrets, s.rename = fs, failingRename(persistErr)
+
+	err := s.Save(&State{})
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("Save error = %v, want persistence failure", err)
+	}
+	if fs.deletes != 1 || fs.sets != 1 || !fs.has || fs.key != oldBlob {
+		t.Fatal("failed final-provider removal did not restore the old keychain blob")
 	}
 }

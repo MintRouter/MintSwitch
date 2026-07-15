@@ -3,6 +3,7 @@
   import type { ProviderView, ToolView } from "../../bindings/mintswitch/internal/service";
   import type { Provider } from "../../bindings/mintswitch/internal/core";
   import { errMsg, isHttpUrl, normalizeBaseUrl } from "./ui";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
 
   interface Props {
     providers: ProviderView[];
@@ -46,7 +47,15 @@
   let dialogError = $state("");
   let toolProviderError = $state("");
 
+  // Focus restore: remember what was focused before the Manage dialog opened
+  // so closing it puts keyboard users back where they were. (The form dialog
+  // needs no equivalent — closing it re-mounts the Manage dialog, whose
+  // open-effect below focuses the Add button.) Plain variable, not $state —
+  // only read inside handlers/microtasks.
+  let manageReturnFocus: HTMLElement | null = null;
+
   function openManage(): void {
+    manageReturnFocus = document.activeElement as HTMLElement | null;
     dialogError = "";
     toolProviderError = "";
     manageOpen = true;
@@ -55,12 +64,31 @@
   function closeManage(): void {
     manageOpen = false;
     closeForm();
+    const target = manageReturnFocus;
+    manageReturnFocus = null;
+    if (target?.isConnected) queueMicrotask(() => target.focus());
   }
 
-  async function removeProvider(id: string): Promise<void> {
+  // Removing a provider permanently deletes its stored key, so it always goes
+  // through an explicit confirmation dialog first.
+  let removeTarget = $state<ProviderView | null>(null);
+  let removeBusy = $state(false);
+
+  async function confirmRemove(): Promise<void> {
+    if (!removeTarget || removeBusy) return;
+    removeBusy = true;
     dialogError = "";
-    const err = await onRemove(id);
+    const err = await onRemove(removeTarget.id);
+    removeBusy = false;
+    removeTarget = null;
     if (err != null) dialogError = err;
+    // ConfirmDialog restores focus to the row's "×" button, but on success
+    // that row is gone — fall back to the Add button so keyboard focus (and
+    // the manage dialog's Tab trap) never lands on <body>. setTimeout runs
+    // after the dialog's DOM removal and its own focus-restore attempt.
+    setTimeout(() => {
+      if (manageOpen && document.activeElement === document.body) addBtnEl?.focus();
+    }, 0);
   }
 
   async function setActive(id: string): Promise<void> {
@@ -73,9 +101,16 @@
   // Per-tool provider override: persisted immediately via the parent's
   // SetToolProvider call (an empty selection clears the override so the tool
   // follows the active provider). Failures surface inline in the dialog.
-  async function changeToolProvider(toolID: string, providerID: string): Promise<void> {
+  // The <select> is snapped back to the state value before the async call:
+  // if the backend rejects the change, the refresh leaves the state
+  // unchanged and Svelte would otherwise skip re-applying `value=`, leaving
+  // the DOM stuck on the rejected option. On success the refresh re-renders
+  // the select with the new value.
+  async function changeToolProvider(t: ToolView, e: Event & { currentTarget: HTMLSelectElement }): Promise<void> {
+    const chosen = e.currentTarget.value;
+    e.currentTarget.value = t.provider_overridden ? t.selected_provider_id : "";
     toolProviderError = "";
-    const err = await onToolProviderChange(toolID, providerID);
+    const err = await onToolProviderChange(t.id, chosen);
     if (err != null) toolProviderError = err;
   }
 
@@ -118,6 +153,16 @@
     fModels.length > 0 && fModels.includes(fModel),
   );
 
+  // Dirty tracking for the form: a snapshot of the NON-SECRET fields taken on
+  // open (the key never enters the snapshot — any typed key marks the form
+  // dirty on its own). Used to guard Esc/Cancel against losing typed input.
+  let formInitial = $state("");
+  const formSnapshot = () =>
+    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModel]);
+  const formDirty = $derived(formOpen && (!!formKey || formSnapshot() !== formInitial));
+  // Confirmation shown when Esc/Cancel would discard a dirty form.
+  let discardOpen = $state(false);
+
   function openForm(p: ProviderView | null): void {
     formId = p?.id ?? "";
     formName = p?.name ?? "";
@@ -139,45 +184,49 @@
     fetchedModels = [];
     dropdownOpen = false;
     activeIndex = -1;
+    discardOpen = false;
+    formInitial = formSnapshot();
     formOpen = true;
-    // Edit opens with a stored endpoint + key, so the model list can appear
-    // with zero extra clicks.
-    if (p) scheduleFetch(0);
+    // Edit opens with a stored endpoint + key: fetching here sends a blank
+    // key (the backend substitutes the stored one) to the stored URL only,
+    // so the model list can appear with zero extra clicks without any risk
+    // of leaking a key to a half-typed endpoint.
+    if (p) void fetchModels();
   }
 
   function closeForm(): void {
     formOpen = false;
     formId = "";
     formKey = "";
-    clearTimeout(fetchTimer);
+    discardOpen = false;
     fetchSeq++;
     fetching = false;
     closeDropdown();
   }
 
-  // ---- Auto-fetch of the endpoint's advertised models ----
-  // Runs when Edit opens and (debounced) whenever the endpoint or key input
-  // changes, via the read-only FetchEndpointModels binding: a typed key
-  // travels only for this one request and is never stored or echoed back.
-  // Failures degrade to a quiet notice with a retry button — manual entry and
-  // Save keep working regardless.
+  // Esc / Cancel on the form: close immediately when pristine, otherwise ask
+  // before throwing typed input away (backdrop clicks never close the form).
+  function requestCloseForm(): void {
+    if (formDirty) discardOpen = true;
+    else closeForm();
+  }
+
+  // ---- Fetching the endpoint's advertised models ----
+  // Runs only on an explicit user action — the "Fetch models" button, or
+  // opening Edit (stored endpoint + stored key) — via the read-only
+  // FetchEndpointModels binding: a typed key travels only for that one
+  // request and is never stored or echoed back. Failures degrade to a quiet
+  // notice — manual entry and Save keep working regardless.
   let fetching = $state(false);
   let fetchAttempted = $state(false);
   let fetchError = $state("");
   let fetchedModels = $state<string[]>([]);
-  let fetchTimer: ReturnType<typeof setTimeout> | undefined;
   // Monotonic token so a stale (slow) response can never clobber the state of
   // a newer fetch or a reopened form.
   let fetchSeq = 0;
 
-  function scheduleFetch(delay = 600): void {
-    clearTimeout(fetchTimer);
-    if (!canFetch) return;
-    fetchTimer = setTimeout(() => void fetchModels(), delay);
-  }
-
   async function fetchModels(): Promise<void> {
-    if (!canFetch) return;
+    if (!canFetch || fetching) return;
     const seq = ++fetchSeq;
     fetching = true;
     fetchError = "";
@@ -353,15 +402,19 @@
   });
 
   // Esc closes the open dialog view (the form falls back to the provider
-  // list); Tab is trapped inside the visible dialog while open.
+  // list, asking first if it has unsaved input); Tab is trapped inside the
+  // visible dialog while open. While a ConfirmDialog (remove / discard) is
+  // stacked on top, IT owns Esc and the Tab trap — bail out here so one Esc
+  // press can't close both layers.
   function onDialogKeydown(e: KeyboardEvent): void {
-    if (!manageOpen) return;
+    if (!manageOpen || e.defaultPrevented) return;
+    if (removeTarget || discardOpen) return;
     const inForm = formOpen;
     const dialogEl = inForm ? formDialogEl : manageDialogEl;
     if (e.key === "Escape") {
       e.preventDefault();
       if (inForm && dropdownOpen) closeDropdown();
-      else if (inForm) closeForm();
+      else if (inForm) requestCloseForm();
       else closeManage();
       return;
     }
@@ -383,33 +436,37 @@
   }
 </script>
 
-<div class="card providers" aria-labelledby="providers-h">
-  <h2 class="card-title providers-title" id="providers-h">Providers</h2>
-
-  <div class="field">
-    <span class="micro-label" id="pv-list-label">Providers</span>
-    <div class="providers-summary">
-      <span class="providers-summary-text" class:is-empty={providers.length === 0}
-        aria-describedby="pv-list-label">{providersSummary}</span>
-      <button class="btn-ghost sm" type="button" onclick={openManage}>Manage</button>
+<section class="providers" aria-labelledby="providers-h">
+  <div class="providers-head">
+    <div>
+      <span class="micro-label">Routing profile</span>
+      <h2 id="providers-h">Active provider</h2>
     </div>
-    {#if providers.length === 0}
-      <p class="field-hint">Add at least one provider to configure your tools.</p>
-    {/if}
+    <button class="manage-button" type="button" onclick={openManage}>Manage</button>
   </div>
 
   {#if active}
-    <div class="field">
-      <span class="micro-label">Active provider</span>
-      <p class="active-name">{active.name}</p>
-      {#if active.note}
-        <p class="active-note">{active.note}</p>
-      {/if}
-      <p class="active-meta">{active.base_url}</p>
-      <p class="active-meta">{modelsSummary(active)}</p>
+    <div class="active-provider">
+      <div class="provider-avatar" aria-hidden="true">{active.name.trim().charAt(0).toUpperCase()}</div>
+      <div class="active-copy">
+        <div class="active-title"><strong>{active.name}</strong><span><i aria-hidden="true"></i>Live</span></div>
+        {#if active.note}<p>{active.note}</p>{/if}
+      </div>
+      <svg class="chevron" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
     </div>
+    <div class="provider-details">
+      <div class="detail-row"><span>Endpoint</span><strong title={active.base_url}>{active.base_url.replace(/^https?:\/\//, "")}</strong></div>
+      <div class="detail-row"><span>Models</span><strong>{modelsSummary(active)}</strong></div>
+      <div class="detail-row"><span>API key</span><strong class="secure"><i aria-hidden="true"></i>{active.has_key ? "Secured" : "Missing"}</strong></div>
+    </div>
+  {:else}
+    <button class="empty-provider" type="button" onclick={openManage}>
+      <span class="empty-plus" aria-hidden="true">+</span>
+      <span><strong>Add your first provider</strong><small>Connect an OpenAI-compatible endpoint</small></span>
+    </button>
   {/if}
-</div>
+  <p class="provider-count">{providersSummary}</p>
+</section>
 
 <svelte:window onkeydown={onDialogKeydown} />
 
@@ -448,7 +505,7 @@
                       Edit
                     </button>
                     <button class="provider-remove" type="button" disabled={saving}
-                      onclick={() => void removeProvider(p.id)}
+                      onclick={() => (removeTarget = p)}
                       aria-label={`Remove ${p.name}`} title={`Remove ${p.name}`}>×</button>
                   </div>
                 </div>
@@ -469,7 +526,7 @@
                   <label class="tool-provider-name" for={`pv-tool-${t.id}`}>{t.name}</label>
                   <select class="tool-provider-select" id={`pv-tool-${t.id}`}
                     value={t.provider_overridden ? t.selected_provider_id : ""}
-                    onchange={(e) => void changeToolProvider(t.id, e.currentTarget.value)}>
+                    onchange={(e) => void changeToolProvider(t, e)}>
                     <option value="">Active provider (default)</option>
                     {#each t.providers ?? [] as pr (pr.id)}
                       <option value={pr.id}>{pr.name}</option>
@@ -496,8 +553,9 @@
 {/if}
 
 {#if manageOpen && formOpen}
-  <div class="backdrop" role="presentation"
-    onclick={(e) => e.target === e.currentTarget && closeForm()}>
+  <!-- No backdrop-close for the form: a stray click must never throw away a
+       half-typed provider. Esc and Cancel remain (confirming when dirty). -->
+  <div class="backdrop" role="presentation">
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pv-form-title"
       tabindex="-1" bind:this={formDialogEl}>
       <h2 class="title" id="pv-form-title">{isEdit ? `Edit ${editing?.name ?? "provider"}` : "Add a provider"}</h2>
@@ -516,8 +574,7 @@
         <div class="add-field">
           <label class="add-label" for="pv-form-base">API endpoint</label>
           <input class="field-input" id="pv-form-base" type="url" bind:value={formBaseUrl}
-            placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
-            oninput={() => scheduleFetch()} />
+            placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false" />
         </div>
         {#if formBase.upgraded}
           <p class="field-notice">
@@ -528,7 +585,7 @@
           <label class="add-label" for="pv-form-key">API key</label>
           <input class="field-input" id="pv-form-key" type="password" bind:value={formKey}
             placeholder={isEdit ? "Unchanged unless typed" : "Enter the API key"}
-            autocomplete="off" oninput={() => scheduleFetch()} />
+            autocomplete="off" />
         </div>
 
         <div class="add-field">
@@ -536,9 +593,12 @@
             <label class="add-label" for="pv-form-model-input">Models</label>
             {#if fetching}
               <span class="models-status" role="status">Fetching models…</span>
-            {:else if canFetch}
+            {:else}
               <button class="btn-ghost sm" type="button" onclick={() => void fetchModels()}
-                title="List the models the endpoint's /models route advertises">
+                disabled={!canFetch}
+                title={canFetch
+                  ? "List the models the endpoint's /models route advertises"
+                  : "Enter the API endpoint and key first"}>
                 {fetchAttempted || fetchError ? "Refetch models" : "Fetch models"}
               </button>
             {/if}
@@ -607,7 +667,10 @@
             {/if}
           </div>
           {#if fetchError}
-            <p class="field-hint" role="status">Couldn't fetch models — add manually. ({fetchError})</p>
+            <p class="models-error" role="status">
+              <strong>Model list unavailable.</strong>
+              <span>{fetchError} You can add model IDs manually.</span>
+            </p>
           {/if}
           {#if fModels.length && !fModels.includes(fModel)}
             <p class="field-hint">Pick a default model by clicking one of the chips above.</p>
@@ -621,7 +684,7 @@
         {/if}
       </div>
       <div class="actions">
-        <button class="btn-ghost" type="button" onclick={closeForm}>Cancel</button>
+        <button class="btn-ghost" type="button" onclick={requestCloseForm}>Cancel</button>
         <button class="btn-primary" type="button" onclick={() => void saveForm()}
           disabled={!canSave || saving}>{isEdit ? "Save changes" : "Add provider"}</button>
       </div>
@@ -629,77 +692,64 @@
   </div>
 {/if}
 
+<!-- Stacked confirmations. ConfirmDialog restores focus to the trigger on
+     close by itself; while one is open, onDialogKeydown yields Esc/Tab to it. -->
+<ConfirmDialog
+  open={removeTarget != null}
+  title={`Remove ${removeTarget?.name ?? "provider"}?`}
+  message={`This permanently deletes “${removeTarget?.name ?? ""}” and its stored API key. This cannot be undone.`}
+  confirmLabel="Remove provider"
+  danger
+  busy={removeBusy || saving}
+  onConfirm={() => void confirmRemove()}
+  onCancel={() => (removeTarget = null)} />
+
+<ConfirmDialog
+  open={discardOpen}
+  title="Discard unsaved changes?"
+  message="This provider form has unsaved changes. Closing it will discard them."
+  confirmLabel="Discard changes"
+  danger
+  onConfirm={closeForm}
+  onCancel={() => (discardOpen = false)} />
+
 <style>
-  /* Same rhythm as the old profile card: tight local gap, and the card grows
-     to fill the left column so its bottom edge lines up with the tools panel. */
-  .providers { display: flex; flex-direction: column; gap: 10px; flex: 1 0 auto; }
-  .providers-title { margin: 0; }
+  /* Sidebar card. Type scale is deliberately larger than the old 9–11px set:
+     12px is the floor for body copy so the panel stays readable at a glance. */
+  .providers{display:flex;flex-direction:column;gap:14px;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card)}
+  .providers-head{display:flex;align-items:flex-end;justify-content:space-between;gap:8px}
+  .providers-head .micro-label{font-size:11px}
+  .providers-head h2{margin:5px 0 0;color:var(--text);font-size:15.5px;line-height:1.2;font-weight:720;letter-spacing:-.01em}
+  .manage-button{padding:5px 4px;color:var(--accent-soft-text);background:transparent;border:0;cursor:pointer;font-size:12.5px;font-weight:650}.manage-button:hover{color:var(--accent)}
+  .active-provider{display:flex;align-items:center;gap:11px;padding:12px;border:1px solid color-mix(in srgb,var(--accent) 18%,var(--border));border-radius:12px;background:linear-gradient(135deg,var(--accent-soft),color-mix(in srgb,var(--accent-soft) 35%,var(--surface)))}
+  .provider-avatar{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;border-radius:10px;color:var(--accent-text);background:var(--accent);font-size:16px;font-weight:750;box-shadow:0 3px 9px color-mix(in srgb,var(--accent) 22%,transparent)}
+  .active-copy{min-width:0;flex:1}.active-title{display:flex;align-items:center;gap:8px}
+  .active-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:13.5px}
+  .active-title span{display:inline-flex;align-items:center;gap:4px;color:var(--ok-strong);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+  .active-title i{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  .active-copy p{margin:4px 0 0;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chevron{flex:0 0 auto;color:var(--muted)}
+  .provider-details{display:flex;flex-direction:column;padding:0 2px}
+  .detail-row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:32px;border-bottom:1px solid var(--border)}.detail-row:last-child{border-bottom:0}
+  .detail-row>span{color:var(--muted);font-size:12px}
+  .detail-row>strong{min-width:0;max-width:62%;color:var(--text);font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .detail-row .secure{display:inline-flex;align-items:center;gap:6px;color:var(--ok-strong)}.secure i{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  .provider-count{margin:-3px 1px 0;color:var(--muted);font-size:11px}
+  .empty-provider{display:flex;align-items:center;gap:11px;width:100%;padding:13px;text-align:left;border:1px dashed var(--border-strong);border-radius:12px;background:var(--surface-2);cursor:pointer}.empty-provider:hover{border-color:var(--accent)}
+  .empty-plus{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;background:var(--accent-soft);color:var(--accent-soft-text);font-size:20px}
+  .empty-provider strong,.empty-provider small{display:block}.empty-provider strong{color:var(--text);font-size:12.5px}.empty-provider small{margin-top:3px;color:var(--muted);font-size:11px}
+  /* Stretch to fill the sidebar column so the card reaches down instead of
+     leaving a stubby gap; the provider count anchors to the bottom edge. */
+  .providers { flex: 1 1 auto; min-height: 0; }
+  .provider-details { flex: 1 1 auto; justify-content: flex-start; }
+  .detail-row { min-height: 38px; }
+  .provider-count { margin-top: auto; padding-top: 8px; }
   .opt {
     margin-left: 0.3rem;
     text-transform: none;
     letter-spacing: 0;
     font-weight: var(--fw-medium);
     color: var(--muted);
-  }
-
-  /* Compact card row: a muted one-line summary on the left and a quiet-accent
-     Manage action on the right — plain text + button, no inset. */
-  .providers-summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-2);
-    padding: 2px 0;
-    background: transparent;
-    border: none;
-  }
-  .providers-summary-text {
-    flex: 1 1 auto;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: var(--fs-sm);
-    line-height: var(--lh);
-    color: var(--muted);
-  }
-  .providers-summary-text.is-empty { color: var(--muted); }
-  .providers-summary .btn-ghost {
-    flex: 0 0 auto;
-    background: transparent;
-    border-color: transparent;
-    color: var(--accent-soft-text);
-  }
-  .providers-summary .btn-ghost:hover:not(:disabled) {
-    background: var(--accent-soft);
-    border-color: transparent;
-  }
-
-  /* Active-provider block on the card: name (bold), optional muted note line,
-     then quiet meta lines (base URL, models summary). Never any key value. */
-  .active-name {
-    margin: 0;
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-semibold);
-    color: var(--text);
-    line-height: var(--lh);
-    overflow-wrap: anywhere;
-  }
-  .active-note {
-    margin: 0;
-    font-size: var(--fs-micro);
-    color: var(--muted);
-    line-height: 1.35;
-    overflow-wrap: anywhere;
-  }
-  .active-meta {
-    margin: 0;
-    font-size: var(--fs-micro);
-    color: var(--muted);
-    line-height: 1.35;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .field-notice { margin: 0; font-size: 0.78rem; color: var(--warn); }
@@ -722,9 +772,9 @@
     align-items: center;
     justify-content: center;
     padding: var(--s-2);
-    background: rgba(0, 0, 0, 0.4);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
+    background: rgba(10, 13, 20, 0.48);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
     --wails-draggable: no-drag;
   }
   .dialog {
@@ -736,7 +786,7 @@
     padding: var(--s-3);
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 16px;
     box-shadow: var(--shadow-pop);
   }
   .title {
@@ -878,8 +928,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    min-height: 26px;
+    width: 32px;
+    min-height: 32px;
     padding: 0;
     border: none;
     border-radius: var(--radius-sm);
@@ -915,6 +965,20 @@
     color: var(--muted);
     line-height: var(--lh-tight);
   }
+  .models-error {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--warn) 24%, var(--border));
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--warn) 7%, var(--surface));
+    color: var(--muted);
+    font-size: var(--fs-micro);
+    line-height: var(--lh);
+  }
+  .models-error strong { color: var(--warn); font-weight: var(--fw-semibold); }
 
   /* AionUI-style combobox: selected models live as chips inside one bordered
      field next to an inline filter input, with a search glyph at the right

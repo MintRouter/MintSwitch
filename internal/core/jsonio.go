@@ -45,9 +45,10 @@ func WriteJSONObjectAtomic(path string, m map[string]any) error {
 
 // WriteFileAtomic writes data to path atomically: it creates parent
 // directories (0700), writes to a sibling temp file with the given perm,
-// fsyncs, then renames over path (os.Rename replaces an existing file on
-// every supported OS). A crash mid-write can never leave a truncated config
-// behind.
+// fsyncs, renames over path (os.Rename replaces an existing file on every
+// supported OS), then best-effort fsyncs the parent directory so the rename
+// itself survives a power loss. A crash mid-write can never leave a truncated
+// config behind.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -74,7 +75,25 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	SyncDir(dir)
+	return nil
+}
+
+// SyncDir fsyncs the directory so a rename inside it survives a power loss.
+// It is deliberately best-effort: the data itself was already fsynced, and on
+// some platforms (notably Windows) opening or syncing a directory fails even
+// though the rename is durable, so an error here must not fail an otherwise
+// successful write.
+func SyncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	_ = d.Sync()
 }
 
 // AsJSONObject returns v as a JSON object, or a fresh object when v is not one.

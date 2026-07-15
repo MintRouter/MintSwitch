@@ -37,13 +37,35 @@ export function statusMeta(status: string): StatusMeta {
  */
 export function errMsg(e: unknown): string {
   const fallback = "Something went wrong. Please try again.";
-  if (e instanceof Error) return e.message || fallback;
-  if (typeof e === "string") return e || fallback;
-  if (e && typeof e === "object" && "message" in e) {
-    const m = (e as { message?: unknown }).message;
-    if (typeof m === "string" && m) return m;
+
+  // Wails may wrap a Go error in RuntimeError and serialise that wrapper into
+  // Error.message. Unwrap both regular Error objects and JSON-shaped messages
+  // so the UI never prints transport details such as { kind: RuntimeError }.
+  function unwrap(value: unknown, depth = 0): string {
+    if (depth > 3) return "";
+    if (value instanceof Error) return unwrap(value.message, depth + 1);
+    if (value && typeof value === "object" && "message" in value) {
+      return unwrap((value as { message?: unknown }).message, depth + 1);
+    }
+    if (typeof value !== "string") return "";
+
+    const message = value.trim();
+    if (!message) return "";
+    if (message.startsWith("{") || message.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(message) as unknown;
+        const nested = unwrap(parsed, depth + 1);
+        if (nested) return nested;
+      } catch {
+        // It only looked like JSON; preserve the original display-safe text.
+      }
+    }
+    return message;
   }
-  return fallback;
+
+  const message = unwrap(e) || fallback;
+  const clean = message.replace(/^service:\s*/i, "");
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
 
 /**

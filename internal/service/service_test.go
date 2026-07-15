@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
@@ -448,15 +449,24 @@ func TestApplyOneNoProvider(t *testing.T) {
 }
 
 func TestApplyAllRestoreAllAggregation(t *testing.T) {
-	ok := &fakeAdapter{id: "ok", name: "OK", applyRes: core.ApplyResult{Message: "did ok"}}
-	bad := &fakeAdapter{id: "bad", name: "Bad", applyErr: errors.New("apply failed"),
+	ok := &fakeAdapter{id: "ok", name: "OK", installed: true, applyRes: core.ApplyResult{Message: "did ok"}}
+	bad := &fakeAdapter{id: "bad", name: "Bad", installed: true, applyErr: errors.New("apply failed"),
 		restoreErr: errors.New("restore failed")}
-	svc := newTestService(t, ok, bad)
+	// absent is not installed: ApplyAll must skip it entirely — applying would
+	// create its config file (API key included) for software not on the machine.
+	absent := &fakeAdapter{id: "absent", name: "Absent"}
+	svc := newTestService(t, ok, bad, absent)
 	addProvider(t, svc, validProvider())
 
 	results, err := svc.ApplyAll()
 	if err != nil {
 		t.Fatalf("ApplyAll: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("ApplyAll results = %+v, want the 2 installed tools only", results)
+	}
+	if absent.applyCalls != 0 {
+		t.Fatalf("ApplyAll applied to a not-installed tool %d times", absent.applyCalls)
 	}
 	byID := map[string]ToolOpResult{}
 	for _, r := range results {
@@ -1119,7 +1129,6 @@ func TestSweepFailureSurfacesInToolDetail(t *testing.T) {
 	}
 }
 
-
 // newModelsService builds a Service with one provider pointed at the given
 // httptest server (loopback http URLs are preserved by normalization) and
 // wires the server's client in as the injected models HTTP client. It returns
@@ -1274,5 +1283,131 @@ func TestFetchProviderModelsUnknownProvider(t *testing.T) {
 	_, err := svc.FetchProviderModels("nope")
 	if err == nil || !strings.Contains(err.Error(), `unknown provider "nope"`) {
 		t.Fatalf("FetchProviderModels = %v, want unknown provider error", err)
+	}
+}
+
+// TestPlanUninstallContract covers every UI-visible classification and proves
+// the service preview is read-only: neither commands nor deletes are performed.
+func TestPlanUninstallContract(t *testing.T) {
+	root := t.TempDir()
+	brewLink := filepath.Join(root, "brew-opencode")
+	if err := os.Symlink("/opt/homebrew/Cellar/opencode/1.0/bin/opencode", brewLink); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(root, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	standalone := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(standalone, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		toolID      string
+		resolved    string
+		found       bool
+		wantMethod  string
+		wantAction  string
+		wantCommand string
+		wantTarget  string
+		wantCan     bool
+		wantWarning bool
+	}{
+		{
+			name: "npm", toolID: "codex", resolved: filepath.Join(root, ".npm-global", "bin", "codex"), found: true,
+			wantMethod: "npm", wantAction: "run_command", wantCommand: "npm uninstall -g @openai/codex",
+			wantTarget: "@openai/codex", wantCan: true,
+		},
+		{
+			name: "homebrew", toolID: "opencode", resolved: brewLink, found: true,
+			wantMethod: "homebrew", wantAction: "run_command", wantCommand: "brew uninstall opencode",
+			wantTarget: "opencode", wantCan: true,
+		},
+		{
+			name: "standalone", toolID: "opencode", resolved: standalone, found: true,
+			wantMethod: "standalone", wantAction: "delete_file", wantCommand: "rm " + standalone,
+			wantTarget: standalone, wantCan: true, wantWarning: true,
+		},
+		{
+			name: "unknown", toolID: "codex", resolved: "/usr/bin/codex", found: true,
+			wantMethod: "unknown", wantAction: "manual", wantTarget: "/usr/bin/codex", wantWarning: true,
+		},
+		{
+			name: "unresolvable", toolID: "opencode", found: false,
+			wantMethod: "unknown", wantAction: "manual", wantTarget: "opencode", wantWarning: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fr := &fakeRunner{}
+			var removed []string
+			inst := installer.NewWithResolver(fr, okLook,
+				func(string) (string, bool) { return tt.resolved, tt.found },
+				[]string{binDir}, func(p string) error { removed = append(removed, p); return nil })
+			svc := NewWithInstaller(reg(), settings.NewStore(filepath.Join(t.TempDir(), "settings.json")), inst)
+
+			plan, err := svc.PlanUninstall(tt.toolID)
+			if err != nil {
+				t.Fatalf("PlanUninstall: %v", err)
+			}
+			if plan.Method != tt.wantMethod || plan.Action != tt.wantAction ||
+				plan.Command != tt.wantCommand || plan.Target != tt.wantTarget || plan.CanExecute != tt.wantCan {
+				t.Fatalf("plan = %+v", plan)
+			}
+			if (plan.Warning != "") != tt.wantWarning {
+				t.Fatalf("warning = %q, want non-empty=%v", plan.Warning, tt.wantWarning)
+			}
+			if fr.runs != 0 || len(removed) != 0 {
+				t.Fatalf("preview must be read-only: runs=%d removed=%v", fr.runs, removed)
+			}
+		})
+	}
+}
+
+func TestPlanUninstallMissingDependencyAndUnknownTool(t *testing.T) {
+	fr := &fakeRunner{}
+	inst := installer.NewWithResolver(fr, missLook,
+		func(string) (string, bool) { return "/home/u/.npm-global/bin/codex", true }, nil, nil)
+	svc := NewWithInstaller(reg(), settings.NewStore(filepath.Join(t.TempDir(), "settings.json")), inst)
+
+	plan, err := svc.PlanUninstall("codex")
+	if err != nil {
+		t.Fatalf("missing npm should be a displayable plan, got %v", err)
+	}
+	if plan.Method != "npm" || plan.Action != "run_command" || plan.CanExecute || plan.Warning == "" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if _, err := svc.PlanUninstall("nope"); err == nil {
+		t.Fatal("unknown tool should return an error")
+	}
+	if fr.runs != 0 {
+		t.Fatalf("preview ran a command: %d", fr.runs)
+	}
+}
+
+func TestUninstallPlanJSONContract(t *testing.T) {
+	plan := UninstallPlan{
+		Method: "npm", Action: "run_command", Command: "npm uninstall -g pkg",
+		Target: "pkg", Warning: "warning", CanExecute: true,
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"method", "action", "command", "target", "warning", "can_execute"}
+	if len(fields) != len(want) {
+		t.Fatalf("JSON fields = %v", fields)
+	}
+	for _, key := range want {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("missing JSON field %q in %s", key, data)
+		}
 	}
 }

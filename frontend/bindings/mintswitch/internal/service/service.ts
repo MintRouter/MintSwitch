@@ -29,10 +29,13 @@ export function AddProvider(p: core$0.Provider): $CancellablePromise<string> {
 }
 
 /**
- * ApplyAll applies the active profile to every registered tool and returns a
- * per-tool outcome. It validates the saved profile once up front and fails fast
- * (returning an error, no partial results) when no valid profile is saved.
- * Individual adapter failures are captured per tool and do not abort the run.
+ * ApplyAll applies the active profile to every installed tool and returns a
+ * per-tool outcome. Tools that are not installed are skipped entirely (no
+ * result entry): applying would otherwise create their config files — API key
+ * included — for software that is not on the machine. It validates the saved
+ * profile once up front and fails fast (returning an error, no partial
+ * results) when no valid profile is saved. Individual adapter failures are
+ * captured per tool and do not abort the run.
  */
 export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[] | null> {
     return $Call.ByID(3266725423);
@@ -100,6 +103,17 @@ export function ListProviders(): $CancellablePromise<$models.ProviderView[] | nu
  */
 export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
     return $Call.ByID(3280393555);
+}
+
+/**
+ * PlanUninstall returns a non-secret, read-only preview of the action that
+ * would currently be used to remove toolID. Unknown or unresolvable methods and
+ * missing npm/brew are represented by CanExecute=false and a warning rather
+ * than an error. The preview is never accepted by Uninstall; execution resolves
+ * a fresh plan from toolID.
+ */
+export function PlanUninstall(toolID: string): $CancellablePromise<$models.UninstallPlan> {
+    return $Call.ByID(1185264271, toolID);
 }
 
 /**

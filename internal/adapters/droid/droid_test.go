@@ -70,8 +70,8 @@ func TestIDName(t *testing.T) {
 	}
 }
 
-// TestDetect proves the contract: a resolvable "droid" binary OR an existing
-// ~/.factory directory is an installed signal.
+// TestDetect proves the contract: a leftover ~/.factory dir is NOT an
+// installed signal; only a resolvable "droid" binary is.
 func TestDetect(t *testing.T) {
 	a, r := newAdapter(t)
 	if installed, _ := a.Detect(); installed {
@@ -80,15 +80,12 @@ func TestDetect(t *testing.T) {
 	if err := os.MkdirAll(r.Join(".factory"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if installed, path := a.Detect(); !installed || path != r.Join(".factory", "settings.json") {
-		t.Fatalf("expected installed via ~/.factory dir, got %v %q", installed, path)
-	}
-	if err := os.RemoveAll(r.Join(".factory")); err != nil {
-		t.Fatal(err)
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("~/.factory present + binary absent must be NOT installed")
 	}
 	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
-	if installed, _ := a.Detect(); !installed {
-		t.Fatal("expected installed via PATH binary")
+	if installed, path := a.Detect(); !installed || path != r.Join(".factory", "settings.json") {
+		t.Fatalf("expected installed via PATH binary, got %v %q", installed, path)
 	}
 }
 
@@ -274,6 +271,7 @@ func writeLegacySettings(t *testing.T, a *Adapter, p core.Profile) string {
 // file (e.g. an external restore/wipe), Status falls back to Default.
 func TestStatusDefaultWhenEntryRemoved(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 	p := sampleProfile()
 	if _, err := a.Apply(p); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -292,6 +290,7 @@ func TestStatusDefaultWhenEntryRemoved(t *testing.T) {
 // marker).
 func TestApplyStripsLegacyMarker(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 	p := sampleProfile()
 	path := writeLegacySettings(t, a, p)
 
@@ -442,6 +441,7 @@ func TestRestoreIgnoresContaminatedNewerBackup(t *testing.T) {
 // entries and settings.
 func TestRestoreNoBackupStripsManagedEntry(t *testing.T) {
 	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 	path := a.configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -490,6 +490,7 @@ func TestRestoreNoBackupStripsManagedEntry(t *testing.T) {
 // the tool as never applied) and Restore must still revert byte-for-byte.
 func TestOrphanStatusAndRestoreWithBackup(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 	path := a.configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -532,6 +533,7 @@ func TestOrphanStatusAndRestoreWithBackup(t *testing.T) {
 // Restore beforehand.
 func TestOrphanRestoreNoBackupStrips(t *testing.T) {
 	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 	path := a.configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -586,6 +588,7 @@ func TestOrphanRestoreNoBackupStrips(t *testing.T) {
 // leaves it byte-for-byte untouched.
 func TestPureUserConfigNeverOrphan(t *testing.T) {
 	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/droid", nil }
 	path := a.configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)

@@ -12,7 +12,6 @@
 package droid
 
 import (
-	"os"
 	"os/exec"
 
 	"mintswitch/internal/backup"
@@ -79,20 +78,14 @@ func (a *Adapter) ConfigPaths() []string {
 	return []string{a.configPath()}
 }
 
-// Detect reports whether Factory Droid is installed: either the "droid" CLI
-// binary is resolvable (via PATH or the curated common bin dirs, which include
-// ~/.local/bin) or the ~/.factory directory exists (Droid always creates it).
-// The active path is always the global settings file and is returned even when
-// not installed, since Status/Apply rely on it.
+// Detect reports whether Factory Droid is installed, defined solely as the
+// "droid" CLI binary being resolvable (via PATH or the curated common bin
+// dirs, which include ~/.local/bin). A leftover ~/.factory dir is not an
+// installed signal, so an uninstall is reflected. The active path is always
+// the global settings file and is returned even when not installed, since
+// Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
-	path := a.configPath()
-	if a.r.BinaryResolvable(a.lookPath, "droid") {
-		return true, path
-	}
-	if fi, err := os.Stat(a.r.Join(".factory")); err == nil && fi.IsDir() {
-		return true, path
-	}
-	return false, path
+	return a.r.BinaryResolvable(a.lookPath, "droid"), a.configPath()
 }
 
 // Status inspects the current config relative to the given profile. The

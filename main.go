@@ -1,10 +1,11 @@
+//go:build !server
+
 package main
 
 import (
 	"embed"
 
 	"log"
-	"time"
 
 	"mintswitch/internal/service"
 
@@ -19,21 +20,11 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-func init() {
-	// Register a custom event whose associated data type is string.
-	// This is not required, but the binding generator will pick up registered events
-	// and provide a strongly typed JS/TS API for them.
-	application.RegisterEvent[string]("time")
-}
-
-// main function serves as the application's entry point. It initializes the application, creates a window,
-// and starts a goroutine that emits a time-based event every second. It subsequently runs the application and
-// logs any error that might occur.
+// main is the desktop application entry point.
 func main() {
 
 	// Build the backend service that exposes tool management to the frontend.
-	// It works identically in the desktop and `-tags server` (web) builds. A
-	// failure here means the user's home/data directories could not be resolved,
+	// A failure here means the user's home/data directories could not be resolved,
 	// so there is nothing the app can usefully do; log and exit.
 	svc, err := service.New()
 	if err != nil {
@@ -56,14 +47,6 @@ func main() {
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
-		},
-		// Server options are only used when building with `-tags server`
-		// (the experimental Wails v3 HTTP server mode). They are ignored by the
-		// default desktop build. Override at runtime with WAILS_SERVER_HOST /
-		// WAILS_SERVER_PORT.
-		Server: application.ServerOptions{
-			Host: "localhost",
-			Port: 8080,
 		},
 	})
 
@@ -89,16 +72,6 @@ func main() {
 		BackgroundColour: application.NewRGB(6, 7, 15),
 		URL:              "/",
 	})
-
-	// Create a goroutine that emits an event containing the current time every second.
-	// The frontend can listen to this event and update the UI accordingly.
-	go func() {
-		for {
-			now := time.Now().Format(time.RFC1123)
-			app.Event.Emit("time", now)
-			time.Sleep(time.Second)
-		}
-	}()
 
 	// Run the application. This blocks until the application has been exited.
 	err = app.Run()

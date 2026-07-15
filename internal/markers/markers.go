@@ -54,13 +54,18 @@ func (s *Store) Get(toolID string) (core.Marker, bool, error) {
 }
 
 // Put records marker under toolID, replacing any prior entry. A corrupt store
-// file does not block the write: it is replaced by a fresh store holding only
-// this entry (the write heals the file).
+// file does not block the write: it is first quarantined to <path>.corrupt
+// (preserving the unreadable contents for recovery) and then replaced by a
+// fresh store holding only this entry. If quarantining fails, Put returns an
+// error rather than silently destroying the other tools' markers.
 func (s *Store) Put(toolID string, marker core.Marker) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, err := s.load()
 	if err != nil {
+		if qErr := s.quarantineCorrupt(err); qErr != nil {
+			return qErr
+		}
 		m = map[string]core.Marker{}
 	}
 	m[toolID] = marker
@@ -68,14 +73,17 @@ func (s *Store) Put(toolID string, marker core.Marker) error {
 }
 
 // Delete removes the entry for toolID. It is a no-op (and does not create the
-// file) when the store is missing or has no such entry. A corrupt store file is
-// healed to an empty store.
+// file) when the store is missing or has no such entry. A corrupt store file
+// is quarantined to <path>.corrupt (preserving the unreadable contents for
+// recovery) instead of being overwritten; the store is then absent, which is
+// the deleted state. If quarantining fails, Delete returns an error rather
+// than silently destroying the other tools' markers.
 func (s *Store) Delete(toolID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, err := s.load()
 	if err != nil {
-		return s.save(map[string]core.Marker{})
+		return s.quarantineCorrupt(err)
 	}
 	if _, ok := m[toolID]; !ok {
 		return nil
@@ -84,8 +92,13 @@ func (s *Store) Delete(toolID string) error {
 	return s.save(m)
 }
 
+// errCorrupt marks load errors caused by an unparseable store file (as
+// opposed to I/O errors like permission failures). Put/Delete quarantine the
+// file only for this class of error.
+var errCorrupt = errors.New("markers: store file is corrupt")
+
 // load reads the backing file into a map. A missing or empty file yields an
-// empty map; malformed JSON yields an error.
+// empty map; malformed JSON yields an error wrapping [errCorrupt].
 func (s *Store) load() (map[string]core.Marker, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -99,12 +112,28 @@ func (s *Store) load() (map[string]core.Marker, error) {
 	}
 	var m map[string]core.Marker
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("markers: parse %s: %w", s.path, err)
+		return nil, fmt.Errorf("%w: parse %s: %w", errCorrupt, s.path, err)
 	}
 	if m == nil {
 		m = map[string]core.Marker{}
 	}
 	return m, nil
+}
+
+// quarantineCorrupt handles a load failure before a mutating write. For a
+// corrupt (unparseable) file it renames the file to <path>.corrupt so the
+// original bytes stay recoverable, replacing any previous quarantine (the
+// newest evidence wins). Any other load error — e.g. a permission failure,
+// where the store contents may be intact — is returned unchanged so the
+// caller does not overwrite data it could not read.
+func (s *Store) quarantineCorrupt(loadErr error) error {
+	if !errors.Is(loadErr, errCorrupt) {
+		return loadErr
+	}
+	if err := os.Rename(s.path, s.path+".corrupt"); err != nil {
+		return fmt.Errorf("markers: quarantine corrupt store: %w", errors.Join(loadErr, err))
+	}
+	return nil
 }
 
 // save writes the map as indented JSON atomically with 0600 perms, creating

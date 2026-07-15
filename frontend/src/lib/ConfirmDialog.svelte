@@ -26,15 +26,31 @@
 
   let dialogEl = $state<HTMLDivElement | null>(null);
   let confirmBtn = $state<HTMLButtonElement | null>(null);
+  let cancelBtn = $state<HTMLButtonElement | null>(null);
+  // Element that had focus before the dialog opened, restored on close so
+  // keyboard users return to where they were.
+  let prevFocus: HTMLElement | null = null;
 
-  // Move focus into the dialog when it opens so keyboard users land on the
-  // primary action and screen readers announce the dialog.
+  // Move focus into the dialog when it opens so screen readers announce it.
+  // For destructive (danger) confirms the initial focus lands on Cancel, so
+  // an inertial Enter never triggers the destructive action; otherwise it
+  // lands on the primary Confirm action. `danger` and the button refs are
+  // read inside the microtask, so this effect re-runs only on open/close.
   $effect(() => {
-    if (open && confirmBtn) confirmBtn.focus();
+    if (!open) return;
+    prevFocus = document.activeElement as HTMLElement | null;
+    queueMicrotask(() => (danger ? cancelBtn : confirmBtn)?.focus());
+    return () => {
+      if (prevFocus?.isConnected) prevFocus.focus();
+      prevFocus = null;
+    };
   });
 
   function onKeydown(e: KeyboardEvent): void {
-    if (!open) return;
+    // Skip events an underlying dialog already handled in this same window
+    // pass (e.g. the Esc that just OPENED this confirmation) — otherwise one
+    // keypress would open and instantly cancel it.
+    if (!open || e.defaultPrevented) return;
     if (e.key === "Escape") {
       e.preventDefault();
       if (!busy) onCancel();
@@ -78,7 +94,7 @@
       <h2 class="title" id="confirm-title">{title}</h2>
       <p class="message" id="confirm-message">{message}</p>
       <div class="actions">
-        <button class="btn-ghost" type="button" onclick={onCancel} disabled={busy}>
+        <button class="btn-ghost" type="button" bind:this={cancelBtn} onclick={onCancel} disabled={busy}>
           Cancel
         </button>
         <button
@@ -100,7 +116,9 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    z-index: 50;
+    /* Above every other dialog surface (ProvidersCard uses 55) so a
+       confirmation stacked on the Manage/form dialogs renders on top. */
+    z-index: 60;
     display: flex;
     align-items: center;
     justify-content: center;

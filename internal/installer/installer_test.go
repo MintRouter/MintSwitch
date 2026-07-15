@@ -324,3 +324,151 @@ func TestNpmMissing(t *testing.T) {
 		t.Fatal("expected intended argv even when npm missing")
 	}
 }
+
+// TestPlanUninstallMethods verifies every preview classification and proves
+// planning itself never runs a command or removes a file.
+func TestPlanUninstallMethods(t *testing.T) {
+	root := t.TempDir()
+	brewLink := filepath.Join(root, "brew-opencode")
+	if err := os.Symlink("/opt/homebrew/Cellar/opencode/1.0/bin/opencode", brewLink); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(root, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	standalone := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(standalone, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		toolID     string
+		resolved   string
+		found      bool
+		look       func(string) (string, error)
+		wantMethod string
+		wantAction string
+		wantArgs   []string
+		wantTarget string
+		wantCan    bool
+		wantWarn   bool
+		wantErr    error
+	}{
+		{
+			name: "npm", toolID: "codex", resolved: filepath.Join(root, ".npm-global", "bin", "codex"), found: true,
+			look: okLook, wantMethod: UninstallMethodNPM, wantAction: UninstallActionRunCommand,
+			wantArgs: []string{"npm", "uninstall", "-g", "@openai/codex"}, wantTarget: "@openai/codex", wantCan: true,
+		},
+		{
+			name: "homebrew", toolID: "opencode", resolved: brewLink, found: true,
+			look: okLook, wantMethod: UninstallMethodHomebrew, wantAction: UninstallActionRunCommand,
+			wantArgs: []string{"brew", "uninstall", "opencode"}, wantTarget: "opencode", wantCan: true,
+		},
+		{
+			name: "standalone", toolID: "opencode", resolved: standalone, found: true,
+			look: okLook, wantMethod: UninstallMethodStandalone, wantAction: UninstallActionDeleteFile,
+			wantArgs: []string{"rm", standalone}, wantTarget: standalone, wantCan: true, wantWarn: true,
+		},
+		{
+			name: "unknown location", toolID: "codex", resolved: "/usr/bin/codex", found: true,
+			look: okLook, wantMethod: UninstallMethodUnknown, wantAction: UninstallActionManual,
+			wantTarget: "/usr/bin/codex", wantWarn: true, wantErr: ErrUnknownMethod,
+		},
+		{
+			name: "unresolvable", toolID: "opencode", found: false,
+			look: okLook, wantMethod: UninstallMethodUnknown, wantAction: UninstallActionManual,
+			wantTarget: "opencode", wantWarn: true, wantErr: ErrUnknownMethod,
+		},
+		{
+			name: "npm missing", toolID: "codex", resolved: filepath.Join(root, ".npm-global", "bin", "codex"), found: true,
+			look: missLook, wantMethod: UninstallMethodNPM, wantAction: UninstallActionRunCommand,
+			wantArgs: []string{"npm", "uninstall", "-g", "@openai/codex"}, wantTarget: "@openai/codex", wantWarn: true, wantErr: ErrNpmMissing,
+		},
+		{
+			name: "brew missing", toolID: "opencode", resolved: brewLink, found: true,
+			look: missLook, wantMethod: UninstallMethodHomebrew, wantAction: UninstallActionRunCommand,
+			wantArgs: []string{"brew", "uninstall", "opencode"}, wantTarget: "opencode", wantWarn: true, wantErr: ErrBrewMissing,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fr := &fakeRunner{}
+			var removed []string
+			resolve := func(string) (string, bool) { return tt.resolved, tt.found }
+			inst := NewWithResolver(fr, tt.look, resolve, []string{binDir},
+				func(p string) error { removed = append(removed, p); return nil })
+
+			plan, err := inst.PlanUninstall(tt.toolID)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+			if plan.Method != tt.wantMethod || plan.Action != tt.wantAction || plan.Target != tt.wantTarget || plan.CanExecute != tt.wantCan {
+				t.Fatalf("plan = %+v", plan)
+			}
+			if !reflect.DeepEqual(plan.Args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", plan.Args, tt.wantArgs)
+			}
+			if (plan.Warning != "") != tt.wantWarn {
+				t.Fatalf("warning = %q, want non-empty=%v", plan.Warning, tt.wantWarn)
+			}
+			if fr.runs != 0 || len(removed) != 0 {
+				t.Fatalf("planning must be read-only: runs=%d removed=%v", fr.runs, removed)
+			}
+		})
+	}
+}
+
+func TestPlanUninstallUnknownTool(t *testing.T) {
+	inst := NewWithResolver(&fakeRunner{}, okLook, resolveTo("/usr/bin/nope"), nil, nil)
+	plan, err := inst.PlanUninstall("nope")
+	if !errors.Is(err, ErrUnknownTool) || !reflect.DeepEqual(plan, UninstallPlan{}) {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+}
+
+// TestUninstallReplansAtExecution proves a previously previewed path is never
+// accepted or replayed: Uninstall resolves again and executes the new method.
+func TestUninstallReplansAtExecution(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previewTarget := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(previewTarget, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executionTarget := filepath.Join(root, ".npm-global", "bin", "codex")
+	resolved := []string{previewTarget, executionTarget}
+	calls := 0
+	resolve := func(string) (string, bool) {
+		p := resolved[calls]
+		calls++
+		return p, true
+	}
+	fr := &fakeRunner{out: "removed"}
+	var removed []string
+	inst := NewWithResolver(fr, okLook, resolve, []string{binDir},
+		func(p string) error { removed = append(removed, p); return nil })
+
+	preview, err := inst.PlanUninstall("codex")
+	if err != nil || preview.Method != UninstallMethodStandalone || preview.Target != previewTarget {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	args, _, err := inst.Uninstall(context.Background(), "codex")
+	if err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if calls != 2 || !reflect.DeepEqual(args, []string{"npm", "uninstall", "-g", "@openai/codex"}) {
+		t.Fatalf("calls=%d args=%v", calls, args)
+	}
+	if fr.runs != 1 || len(removed) != 0 {
+		t.Fatalf("execution did not use fresh npm plan: runs=%d removed=%v", fr.runs, removed)
+	}
+	if _, err := os.Stat(previewTarget); err != nil {
+		t.Fatalf("preview target must remain: %v", err)
+	}
+}

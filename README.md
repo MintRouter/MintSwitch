@@ -1,99 +1,74 @@
 # MintSwitch — AI Tool API Config Switcher
 
-Cross-platform desktop app to switch AI coding tools (Claude Code, Codex, OpenCode, Factory Droid, Zed, Kilo Code) to a custom OpenAI-compatible endpoint. One profile, per-tool or global apply, automatic backups, one-click restore. The profile holds multiple named API keys (you pick each key's provider name): one active key applies to all tools, with optional per-tool key overrides via the Manage dialog. Keys are stored in the OS keychain (settings-file fallback) and their values are never displayed. Built with Go + Wails.
+MintSwitch is a cross-platform **desktop-only** app for switching AI coding tools (Claude Code, Codex, OpenCode, Factory Droid, Zed, and Kilo Code) to a custom OpenAI-compatible endpoint. It supports per-tool or global apply, automatic backups, and one-click restore.
+
+A profile can contain multiple named API keys. One active key applies to all tools, with optional per-tool overrides in the Manage dialog. Keys are stored in the OS keychain (with a settings-file fallback), and key values are never displayed.
+
+MintSwitch is built with Go and Wails. It does not provide or support an HTTP server, web deployment, or server container image.
 
 ## Project layout
 
-```
-.
-├── main.go              # App entry point (desktop + web/server via build tags)
-├── Taskfile.yml         # Top-level tasks (dev, build, build:server, run:server)
-├── build/               # Wails build config, per-OS Taskfiles, Docker, icons
-├── internal/            # Go backend packages
-│   ├── adapters/        # Per-tool config adapters (claudecode, codex, opencode, droid, zed, kilo)
-│   ├── backup/          # Config backup and restore
-│   ├── core/            # Domain model: profiles, adapter interfaces, registry
-│   ├── installer/       # Tool install detection
-│   ├── markers/         # Sidecar store for per-tool managed markers
-│   ├── paths/           # Home/data directory resolution
-│   ├── secrets/         # API key storage in the OS keychain
-│   ├── settings/        # App settings persistence
-│   └── service/         # Backend service exposed to the frontend via bindings
-└── frontend/            # Svelte + TS + Vite frontend
-    ├── src/             # App.svelte and UI components (lib/)
-    ├── bindings/        # Auto-generated TS bindings (do not edit by hand)
-    └── dist/            # Built assets, embedded into the Go binary (generated)
-```
+- `main.go` — desktop application entry point
+- `Taskfile.yml` — top-level desktop development, build, and package tasks
+- `build/` — Wails config, platform packaging, icons, and optional desktop cross-compilation tooling
+- `internal/` — adapters, backup/restore, settings, key storage, and the backend service
+- `frontend/` — Svelte, TypeScript, and Vite desktop UI
 
-The Go binary embeds the frontend with `//go:embed all:frontend/dist`, so
-`frontend/dist` must be built before `go build` (the Task targets do this).
+The Go binary embeds `frontend/dist`, so the frontend must be built before direct Go build, test, vet, or vulnerability commands that load the root package. Wails tasks handle this automatically.
 
 ## Prerequisites
 
-- **Go** 1.24+ (developed against go1.26)
-- **Node.js** 20+ and **npm** (for the Svelte/Vite frontend)
-- **Wails v3 CLI** and **Task** (the Wails task runner):
+- Go 1.26.5 or newer
+- Node.js 22 and npm
+- Wails v3 CLI at the version used by `go.mod`
+- Task-compatible Wails task runner
+- Native GUI dependencies reported by `wails3 doctor`
+
+Install the matching Wails CLI and check the host:
 
 ```sh
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.111
+wails3 doctor
 ```
 
-Ensure `"$(go env GOPATH)/bin"` is on your `PATH` so `wails3` is found.
-Run `wails3 doctor` to verify your platform's native GUI dependencies.
+Ensure `$(go env GOPATH)/bin` is on `PATH`.
 
-## Run — desktop (default)
+## Develop and package
 
-Native WebView desktop app with hot reload:
+Run the desktop app with hot reload:
 
 ```sh
 wails3 dev
 ```
 
-Or build/run a desktop binary directly:
+Build or package for the current desktop platform:
 
 ```sh
-wails3 task build      # production .app/binary for the current OS
-go build -o bin/mintswitch . && ./bin/mintswitch
+wails3 task build
+wails3 task package
 ```
 
-## Run — web / server mode
+`wails3 task setup:docker` builds the optional `Dockerfile.cross` image used only to cross-compile desktop binaries. It is not a runtime or server image.
 
-The **same** codebase serves the frontend over HTTP when built with the
-`server` build tag (Wails v3's experimental HTTP server mode — integrated into
-`pkg/application`, enabled by the tag; no separate plugin import is required).
+## Verify changes
+
+Run the same quality gates used by CI:
 
 ```sh
-wails3 task run:server          # build (-tags server) + run, then open the URL
+(cd frontend && npm ci && npm run check && npm run build && npm audit --audit-level=high)
+go test -race ./...
+go vet ./...
+govulncheck ./...
 ```
 
-Equivalent manual commands:
+Install `govulncheck` if it is not already available:
 
 ```sh
-wails3 task common:build:frontend                 # generate bindings + build dist
-go build -tags server -o bin/mintswitch-server .  # build the server binary
-./bin/mintswitch-server                           # serves http://localhost:8080
+go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
 ```
 
-Open <http://localhost:8080> in a browser. Host/port default to
-`localhost:8080` (see `ServerOptions` in `main.go`) and can be overridden at
-runtime:
-
-```sh
-WAILS_SERVER_HOST=0.0.0.0 WAILS_SERVER_PORT=8099 ./bin/mintswitch-server
-```
-
-A Docker image for the server build is also available:
-`wails3 task run:docker` (exposes port 8080).
-
-## Common tasks
-
-```sh
-go build ./...        # compile the desktop build of all packages
-go vet ./...          # static checks
-wails3 task --list    # list all available tasks
-```
+CI runs these checks for pull requests and branch pushes. Tag releases must pass the same checks before any unsigned desktop package is built or published.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-

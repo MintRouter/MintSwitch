@@ -530,13 +530,12 @@ func TestPureUserConfigNeverOrphan(t *testing.T) {
 	}
 }
 
-// TestApplyRollsBackConfigWhenAuthFails pins the two-file atomicity fix: when
-// the auth.json half of Apply fails, config.toml is rolled back to its
-// pre-Apply state (original bytes for an existing file, removal for a created
-// one) and no managed marker is recorded, so a failed Apply never leaves
-// config.toml pointing at the proxy without a matching API key.
-func TestApplyRollsBackConfigWhenAuthFails(t *testing.T) {
-	t.Run("existing config restored", func(t *testing.T) {
+// TestApplyMalformedAuthFailsBeforeAnyWrite pins the up-front read: a
+// malformed auth.json fails the Apply before either file is written, so
+// config.toml is never touched (or created) and no managed marker is
+// recorded.
+func TestApplyMalformedAuthFailsBeforeAnyWrite(t *testing.T) {
+	t.Run("existing config untouched", func(t *testing.T) {
 		a, _ := newAdapter(t)
 		cfgPath, authPath := a.configPath(), a.authPath()
 		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
@@ -558,14 +557,14 @@ func TestApplyRollsBackConfigWhenAuthFails(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(got) != userCfg {
-			t.Fatalf("config.toml not rolled back: %q, want %q", got, userCfg)
+			t.Fatalf("config.toml must be untouched: %q, want %q", got, userCfg)
 		}
 		if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
 			t.Fatalf("marker after failed Apply = inStore=%v err=%v, want absent", inStore, err)
 		}
 	})
 
-	t.Run("created config removed", func(t *testing.T) {
+	t.Run("config never created", func(t *testing.T) {
 		a, _ := newAdapter(t)
 		cfgPath, authPath := a.configPath(), a.authPath()
 		if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
@@ -579,10 +578,86 @@ func TestApplyRollsBackConfigWhenAuthFails(t *testing.T) {
 			t.Fatal("expected Apply to fail on malformed auth.json")
 		}
 		if _, err := os.Stat(cfgPath); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("config.toml must be removed by rollback, stat err = %v", err)
+			t.Fatalf("config.toml must not be created, stat err = %v", err)
 		}
 		if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
 			t.Fatalf("marker after failed Apply = inStore=%v err=%v, want absent", inStore, err)
 		}
 	})
+}
+
+// TestApplyRollsBackAuthWhenConfigWriteFails pins the two-file atomicity fix
+// for the auth-first write order: when the config.toml half of Apply fails,
+// auth.json is rolled back to its pre-Apply state (original bytes for an
+// existing file, removal for a created one) and no managed marker is
+// recorded, so a failed Apply never leaves the MintSwitch key behind in
+// auth.json.
+func TestApplyRollsBackAuthWhenConfigWriteFails(t *testing.T) {
+	failWrite := func(string, map[string]any) error { return errors.New("injected config write failure") }
+
+	t.Run("existing auth restored", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		a.writeConfig = failWrite
+		authPath := a.authPath()
+		if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		userAuth := `{"tokens":{"id_token":"keep-me"}}`
+		if err := os.WriteFile(authPath, []byte(userAuth), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := a.Apply(sampleProfile()); err == nil {
+			t.Fatal("expected Apply to fail on config.toml write")
+		}
+		got, err := os.ReadFile(authPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != userAuth {
+			t.Fatalf("auth.json not rolled back: %q, want %q", got, userAuth)
+		}
+		if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
+			t.Fatalf("marker after failed Apply = inStore=%v err=%v, want absent", inStore, err)
+		}
+	})
+
+	t.Run("created auth removed", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		a.writeConfig = failWrite
+		authPath := a.authPath()
+
+		p := sampleProfile()
+		if _, err := a.Apply(p); err == nil {
+			t.Fatal("expected Apply to fail on config.toml write")
+		}
+		if _, err := os.Stat(authPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("auth.json must be removed by rollback, stat err = %v", err)
+		}
+		if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
+			t.Fatalf("marker after failed Apply = inStore=%v err=%v, want absent", inStore, err)
+		}
+	})
+}
+
+// TestApplyWriteOrderAuthFirst pins the crash-window contract: auth.json must
+// be written before config.toml, so a kill between the two writes leaves the
+// traffic-redirecting config.toml pristine (the leftover auth key is inert).
+func TestApplyWriteOrderAuthFirst(t *testing.T) {
+	a, _ := newAdapter(t)
+	var authHadKeyAtConfigWrite bool
+	a.writeConfig = func(path string, m map[string]any) error {
+		auth, err := core.ReadJSONObject(a.authPath())
+		if err != nil {
+			t.Fatalf("read auth.json during config write: %v", err)
+		}
+		_, authHadKeyAtConfigWrite = auth[authKeyName]
+		return writeTOML(path, m)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	if !authHadKeyAtConfigWrite {
+		t.Fatal("auth.json must carry the API key before config.toml is written")
+	}
 }

@@ -23,6 +23,18 @@ const modelsFetchTimeout = 10 * time.Second
 // misbehaving endpoint cannot make the app buffer an unbounded payload.
 const modelsFetchMaxBody = 4 << 20
 
+// UninstallPlan is the non-secret, read-only preview returned by
+// [Service.PlanUninstall]. Command and Target are display-only; execution
+// accepts only a tool ID and resolves a fresh plan.
+type UninstallPlan struct {
+	Method     string `json:"method"`
+	Action     string `json:"action"`
+	Command    string `json:"command"`
+	Target     string `json:"target"`
+	Warning    string `json:"warning"`
+	CanExecute bool   `json:"can_execute"`
+}
+
 // FetchProviderModels queries the stored provider's OpenAI-compatible
 // endpoint (GET {base_url}/models with a Bearer key) and returns the sorted,
 // de-duplicated model IDs it advertises. It is read-only: it never mutates

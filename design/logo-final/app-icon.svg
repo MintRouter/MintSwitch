@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" role="img" aria-label="MintSwitch app icon">
   <!-- MintSwitch app-icon, 1024×1024 vector source for build/appicon.png.
-       Dock-native composition: transparent canvas with an 880×880 squircle tile
-       (85.9% of canvas, inset 72), matching the optical size of macOS Dock icons
-       (Telegram/Docker style). Corners use the Apple/Figma smooth-corner squircle:
-       radius 22.37% of tile (196.86) with 60% corner smoothing — not a hard
-       rounded rectangle. Four canvas corners stay fully transparent (real alpha).
-       Mark: translate(152,152) scale(15) → ink 562.5×480 (≈64% of tile width),
-       visual center (500.75,512) (0.75-unit optical left shift), white active
+       Dock-native composition: transparent canvas with a 720×720 squircle tile
+       (70.3% of canvas, inset 152), matching the optical footprint of compact
+       macOS Dock icons. Corners use the Apple/Figma smooth-corner squircle:
+       radius 22.37% of tile with 60% corner smoothing — not a hard rounded
+       rectangle. Four canvas corners stay fully transparent (real alpha).
+       The original 880×880 composition is scaled 9/11 around the canvas centre,
+       preserving the mark's ≈64% tile-width ratio and optical centring. White active
        route + light-mint alternate on the flat brand gradient (no 3D/shadow).
        Contrast on gradient: white ≥4.49:1, #9fe8dc ≥3.22:1 (≥3:1 graphics). -->
   <defs>
@@ -15,12 +15,14 @@
       <stop offset="1" stop-color="#0f4fd6"/>
     </linearGradient>
   </defs>
-  <path fill="url(#tile)" d="M 637.03 72 c 110.25 0 165.37 0 207.48 21.46 a 196.86 196.86 0 0 1 86.03 86.03 c 21.46 42.11 21.46 97.23 21.46 207.48 l 0 250.06 c 0 110.25 0 165.37 -21.46 207.48 a 196.86 196.86 0 0 1 -86.03 86.03 c -42.11 21.46 -97.23 21.46 -207.48 21.46 l -250.06 0 c -110.25 0 -165.37 0 -207.48 -21.46 a 196.86 196.86 0 0 1 -86.03 -86.03 c -21.46 -42.11 -21.46 -97.23 -21.46 -207.48 l 0 -250.06 c 0 -110.25 0 -165.37 21.46 -207.48 a 196.86 196.86 0 0 1 86.03 -86.03 c 42.11 -21.46 97.23 -21.46 207.48 -21.46 Z"/>
-  <g transform="translate(152 152) scale(15)">
+  <g transform="translate(93.0909 93.0909) scale(0.8181818)">
+    <path fill="url(#tile)" d="M 637.03 72 c 110.25 0 165.37 0 207.48 21.46 a 196.86 196.86 0 0 1 86.03 86.03 c 21.46 42.11 21.46 97.23 21.46 207.48 l 0 250.06 c 0 110.25 0 165.37 -21.46 207.48 a 196.86 196.86 0 0 1 -86.03 86.03 c -42.11 21.46 -97.23 21.46 -207.48 21.46 l -250.06 0 c -110.25 0 -165.37 0 -207.48 -21.46 a 196.86 196.86 0 0 1 -86.03 -86.03 c -21.46 -42.11 -21.46 -97.23 -21.46 -207.48 l 0 -250.06 c 0 -110.25 0 -165.37 21.46 -207.48 a 196.86 196.86 0 0 1 86.03 -86.03 c 42.11 -21.46 97.23 -21.46 207.48 -21.46 Z"/>
+    <g transform="translate(152 152) scale(15)">
     <path d="M20 24C27 24 27 36 34 36H38" stroke="#9fe8dc" stroke-width="4.5" stroke-linecap="round"/>
     <path d="M8.5 24H20C27 24 27 12 34 12H38" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
     <circle cx="8.5" cy="24" r="4" fill="#ffffff"/>
     <circle cx="38" cy="12" r="4" fill="#ffffff"/>
-    <circle cx="38" cy="36" r="4" fill="#9fe8dc"/>
+      <circle cx="38" cy="36" r="4" fill="#9fe8dc"/>
+    </g>
   </g>
 </svg>

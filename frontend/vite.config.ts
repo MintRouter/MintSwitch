@@ -5,7 +5,11 @@ import wails from "@wailsio/runtime/plugins/vite";
 // https://vitejs.dev/config/
 export default defineConfig({
   server: {
-    host: true,
+    // Bind loopback only — never all interfaces (the dev UI manages API
+    // keys). 127.0.0.1 is pinned explicitly because plain "localhost" can
+    // resolve to [::1] (IPv6) while the Wails asset proxy dials tcp4
+    // 127.0.0.1, which would leave the app window blank.
+    host: "127.0.0.1",
     port: Number(process.env.WAILS_VITE_PORT) || 9245,
     strictPort: true,
   },

@@ -1,10 +1,4 @@
-# Release pipeline: builds MintSwitch for Windows/Linux/macOS on tag push (v*)
-# and attaches the artifacts to a GitHub Release.
-#
-# NOTE: No code signing or notarization is performed (out of scope).
-#   - macOS: the Taskfile ad-hoc signs the .app (codesign --sign -); users may
-#     need to right-click > Open or clear the quarantine attribute on first run.
-#   - Windows: the .exe is unsigned; SmartScreen may warn on first run.
+# Unsigned desktop release pipeline. No signing or notarization is required.
 name: Release
 
 on:
@@ -13,16 +7,25 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
-  # Keep in sync with the wails/v3 version in go.mod
-  WAILS3_VERSION: v3.0.0-alpha2.111
+  GO_VERSION: "1.26.5"
+  NODE_VERSION: "22"
+  WAILS3_VERSION: "v3.0.0-alpha2.111"
 
 jobs:
+  quality:
+    name: Required quality gates
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
     name: Build (${{ matrix.platform }}-${{ matrix.arch }})
+    needs: quality
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +33,7 @@ jobs:
           - os: macos-latest
             platform: darwin
             arch: universal
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux
             arch: amd64
           - os: windows-latest
@@ -38,34 +41,30 @@ jobs:
             arch: amd64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
-      # Wails v3 on Linux needs GTK4 + WebKitGTK 6.0 dev headers (CGO):
-      # the wails3 CLI checks pkg-config for gtk4 and webkitgtk-6.0.
-      # Package names verified on packages.ubuntu.com for noble (24.04):
-      # libgtk-4-dev, libwebkitgtk-6.0-dev (universe, source: webkit2gtk).
-      # Build tooling (gcc, pkg-config, git, etc.) is preinstalled on the
-      # hosted ubuntu-latest image.
       - name: Install Linux system dependencies
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install wails3 CLI (pinned to go.mod version)
+      - name: Install Wails CLI
         shell: bash
         run: |
           go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"
@@ -75,25 +74,16 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      # Produces a universal (x86_64 + arm64) bin/mintswitch via lipo and
-      # "bin/MintSwitch By MintRouter.AI.app" (ad-hoc signed by the Taskfile),
-      # so the same DMG runs on both Intel and Apple Silicon Macs.
-      - name: Build macOS .app (universal)
+      - name: Build macOS app
         if: matrix.platform == 'darwin'
         run: wails3 task darwin:package:universal
 
-      # Produces bin/mintswitch, generates build/linux/mintswitch.desktop and
-      # packages everything into a .deb via nfpm (embedded in the wails3 CLI —
-      # no extra install needed). The nfpm version is synced to the tag first.
-      - name: Build Linux .deb
+      - name: Build Linux package
         if: matrix.platform == 'linux'
         run: |
           sed -i "s/^version: .*/version: \"${GITHUB_REF_NAME#v}\"/" build/linux/nfpm/nfpm.yaml
           wails3 task linux:create:deb
 
-      # NSIS is not preinstalled on the windows-2025 image (windows-latest);
-      # see actions/runner-images#11754. The choco package installs to
-      # "C:\Program Files (x86)\NSIS" without putting makensis on PATH.
       - name: Install NSIS
         if: matrix.platform == 'windows'
         shell: pwsh
@@ -101,16 +91,11 @@ jobs:
           choco install nsis -y --no-progress
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
 
-      # Produces bin/MintSwitch.exe (production flags, CGO disabled) plus the
-      # NSIS installer bin/MintSwitch-amd64-installer.exe (with the WebView2
-      # bootstrapper); the Windows Taskfile overrides APP_NAME to "MintSwitch"
-      # so the binary, NSIS and MSIX all use the same casing.
-      - name: Build Windows .exe + NSIS installer
+      - name: Build Windows app and installer
         if: matrix.platform == 'windows'
         run: wails3 task windows:package
 
-      # Standard drag-to-install DMG: the .app next to an /Applications symlink.
-      - name: Package artifact (macOS)
+      - name: Package macOS artifact
         if: matrix.platform == 'darwin'
         run: |
           mkdir dmg-stage
@@ -118,14 +103,11 @@ jobs:
           ln -s /Applications dmg-stage/Applications
           hdiutil create -volname "MintSwitch" -srcfolder dmg-stage -ov -format UDZO "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.dmg"
 
-      - name: Package artifact (Linux)
+      - name: Package Linux artifact
         if: matrix.platform == 'linux'
         run: mv bin/*.deb "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.deb"
 
-      # Two Windows assets: the portable self-contained .exe (assets embedded,
-      # CGO disabled, WebView2 is an OS component) shipped zipped as
-      # MintSwitch.exe, and the NSIS installer renamed to the release pattern.
-      - name: Package artifact (Windows)
+      - name: Package Windows artifacts
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
@@ -133,25 +115,29 @@ jobs:
           Move-Item "bin/MintSwitch-${{ matrix.arch }}-installer.exe" "MintSwitch-Setup-${{ matrix.platform }}-${{ matrix.arch }}.exe"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}
           path: MintSwitch-*
           if-no-files-found: error
+          retention-days: 7
 
   release:
-    name: Create GitHub Release
+    name: Create GitHub release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create GitHub Release with assets
-        uses: softprops/action-gh-release@v2
+      - name: Publish release assets
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*
           generate_release_notes: true

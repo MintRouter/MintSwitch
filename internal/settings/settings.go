@@ -11,6 +11,8 @@ package settings
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -153,6 +155,7 @@ func (st *State) normalize() {
 type SecretStore interface {
 	Get() (value string, found bool, err error)
 	Set(value string) error
+	Delete() error
 }
 
 // keyBlob is the JSON envelope stored in the OS keychain carrying every
@@ -185,12 +188,16 @@ type Store struct {
 	// kept in the file exactly as before.
 	Secrets SecretStore
 
-	// secMu guards the key cache below. The cache avoids re-reading the
-	// keychain (a subprocess on macOS) on every Load; only successful reads
-	// and writes are cached.
+	// saveMu serializes the keychain + file transaction. secMu guards the key
+	// cache below; successful reads and writes are cached.
+	saveMu    sync.Mutex
 	secMu     sync.Mutex
 	secKey    string
 	secCached bool
+
+	// rename is an injectable persistence seam for fault-injection tests.
+	// Production stores leave it nil and use os.Rename.
+	rename func(oldPath, newPath string) error
 }
 
 // NewStore returns a Store backed by the given file path.
@@ -332,21 +339,39 @@ func (s *Store) setSecret(v string) error {
 // Save writes the state atomically: it marshals to JSON, writes a sibling temp
 // file with 0600 permissions, then renames it over the target path.
 //
-// When Secrets is set and st carries provider key material, the keys are
-// first written to the keychain as one JSON blob (by provider ID); only after
-// that write succeeds is the file persisted with the key values blanked (the
-// caller's st is never mutated). If the keychain write fails, a warning is
-// logged (never a value) and the keys are kept in the file as before, so they
-// are never lost.
+// With Secrets configured, the keychain write and file rename form a
+// best-effort transaction. Save snapshots the previous keychain entry before
+// writing the new blob. If file persistence then fails, it restores the old
+// blob or deletes the newly-created entry. A rollback failure is returned
+// alongside the persistence error; neither error includes secret values.
 func (s *Store) Save(st *State) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	if st == nil {
 		st = &State{}
 	}
-	if s.Secrets != nil && len(st.Providers) > 0 {
-		if stripped, ok := s.moveKeysToSecrets(st); ok {
-			st = stripped
+	var rollback func() error
+	if s.Secrets != nil {
+		if len(st.Providers) == 0 {
+			rollback = s.clearSecrets()
+		} else if stripped, undo, ok := s.moveKeysToSecrets(st); ok {
+			st, rollback = stripped, undo
 		}
 	}
+	if err := s.persist(st); err != nil {
+		if rollback != nil {
+			if rollbackErr := rollback(); rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("settings: keychain rollback failed: %w", rollbackErr))
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// persist performs the atomic settings-file write.
+func (s *Store) persist(st *State) error {
 	dir := filepath.Dir(s.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -376,22 +401,79 @@ func (s *Store) Save(st *State) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, s.Path)
+	rename := s.rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	if err := rename(tmpName, s.Path); err != nil {
+		return err
+	}
+	// Best-effort dir fsync so the rename survives a power loss (see
+	// core.SyncDir for why its errors are ignored).
+	core.SyncDir(dir)
+	return nil
 }
 
-// moveKeysToSecrets writes st's provider key material to the keychain and
-// returns a deep copy with the key values blanked, for persisting to the
-// file. ok=false means nothing was moved — no key material, or the keychain
-// write failed (logged, never a value) — so the caller persists st unchanged,
-// preserving the plaintext file fallback.
-func (s *Store) moveKeysToSecrets(st *State) (*State, bool) {
+// clearSecrets deletes an existing keychain entry for an empty provider list
+// and returns a closure that restores it if file persistence fails.
+//
+// Keychain failures are deliberately non-fatal (logged without values, file
+// persistence proceeds): failing Save here would make it impossible to remove
+// the last provider whenever the keychain is unavailable (e.g. headless
+// Linux), which is strictly worse for the user. The cost is bounded — a stale
+// blob lingers in the keychain, is never read back by Load (providers are
+// empty, so there is nothing to fill), and is overwritten by the next
+// provider save — so the inconsistency is temporary and self-healing.
+func (s *Store) clearSecrets() func() error {
+	old, found, err := s.getSecret()
+	if err != nil || !found {
+		if err != nil {
+			log.Printf("settings: OS keychain unavailable while removing api keys: %v", err)
+		}
+		return nil
+	}
+	if err := s.deleteSecret(); err != nil {
+		log.Printf("settings: failed to delete api keys from the OS keychain: %v (stale keys remain in the keychain until the next provider save)", err)
+		return nil
+	}
+	return func() error { return s.setSecret(old) }
+}
+
+// deleteSecret removes the keychain entry and invalidates the cache on
+// success.
+func (s *Store) deleteSecret() error {
+	s.secMu.Lock()
+	defer s.secMu.Unlock()
+	if err := s.Secrets.Delete(); err != nil {
+		return err
+	}
+	s.secKey, s.secCached = "", false
+	return nil
+}
+
+// moveKeysToSecrets snapshots the old keychain entry, writes st's provider
+// keys, and returns a stripped copy plus a rollback closure. If the keychain
+// cannot be read or written, it logs only the error and leaves keys in the
+// settings file as the plaintext fallback.
+func (s *Store) moveKeysToSecrets(st *State) (*State, func() error, bool) {
 	blob, ok := s.buildKeyBlob(st.Providers)
 	if !ok {
-		return nil, false
+		return nil, nil, false
+	}
+	old, found, err := s.getSecret()
+	if err != nil {
+		log.Printf("settings: OS keychain unavailable, keeping api keys in settings file: %v", err)
+		return nil, nil, false
 	}
 	if err := s.setSecret(blob); err != nil {
 		log.Printf("settings: OS keychain unavailable, keeping api keys in settings file: %v", err)
-		return nil, false
+		return nil, nil, false
+	}
+	rollback := func() error {
+		if found {
+			return s.setSecret(old)
+		}
+		return s.deleteSecret()
 	}
 	cp := *st
 	cp.Providers = make([]core.Provider, len(st.Providers))
@@ -399,7 +481,7 @@ func (s *Store) moveKeysToSecrets(st *State) (*State, bool) {
 	for i := range cp.Providers {
 		cp.Providers[i].APIKey = ""
 	}
-	return &cp, true
+	return &cp, rollback, true
 }
 
 // buildKeyBlob serializes the providers' key values as the keychain blob. For

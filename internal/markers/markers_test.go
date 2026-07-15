@@ -109,9 +109,12 @@ func TestFilePermissions(t *testing.T) {
 }
 
 // TestCorruptFile covers the corrupt-store contract: Get surfaces an error,
-// while Put and Delete heal the file with a valid store.
+// while Put and Delete quarantine the unreadable file to <path>.corrupt
+// (preserving the original bytes for recovery) instead of silently destroying
+// it, and then proceed.
 func TestCorruptFile(t *testing.T) {
 	s := newStore(t)
+	corruptPath := s.Path() + ".corrupt"
 	if err := os.MkdirAll(filepath.Dir(s.Path()), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +130,11 @@ func TestCorruptFile(t *testing.T) {
 	if _, ok, err := s.Get("claude-code"); err != nil || !ok {
 		t.Fatalf("Get after healing Put = ok=%v err=%v", ok, err)
 	}
+	if data, err := os.ReadFile(corruptPath); err != nil || string(data) != "{not json" {
+		t.Fatalf("Put must quarantine the corrupt file with its original bytes, got %q err=%v", data, err)
+	}
 
-	if err := os.WriteFile(s.Path(), []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(s.Path(), []byte("{also not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Delete("claude-code"); err != nil {
@@ -136,6 +142,44 @@ func TestCorruptFile(t *testing.T) {
 	}
 	if _, ok, err := s.Get("claude-code"); err != nil || ok {
 		t.Fatalf("Get after healing Delete = ok=%v err=%v, want empty store", ok, err)
+	}
+	if data, err := os.ReadFile(corruptPath); err != nil || string(data) != "{also not json" {
+		t.Fatalf("Delete must quarantine the corrupt file (newest evidence wins), got %q err=%v", data, err)
+	}
+	// Delete on a corrupt store quarantines it; the store file is then absent
+	// (the deleted state) rather than rewritten empty.
+	if _, err := os.Stat(s.Path()); !os.IsNotExist(err) {
+		t.Fatalf("Delete on corrupt store must leave the store absent, stat err=%v", err)
+	}
+}
+
+// TestCorruptFilePreservesOtherTools proves the finding fix end-to-end: a
+// corrupt store hit by Put or Delete never silently loses the other tools'
+// markers — they remain recoverable from the quarantined <path>.corrupt file.
+func TestCorruptFilePreservesOtherTools(t *testing.T) {
+	s := newStore(t)
+	if err := s.Put("codex", sampleMarker()); err != nil {
+		t.Fatal(err)
+	}
+	valid, err := os.ReadFile(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the store by truncating the valid JSON mid-way.
+	corrupted := valid[:len(valid)-3]
+	if err := os.WriteFile(s.Path(), corrupted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Put("claude-code", sampleMarker()); err != nil {
+		t.Fatalf("Put on corrupt store: %v", err)
+	}
+	data, err := os.ReadFile(s.Path() + ".corrupt")
+	if err != nil {
+		t.Fatalf("quarantined file missing after Put: %v", err)
+	}
+	if string(data) != string(corrupted) {
+		t.Fatalf("quarantined content = %q, want the original corrupt bytes %q", data, corrupted)
 	}
 }
 

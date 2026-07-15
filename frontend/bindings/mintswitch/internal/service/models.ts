@@ -123,3 +123,17 @@ export interface ToolView {
      */
     "installable": boolean;
 }
+
+/**
+ * UninstallPlan is the non-secret, read-only preview returned by
+ * [Service.PlanUninstall]. Command and Target are display-only; execution
+ * accepts only a tool ID and resolves a fresh plan.
+ */
+export interface UninstallPlan {
+    "method": string;
+    "action": string;
+    "command": string;
+    "target": string;
+    "warning": string;
+    "can_execute": boolean;
+}

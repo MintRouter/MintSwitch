@@ -31,11 +31,17 @@ func stripJSONC(data []byte) []byte {
 				out = append(out, '\n')
 			}
 		case c == '/' && i+1 < len(data) && data[i+1] == '*':
+			// Scan to the "*/" terminator. An unterminated /* swallows the
+			// rest of the input (the truncated JSON is then surfaced by the
+			// caller's json.Unmarshal); only a found terminator advances past
+			// its '/' — never past the end of the data.
 			i += 2
-			for i+1 < len(data) && !(data[i] == '*' && data[i+1] == '/') {
+			for i < len(data) && !(data[i] == '*' && i+1 < len(data) && data[i+1] == '/') {
 				i++
 			}
-			i++
+			if i < len(data) {
+				i++ // skip the '/' of the "*/" terminator
+			}
 		default:
 			out = append(out, c)
 		}

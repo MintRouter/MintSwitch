@@ -10,6 +10,13 @@
 // (upper snake case + "_API_KEY"), i.e. MINTROUTER_API_KEY for this provider.
 // Apply/Status messages therefore instruct the user to export that variable
 // in the shell that launches Zed instead of writing the key to disk.
+//
+// Zed's settings.json is a JSONC dialect (comments and trailing commas are
+// allowed). MintSwitch parses it leniently for Status and the orphan probe,
+// but never rewrites a file carrying JSONC-only syntax: Apply and the Restore
+// strip fallback refuse (see errJSONC), because Go's encoding/json round-trip
+// would destroy the user's comments. A settings.json whose content is strict
+// JSON is rewritten safely (valid JSON is valid JSONC).
 package zed
 
 import (
@@ -38,6 +45,15 @@ const modelMaxTokens = 128000
 // since Zed refuses API keys stored in settings.json.
 const envKeyNote = "API key: set the MINTROUTER_API_KEY environment variable" +
 	" in the shell that launches Zed (Zed forbids API keys in settings.json)."
+
+// jsoncDetail explains why a comment-carrying settings.json is never rewritten.
+const jsoncDetail = "Zed settings.json contains comments or other JSONC-only syntax; " +
+	"MintSwitch cannot modify it without destroying them."
+
+// errJSONC is returned by Apply (and the Restore strip fallback) when the
+// active settings.json cannot be rewritten without destroying JSONC-only
+// syntax such as comments.
+var errJSONC = errors.New("zed: " + jsoncDetail + " Edit the file manually or convert it to plain JSON")
 
 // orphanDetail explains the orphan-remnant state: the settings still carry the
 // MintSwitch provider but the managed marker is gone (e.g. a previous restore
@@ -139,7 +155,7 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		}
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
-	root, err := readConfig(path)
+	root, _, err := readConfig(path)
 	if err != nil {
 		return core.StatusDefault, "", err
 	}
@@ -165,17 +181,20 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 // marker, so upgrading from a legacy-marker install never snapshots a managed
 // file. The backup is created only on the first Apply over a
 // pristine/unmanaged (or absent) file, so the pristine pre-MintSwitch snapshot
-// is what Restore reverts to even after repeated Applies. Note: Zed settings
-// may contain JSONC comments; they are parsed leniently but the file is
-// rewritten as plain JSON (comments are preserved only in the backup).
+// is what Restore reverts to even after repeated Applies. Apply refuses to
+// touch a settings.json carrying JSONC-only syntax such as comments (see
+// errJSONC): rewriting it as plain JSON would destroy them permanently.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
 	}
 	path := a.configPath()
-	root, err := readConfig(path)
+	root, strict, err := readConfig(path)
 	if err != nil {
 		return core.ApplyResult{}, err
+	}
+	if !strict {
+		return core.ApplyResult{}, errJSONC
 	}
 	if root == nil {
 		root = map[string]any{}
@@ -245,7 +264,9 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // and the managed provider block present, or — with the marker lost — the
 // provider block still in the file, see orphanRemnantAt), it falls back to
 // stripping the managed provider and agent default model, preserving every
-// other setting. It is a safe no-op when nothing was applied.
+// other setting. The strip fallback refuses a settings.json carrying
+// JSONC-only syntax (see errJSONC) rather than destroy the user's comments.
+// It is a safe no-op when nothing was applied.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	return core.RestoreSingleFile(core.SingleFileRestore{
 		ToolID:          a.ID(),
@@ -264,10 +285,11 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 // without requiring a marker. The "mintrouter" provider key is
 // MintSwitch-specific — no tool or user writes it independently — so its
 // presence alone is a reliable remnant signal. A missing or corrupt file is
-// never a remnant (JSONC comments are tolerated by readConfig, and a pure
-// user file without the block is never rewritten, so its comments survive).
+// never a remnant. This probe reads JSONC leniently: it only detects the
+// block, and the strip fallback still refuses to rewrite a comment-carrying
+// file (see stripManaged), so a user's comments can never be destroyed.
 func (a *Adapter) orphanRemnantAt(path string) bool {
-	root, err := readConfig(path)
+	root, _, err := readConfig(path)
 	if err != nil || root == nil {
 		return false
 	}
@@ -279,15 +301,19 @@ func (a *Adapter) orphanRemnantAt(path string) bool {
 // when it still points at the removed provider, preserving every other
 // setting. It is the Restore fallback when no pristine backup exists. Gated
 // on the managed signal (the provider block being present) so an unmanaged
-// file is never rewritten; it never creates the file. Like Apply, it rewrites
-// the file as plain JSON, so JSONC comments are not preserved.
+// file is never rewritten; it never creates the file. Like Apply, it refuses
+// a file carrying JSONC-only syntax (see errJSONC): rewriting it as plain
+// JSON would destroy the user's comments.
 func (a *Adapter) stripManaged(path string) (bool, error) {
-	root, err := readConfig(path)
+	root, strict, err := readConfig(path)
 	if err != nil {
 		return false, err
 	}
 	if root == nil || !hasManagedProvider(root) {
 		return false, nil
+	}
+	if !strict {
+		return false, errJSONC
 	}
 	languageModels, _ := root["language_models"].(map[string]any)
 	compatible, _ := languageModels["openai_compatible"].(map[string]any)
@@ -319,15 +345,17 @@ func (a *Adapter) stripManaged(path string) (bool, error) {
 
 // StripLegacyMarker removes the legacy top-level marker key from
 // settings.json, migrating its value into the sidecar store when the store
-// has no entry for this tool yet. It is a no-op when the file is absent or
-// carries no legacy marker; it never creates the file.
+// has no entry for this tool yet. A settings.json carrying JSONC-only syntax
+// is skipped (no-op, no error): rewriting it would destroy the user's
+// comments, matching the errJSONC contract elsewhere. It is a no-op when the
+// file is absent or carries no legacy marker; it never creates the file.
 func (a *Adapter) StripLegacyMarker() error {
 	path := a.configPath()
-	root, err := readConfig(path)
+	root, strict, err := readConfig(path)
 	if err != nil {
 		return err
 	}
-	if root == nil {
+	if root == nil || !strict {
 		return nil
 	}
 	legacy, ok := core.ExtractLegacyMarker(root)
@@ -348,27 +376,38 @@ func (a *Adapter) StripLegacyMarker() error {
 }
 
 // readConfig reads and parses the settings file, tolerating Zed's JSONC
-// dialect (comments and trailing commas). A missing file returns a nil map
-// and no error.
-func readConfig(path string) (map[string]any, error) {
+// dialect (comments and trailing commas). A missing file returns a nil map,
+// strict=true and no error. strict is false (with the parsed map and no
+// error) when the content only parses after JSONC stripping — i.e. it carries
+// comments or trailing commas that a plain-JSON rewrite would destroy — so
+// readers (Status, the orphan probe) still see the settings while writers
+// must refuse (see errJSONC). Content that parses neither strictly nor as
+// JSONC is corrupt and returns the parse error.
+func readConfig(path string) (root map[string]any, strict bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return nil, true, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if len(data) == 0 {
-		return map[string]any{}, nil
+		return map[string]any{}, true, nil
 	}
-	var root map[string]any
+	if err := json.Unmarshal(data, &root); err == nil {
+		if root == nil {
+			root = map[string]any{}
+		}
+		return root, true, nil
+	}
+	root = nil
 	if err := json.Unmarshal(stripJSONC(data), &root); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if root == nil {
 		root = map[string]any{}
 	}
-	return root, nil
+	return root, false, nil
 }
 
 // writeConfig writes the settings as indented JSON, atomically and with

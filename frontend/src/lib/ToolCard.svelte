@@ -78,316 +78,92 @@
   // When the model row exists, Apply sits inline at its right (one row saved);
   // otherwise it stays full-width in the actions block as before.
   const hasModelRow = $derived(tool.installed && models.length >= 1);
+
+  // Report the choice to the parent, then immediately snap the DOM back to
+  // the current state value: if the backend rejects the change, the refresh
+  // leaves `selectedModel` unchanged and Svelte would otherwise skip
+  // re-applying `value=`, leaving the <select> stuck on the rejected option.
+  function onSelectModel(e: Event & { currentTarget: HTMLSelectElement }): void {
+    const chosen = e.currentTarget.value;
+    e.currentTarget.value = selectedModel;
+    onModelChange(tool.id, chosen);
+  }
 </script>
 
-<article class="card tool" class:is-uninstalled={!tool.installed}
-  aria-labelledby={`tool-${tool.id}`}>
+<article class="tool-card" class:is-uninstalled={!tool.installed} class:is-modified={tool.status === "modified_externally"} aria-labelledby={`tool-${tool.id}`}>
   <div class="tool-head">
-    {#if logoSrc && !logoFailed}
-      <img class="tool-logo" src={logoSrc} alt="" width="28" height="28"
-        loading="lazy" onerror={() => (logoFailed = true)} />
-    {:else}
-      <span class="tool-logo monogram" aria-hidden="true">{monogram}</span>
-    {/if}
-    <div class="tool-titles">
-      <h3 class="tool-name" id={`tool-${tool.id}`}>{nameParts.name}</h3>
-      {#if nameParts.subtitle}
-        <p class="tool-subtitle">{nameParts.subtitle}</p>
+    <div class="logo-wrap" class:inactive={!tool.installed}>
+      {#if logoSrc && !logoFailed}
+        <img class="tool-logo" src={logoSrc} alt="" width="32" height="32" loading="lazy" onerror={() => (logoFailed = true)} />
+      {:else}
+        <span class="tool-logo monogram" aria-hidden="true">{monogram}</span>
       {/if}
     </div>
-    <p class={`tool-status tone-${statusLine.tone}`} title={statusLine.full}>
-      <span class="dot" aria-hidden="true"></span>
-      {statusLine.label}
-    </p>
+    <div class="tool-titles">
+      <h3 class="tool-name" id={`tool-${tool.id}`}>{nameParts.name}</h3>
+      <p class="tool-subtitle">{nameParts.subtitle || (tool.installed ? "Local application" : "Available integration")}</p>
+    </div>
+    <div class={`tool-status tone-${statusLine.tone}`} aria-label={statusLine.full}>
+      <span class="dot" aria-hidden="true"></span><span>{statusLine.label}</span>
+    </div>
   </div>
 
-  <div class="tool-divider" aria-hidden="true"></div>
-
-  {#snippet applyButton()}
-    <button class="btn-primary sm soft" type="button" onclick={() => onApply(tool.id)}
-      disabled={!canApply}
-      title={!tool.installed ? "Tool is not installed" : !hasProvider ? "Add a provider first" : undefined}>
-      Apply
-    </button>
-  {/snippet}
-
-  {#if hasModelRow}
-    <div class="tool-row">
-      <select class="tool-model-select" id={`model-${tool.id}`}
-        aria-label="Model"
-        value={selectedModel}
-        onchange={(e) => onModelChange(tool.id, e.currentTarget.value)}>
-        <option value="">Use provider default</option>
-        {#each models as m (m)}
-          <option value={m}>{modelNames[m] || m}</option>
-        {/each}
-      </select>
-      {@render applyButton()}
+  {#if tool.status === "modified_externally"}
+    <div class="status-notice" role="status">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4m0 4h.01"/><path d="M10.3 3.7 2.4 17.4A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.6L13.7 3.7a2 2 0 0 0-3.4 0Z"/></svg>
+      Configuration changed outside MintSwitch
     </div>
   {/if}
 
-  {#if tool.installed && tool.provider_name}
-    <p class="tool-key"
-      title={tool.provider_overridden
-        ? "This tool uses its own provider instead of the active one"
-        : "This tool uses the active provider"}>
-      Provider: {tool.provider_name}{tool.provider_overridden ? " · override" : ""}
-    </p>
-  {/if}
+  <div class="tool-body">
+    {#if hasModelRow}
+      <label class="model-control" for={`model-${tool.id}`}>
+        <span>Model</span>
+        <select class="tool-model-select" id={`model-${tool.id}`} aria-label={`Model for ${nameParts.name}`} value={selectedModel} disabled={busy} onchange={onSelectModel}>
+          <option value="">Use provider default</option>
+          {#each models as m (m)}<option value={m}>{modelNames[m] || m}</option>{/each}
+        </select>
+      </label>
+    {:else}
+      <div class="model-control placeholder" aria-hidden="true"><span>Model</span><div>{tool.installed ? "Add models to your provider" : "Install to configure"}</div></div>
+    {/if}
+
+    <div class="provider-row">
+      <div class="provider-copy">
+        <span class="provider-label">Provider</span>
+        <strong>{tool.provider_name || "Not configured"}</strong>
+      </div>
+      {#if tool.provider_overridden}<span class="override-pill">Override</span>{/if}
+    </div>
+  </div>
 
   <div class="tool-actions">
     {#if !tool.installed && tool.installable}
-      <button class="btn-primary sm soft" type="button" onclick={() => onInstall(tool.id)}
-        disabled={busy} title="Install this tool with npm">
-        {busy ? "Installing…" : "Install"}
+      <button class="btn-soft primary-action" type="button" onclick={() => onInstall(tool.id)} disabled={busy}>
+        {busy ? "Installing…" : "Install tool"}
+      </button>
+    {:else}
+      <button class="btn-soft primary-action" type="button" onclick={() => onApply(tool.id)} disabled={!canApply}
+        title={!tool.installed ? "Tool is not installed" : !hasProvider ? "Add a provider first" : undefined}>
+        {busy ? "Working…" : "Apply configuration"}
       </button>
     {/if}
-    {#if !hasModelRow}
-      {@render applyButton()}
-    {/if}
-    <div class="actions-row secondary">
-      <button class="btn-ghost sm quiet" type="button" onclick={() => onRestore(tool.id)}
-        disabled={!canRestore}
-        title={!tool.installed ? "Tool is not installed" : !canRestore ? "Nothing to restore" : undefined}>
-        Restore default
-      </button>
+    <div class="secondary-actions">
+      <button class="text-action" type="button" onclick={() => onRestore(tool.id)} disabled={!canRestore}>Restore</button>
       {#if tool.installed && tool.installable}
-        <button class="btn-ghost sm quiet danger" type="button" onclick={() => onUninstall(tool.id)}
-          disabled={busy} title="Uninstall this tool with npm">
-          {busy ? "Working…" : "Uninstall"}
-        </button>
+        <button class="text-action danger" type="button" onclick={() => onUninstall(tool.id)} disabled={busy}>Uninstall</button>
+      {:else if !tool.installed && !tool.installable}
+        <span class="manual-note">Manual installation</span>
       {/if}
     </div>
   </div>
 </article>
 
 <style>
-  /* Nested card on the tools panel ("My subscription" language): hairline
-     border does the separation, radius one step below the panel's 12px, and
-     no drop shadow — nested cards sit flat on the panel surface. */
-  .tool {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    border-radius: var(--radius-sm);
-    box-shadow: none;
-  }
-  .tool-head {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.55rem;
-  }
-  .tool-logo {
-    flex: 0 0 auto;
-    width: 28px;
-    height: 28px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    display: block;
-  }
-  .tool-logo.monogram {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--surface-2);
-    color: var(--text);
-    font-size: 0.86rem;
-    font-weight: 700;
-    line-height: 1;
-  }
-  .tool-titles {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-  }
-  /* Titles wrap only at spaces (never mid-word — no overflow-wrap:anywhere),
-     may run to two lines, and are never ellipsised. */
-  .tool-name {
-    margin: 0;
-    font-size: 1.02rem;
-    font-weight: 700;
-    color: var(--text);
-    line-height: 1.25;
-  }
-  .tool-subtitle {
-    margin: 0;
-    font-size: 0.78rem;
-    color: var(--muted);
-    line-height: 1.3;
-  }
-  /* Hairline separating the header from the card body (subscription-card
-     section divider). */
-  .tool-divider {
-    flex: 0 0 auto;
-    height: 1px;
-    background: var(--border);
-  }
-  /* Body row holding the model select (no visible label — the select carries
-     aria-label="Model" for accessibility) plus the inline Apply button pinned
-     to its right at fit-content width — one row instead of two. */
-  .tool-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .tool-row .btn-primary {
-    flex: 0 0 auto;
-    white-space: nowrap;
-  }
-  /* Custom-styled to match .field-input: native chevron removed (appearance:
-     none) and replaced with a single inline-SVG chevron whose stroke tracks
-     --muted per theme. padding-right clears the chevron so long model names
-     never collide with it. Fills the full card width (min-width: 0 so it
-     shrinks instead of forcing a wrap). */
-  .tool-model-select {
-    flex: 1 1 auto;
-    min-width: 0;
-    height: var(--control-h-sm); /* exact height parity with .btn-*.sm */
-    padding: 0 1.8rem 0 0.7rem;  /* right pad clears the chevron */
-    font-size: var(--fs-sm); /* matches .btn-*.sm */
-    line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--text);
-    background-color: var(--surface-2);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 0.6rem center;
-    background-size: 12px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    outline: none;
-    cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  }
-  :global([data-theme="dark"]) .tool-model-select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%2398989d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
-  .tool-model-select:hover { border-color: var(--border-strong); }
-  .tool-model-select:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
-  /* Compact status meta line pinned to the header's right edge: tone-coloured
-     dot + short label, with the full sentence in the tooltip. Only the dot
-     carries the tone — the label stays muted so a card holds at most two
-     colour points (icon + dot). */
-  .tool-status {
-    margin: 0;
-    margin-left: auto;
-    align-self: flex-start;
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: var(--fs-micro);
-    font-weight: var(--fw-semibold);
-    color: var(--muted);
-    line-height: 1.3;
-  }
-  .tool-status .dot {
-    flex: 0 0 auto;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--muted);
-  }
-  .tool-status.tone-success .dot { background: var(--ok); }
-  .tool-status.tone-warning .dot { background: var(--warn); }
-
-  /* Which provider Apply will use: the provider's display name only (never
-     any part of the key value), flagged when it comes from a per-tool
-     override. */
-  .tool-key {
-    margin: 0;
-    font-size: var(--fs-micro);
-    font-weight: var(--fw-semibold);
-    color: var(--muted);
-    line-height: 1.3;
-  }
-
-  /* Not-installed: an intentional recessed treatment (inset surface + muted
-     title) that reads as "inactive" while keeping all text at readable
-     contrast — no whole-card opacity that would sink text below contrast. The
-     Install button uses the same soft accent tint as Apply, keeping the main
-     screen at exactly two solid-accent blocks. */
-  .tool.is-uninstalled { background: var(--surface-2); }
-  .tool.is-uninstalled .tool-name { color: var(--muted); }
-
-  /* Action block pinned to the card foot: full-width soft primary button(s)
-     stacked vertically, then the quiet secondary row (Restore left,
-     destructive right). */
-  .tool-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: auto;
-  }
-  .tool-actions > .btn-primary { width: 100%; }
-  .actions-row {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-  .actions-row .btn-ghost {
-    flex: 0 0 auto;
-    white-space: nowrap;
-  }
-  .actions-row.secondary { justify-content: space-between; }
-  /* Destructive (Uninstall) stays pinned to the row's end even when Restore is
-     absent. */
-  .actions-row.secondary .danger { margin-left: auto; }
-  /* Per-card Apply is a soft accent tint (not solid) so solid accent doesn't
-     repeat across the grid. Falls back to color-mix while the --accent-soft
-     tokens land in style.css. */
-  .tool-row .btn-primary.soft,
-  .tool-actions .btn-primary.soft {
-    color: var(--accent-soft-text, var(--accent));
-    background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, var(--surface)));
-    box-shadow: none;
-  }
-  .tool-row .btn-primary.soft:hover:not(:disabled),
-  .tool-actions .btn-primary.soft:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent) 20%, var(--surface));
-    filter: none;
-    box-shadow: none;
-  }
-  .tool-row .btn-primary.soft:active:not(:disabled),
-  .tool-actions .btn-primary.soft:active:not(:disabled) {
-    background: color-mix(in srgb, var(--accent) 26%, var(--surface));
-    filter: none;
-  }
-  /* Secondary row is text-quiet: no fill, no border, muted text — but keeps a
-     ≥26px hit area. Slight negative margins optically align the labels with
-     the card edges. Uninstall only turns red on hover (intent). */
-  .tool-actions .btn-ghost.quiet {
-    min-height: 26px;
-    padding: 0 0.5rem;
-    background: transparent;
-    border-color: transparent;
-    color: var(--muted);
-  }
-  .actions-row.secondary .btn-ghost.quiet:first-child { margin-left: -0.5rem; }
-  .actions-row.secondary .btn-ghost.quiet.danger { margin-right: -0.5rem; }
-  .tool-actions .btn-ghost.quiet:hover:not(:disabled) {
-    color: var(--text);
-    background: var(--surface-2);
-    border-color: transparent;
-  }
-  .tool-actions .btn-ghost.quiet.danger:hover:not(:disabled) {
-    color: var(--danger-strong);
-    background: color-mix(in srgb, var(--danger) 8%, var(--surface));
-    border-color: transparent;
-    filter: none;
-  }
-  /* Disabled controls must stay readable: override the global 0.4 opacity;
-     quiet buttons stay borderless even when disabled. */
-  .tool-row .btn-primary:disabled,
-  .tool-actions .btn-primary:disabled,
-  .tool-actions .btn-ghost:disabled {
-    opacity: 0.55;
-  }
-  .tool-actions .btn-ghost.quiet:disabled { border-color: transparent; }
+  .tool-card{min-width:0;display:flex;flex-direction:column;gap:12px;padding:14px;border:1px solid var(--border);border-radius:15px;background:var(--surface);box-shadow:var(--shadow-card);transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}.tool-card:hover{transform:translateY(-1px);border-color:var(--border-strong);box-shadow:0 2px 4px rgba(23,28,40,.04),0 12px 30px rgba(23,28,40,.07)}.tool-card.is-modified{border-color:color-mix(in srgb,var(--warn) 25%,var(--border))}.tool-card.is-uninstalled{background:color-mix(in srgb,var(--surface) 72%,var(--surface-2))}
+  .tool-head{display:flex;align-items:center;gap:10px;min-width:0}.logo-wrap{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;border-radius:11px;background:var(--surface-2);border:1px solid var(--border)}.logo-wrap.inactive{filter:grayscale(.65);opacity:.7}.tool-logo{display:block;width:30px;height:30px;border-radius:8px}.tool-logo.monogram{display:grid;place-items:center;color:var(--text);font-size:14px;font-weight:750}.tool-titles{flex:1;min-width:0}.tool-name{margin:0;color:var(--text);font-size:14px;line-height:1.2;font-weight:720;letter-spacing:-.015em}.tool-subtitle{margin:3px 0 0;color:var(--muted);font-size:10.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tool-status{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;padding:4px 7px;border-radius:99px;background:var(--surface-2);color:var(--muted);font-size:9.5px;font-weight:650}.tool-status .dot{width:6px;height:6px;border-radius:50%;background:var(--muted)}.tool-status.tone-success{color:var(--ok-strong);background:color-mix(in srgb,var(--ok) 9%,var(--surface))}.tool-status.tone-success .dot{background:var(--ok)}.tool-status.tone-warning{color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--surface))}.tool-status.tone-warning .dot{background:var(--warn)}
+  .status-notice{display:flex;align-items:center;gap:6px;margin:-2px 0;padding:7px 8px;border-radius:8px;background:color-mix(in srgb,var(--warn) 8%,var(--surface-2));color:var(--warn);font-size:10px;font-weight:600}.status-notice svg{flex:0 0 auto}
+  .tool-body{display:flex;flex-direction:column;gap:9px;padding:10px;border-radius:11px;background:var(--surface-2);border:1px solid color-mix(in srgb,var(--border) 75%,transparent)}.model-control{display:flex;flex-direction:column;gap:5px;min-width:0}.model-control>span,.provider-label{color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.075em;text-transform:uppercase}.tool-model-select{width:100%;height:31px;min-width:0;padding:0 28px 0 9px;color:var(--text);background-color:var(--surface);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='m1 1 4 4 4-4' stroke='%2369707d' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;border:1px solid var(--border);border-radius:8px;outline:none;appearance:none;font-size:11px;white-space:nowrap;text-overflow:ellipsis}.tool-model-select:hover{border-color:var(--border-strong)}.tool-model-select:focus{border-color:var(--accent);box-shadow:var(--focus)}.model-control.placeholder div{height:31px;display:flex;align-items:center;padding:0 9px;border:1px dashed var(--border);border-radius:8px;color:var(--muted);font-size:10.5px}.provider-row{display:flex;align-items:end;justify-content:space-between;gap:8px;padding-top:8px;border-top:1px solid var(--border)}.provider-copy{min-width:0;display:flex;flex-direction:column;gap:3px}.provider-copy strong{color:var(--text);font-size:10.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.override-pill{padding:3px 6px;border-radius:99px;background:var(--accent-soft);color:var(--accent-soft-text);font-size:9px;font-weight:650}
+  .tool-actions{display:flex;flex-direction:column;gap:7px;margin-top:auto}.primary-action{width:100%;min-height:32px}.secondary-actions{min-height:20px;display:flex;align-items:center;justify-content:space-between;gap:8px}.text-action{padding:2px 0;color:var(--muted);background:transparent;border:0;cursor:pointer;font-size:10px;font-weight:600}.text-action:hover:not(:disabled){color:var(--text)}.text-action.danger{margin-left:auto}.text-action.danger:hover:not(:disabled){color:var(--danger-strong)}.text-action:disabled{opacity:.35;cursor:default}.manual-note{margin-left:auto;color:var(--muted);font-size:9.5px}
+  @media(max-width:860px){.tool-card{padding:13px}.tool-body{padding:9px}}
 </style>

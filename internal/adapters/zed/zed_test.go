@@ -159,8 +159,8 @@ func TestApplyNeverWritesAPIKey(t *testing.T) {
 	}
 }
 
-// TestApplyPreservesExistingKeys covers Zed's JSONC dialect: comments and
-// trailing commas must parse, and unrelated settings must survive Apply.
+// TestApplyPreservesExistingKeys proves unrelated settings survive Apply over
+// an existing strict-JSON settings.json.
 func TestApplyPreservesExistingKeys(t *testing.T) {
 	a, _ := newAdapter(t)
 	path := a.configPath()
@@ -168,13 +168,12 @@ func TestApplyPreservesExistingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	existing := `{
-  // Zed settings with a comment
-  "theme": "One Dark", /* block comment */
+  "theme": "One Dark",
   "vim_mode": true,
   "language_models": {
-    "anthropic": {"api_url": "https://api.anthropic.com"},
+    "anthropic": {"api_url": "https://api.anthropic.com"}
   },
-  "agent": {"always_allow_tool_actions": false,},
+  "agent": {"always_allow_tool_actions": false}
 }`
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
@@ -250,15 +249,16 @@ func TestRestoreDeletesCreatedFile(t *testing.T) {
 	}
 }
 
-// TestRestoreRevertsExisting proves comments survive the round trip via the
-// backup, even though the applied file is rewritten as plain JSON.
+// TestRestoreRevertsExisting proves the user's formatting survives the round
+// trip via the backup, even though the applied file is rewritten as
+// canonically indented JSON.
 func TestRestoreRevertsExisting(t *testing.T) {
 	a, _ := newAdapter(t)
 	path := a.configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	original := []byte("{\n  // keep me\n  \"vim_mode\": true,\n}\n")
+	original := []byte("{\"vim_mode\":    true}\n")
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +329,111 @@ func TestStripJSONC(t *testing.T) {
 	}
 	if len(m["b"].([]any)) != 2 || m["c"].(map[string]any)["d"] != true {
 		t.Fatalf("structure wrong: %v", m)
+	}
+}
+
+// TestStripJSONCUnterminatedBlockComment pins the scanner's handling of a /*
+// with no closing */: everything from the opener to the end of input is
+// swallowed (never re-emitting trailing bytes or reading past the end), so
+// the output is exactly the JSON before the comment.
+func TestStripJSONCUnterminatedBlockComment(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"a": 1} /*`:          `{"a": 1} `,
+		`{"a": 1} /* trailing`: `{"a": 1} `,
+		`{"a": 1} /*/`:         `{"a": 1} `,
+		`{"a": 1} /**`:         `{"a": 1} `,
+		`/* leading {"a": 1}`:  ``,
+	} {
+		if got := string(stripJSONC([]byte(in))); got != want {
+			t.Fatalf("stripJSONC(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// A properly terminated comment still ends at its terminator.
+	in := `/* c */{"a": 1}`
+	var m map[string]any
+	if err := json.Unmarshal(stripJSONC([]byte(in)), &m); err != nil {
+		t.Fatalf("unmarshal stripped: %v", err)
+	}
+	if m["a"] != float64(1) {
+		t.Fatalf("structure wrong: %v", m)
+	}
+}
+
+// TestApplyRefusesJSONC is the comment-preservation contract: Apply must
+// refuse to rewrite a settings.json carrying JSONC-only syntax (a plain-JSON
+// round-trip would destroy the user's comments), leave the file byte-for-byte
+// untouched, record no marker, and take no backup.
+func TestApplyRefusesJSONC(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{
+  // Zed settings with a comment
+  "theme": "One Dark", /* block comment */
+  "vim_mode": true,
+}`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := a.Apply(sampleProfile())
+	if !errors.Is(err, errJSONC) {
+		t.Fatalf("Apply over JSONC = %v, want errJSONC", err)
+	}
+	got, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if string(got) != existing {
+		t.Fatalf("JSONC file rewritten (comments lost): %q", got)
+	}
+	if _, inStore, err := a.m.Get(a.ID()); err != nil || inStore {
+		t.Fatalf("marker after refused Apply = inStore=%v err=%v, want absent", inStore, err)
+	}
+	if has, err := a.e.HasBackup(path); err != nil || has {
+		t.Fatalf("refused Apply must not snapshot the file, HasBackup = %v, %v", has, err)
+	}
+	// Status still reads the JSONC file leniently and reports Default.
+	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
+		t.Fatalf("status = %v, want Default", st)
+	}
+}
+
+// TestRestoreStripFallbackRefusesJSONC covers comments added AFTER Apply:
+// with the backup gone and the managed provider still in a now-JSONC file,
+// the strip fallback must surface errJSONC instead of rewriting the file, and
+// the file stays byte-for-byte untouched.
+func TestRestoreStripFallbackRefusesJSONC(t *testing.T) {
+	a, r := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/zed", nil }
+	path := a.configPath()
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.RemoveAll(r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commented := append([]byte("// user comment added after apply\n"), applied...)
+	if err := os.WriteFile(path, commented, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.Restore(); !errors.Is(err, errJSONC) {
+		t.Fatalf("Restore strip fallback over JSONC = %v, want errJSONC", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(commented) {
+		t.Fatalf("JSONC file rewritten (comments lost): %q", got)
 	}
 }
 

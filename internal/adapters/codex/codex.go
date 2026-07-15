@@ -54,12 +54,16 @@ type Adapter struct {
 	// lookPath resolves a binary on PATH; overridable in tests. Defaults to
 	// exec.LookPath.
 	lookPath func(string) (string, error)
+	// writeConfig writes config.toml; overridable in tests to inject write
+	// failures into the second half of Apply's two-file write. Defaults to
+	// writeTOML.
+	writeConfig func(string, map[string]any) error
 }
 
 // New constructs a Codex adapter using the injected resolver, backup engine,
 // and sidecar marker store.
 func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
-	return &Adapter{r: r, e: e, m: m, lookPath: exec.LookPath}
+	return &Adapter{r: r, e: e, m: m, lookPath: exec.LookPath, writeConfig: writeTOML}
 }
 
 // ID returns the stable adapter identifier.
@@ -145,16 +149,37 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 // original. If config.toml is already managed but no backup exists (e.g. the
 // backups dir was deleted), no new backup is taken — we cannot safely snapshot
 // a managed file; Restore then falls back to stripping the managed keys.
+//
+// Write order matters: auth.json is written first, config.toml second (with a
+// best-effort rollback of auth.json when the config.toml write fails). If the
+// process dies between the two writes, config.toml — the file that redirects
+// traffic — is still pristine, so Codex never sends requests to the proxy
+// without a matching key configured (the reverse order left exactly that
+// half-state behind, and orphanRemnant, which requires the full two-file
+// signature, could not detect it). The leftover auth.json key never routes
+// traffic anywhere new, and the next Apply or Restore overwrites or strips it.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
 	}
 	cfgPath, authPath := a.configPath(), a.authPath()
 
+	// Read both files up front so a corrupt file fails the Apply before
+	// anything is written.
 	cfg, err := readTOML(cfgPath)
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
+	auth, err := core.ReadJSONObject(authPath)
+	if err != nil {
+		return core.ApplyResult{}, err
+	}
+	origAuth, readErr := os.ReadFile(authPath)
+	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return core.ApplyResult{}, readErr
+	}
+	authExisted := readErr == nil
+
 	_, inStore, err := a.m.Get(a.ID())
 	if err != nil {
 		return core.ApplyResult{}, err
@@ -171,37 +196,28 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		}
 	}
 
-	cfg["openai_base_url"] = p.BaseURL
-	cfg["model"] = p.Model
-	delete(cfg, core.MarkerKey)
-	origCfg, readErr := os.ReadFile(cfgPath)
-	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
-		return core.ApplyResult{}, readErr
-	}
-	cfgExisted := readErr == nil
-	if err := writeTOML(cfgPath, cfg); err != nil {
-		return core.ApplyResult{}, err
-	}
-	// rollbackCfg best-effort reverts config.toml to its pre-Apply bytes when
-	// the auth.json half of the two-file write fails, so a failed Apply never
-	// leaves config.toml pointing at the proxy without a matching API key.
-	rollbackCfg := func() {
-		if cfgExisted {
-			_ = core.WriteFileAtomic(cfgPath, origCfg, 0o600)
-		} else {
-			_ = os.Remove(cfgPath)
-		}
-	}
-
-	auth, err := core.ReadJSONObject(authPath)
-	if err != nil {
-		rollbackCfg()
-		return core.ApplyResult{}, err
-	}
 	auth[authKeyName] = p.APIKey
 	auth[authModeKey] = authModeAPIKey
 	if err := core.WriteJSONObjectAtomic(authPath, auth); err != nil {
-		rollbackCfg()
+		return core.ApplyResult{}, err
+	}
+	// rollbackAuth best-effort reverts auth.json to its pre-Apply bytes when
+	// the config.toml half of the two-file write fails, so a failed Apply
+	// never leaves the MintSwitch key (and auth_mode="apikey") behind in
+	// auth.json while config.toml was left untouched.
+	rollbackAuth := func() {
+		if authExisted {
+			_ = core.WriteFileAtomic(authPath, origAuth, 0o600)
+		} else {
+			_ = os.Remove(authPath)
+		}
+	}
+
+	cfg["openai_base_url"] = p.BaseURL
+	cfg["model"] = p.Model
+	delete(cfg, core.MarkerKey)
+	if err := a.writeConfig(cfgPath, cfg); err != nil {
+		rollbackAuth()
 		return core.ApplyResult{}, err
 	}
 

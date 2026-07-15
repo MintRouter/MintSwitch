@@ -11,5 +11,6 @@ export type {
     ProviderRef,
     ProviderView,
     ToolOpResult,
-    ToolView
+    ToolView,
+    UninstallPlan
 } from "./models.js";

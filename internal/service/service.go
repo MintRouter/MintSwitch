@@ -740,10 +740,13 @@ func (s *Service) RestoreOne(toolID string) (core.RestoreResult, error) {
 	return a.Restore()
 }
 
-// ApplyAll applies the active profile to every registered tool and returns a
-// per-tool outcome. It validates the saved profile once up front and fails fast
-// (returning an error, no partial results) when no valid profile is saved.
-// Individual adapter failures are captured per tool and do not abort the run.
+// ApplyAll applies the active profile to every installed tool and returns a
+// per-tool outcome. Tools that are not installed are skipped entirely (no
+// result entry): applying would otherwise create their config files — API key
+// included — for software that is not on the machine. It validates the saved
+// profile once up front and fails fast (returning an error, no partial
+// results) when no valid profile is saved. Individual adapter failures are
+// captured per tool and do not abort the run.
 func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -753,6 +756,9 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 	adapters := s.reg.All()
 	out := make([]ToolOpResult, 0, len(adapters))
 	for _, a := range adapters {
+		if installed, _ := a.Detect(); !installed {
+			continue
+		}
 		p, perr := s.effectiveProfileFor(a.ID())
 		if perr != nil {
 			out = append(out, ToolOpResult{ID: a.ID(), OK: false, Error: perr.Error()})
@@ -777,6 +783,30 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 func (s *Service) Install(toolID string) (InstallResult, error) {
 	args, out, err := s.inst.Install(context.Background(), toolID)
 	return s.installResult(toolID, "install", args, out, err)
+}
+
+// PlanUninstall returns a non-secret, read-only preview of the action that
+// would currently be used to remove toolID. Unknown or unresolvable methods and
+// missing npm/brew are represented by CanExecute=false and a warning rather
+// than an error. The preview is never accepted by Uninstall; execution resolves
+// a fresh plan from toolID.
+func (s *Service) PlanUninstall(toolID string) (UninstallPlan, error) {
+	plan, err := s.inst.PlanUninstall(toolID)
+	if errors.Is(err, installer.ErrUnknownTool) {
+		return UninstallPlan{}, fmt.Errorf("service: unknown tool %q", toolID)
+	}
+	if err != nil && !errors.Is(err, installer.ErrUnknownMethod) &&
+		!errors.Is(err, installer.ErrNpmMissing) && !errors.Is(err, installer.ErrBrewMissing) {
+		return UninstallPlan{}, err
+	}
+	return UninstallPlan{
+		Method:     plan.Method,
+		Action:     plan.Action,
+		Command:    strings.Join(plan.Args, " "),
+		Target:     plan.Target,
+		Warning:    plan.Warning,
+		CanExecute: plan.CanExecute,
+	}, nil
 }
 
 // Uninstall removes the tool identified by toolID using the method it was
