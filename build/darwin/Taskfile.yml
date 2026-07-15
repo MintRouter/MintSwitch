@@ -9,6 +9,9 @@ vars:
   # User-visible .app bundle name. macOS (Finder/Dock hover) displays the
   # on-disk bundle name, so it must match the product display name.
   PRODUCT_NAME: "MintSwitch By MintRouter.AI"
+  # Dev bundle name — also user-visible on Dock hover during `wails3 dev`,
+  # so it carries the plain product name rather than a *.dev suffix.
+  DEV_BUNDLE_NAME: "MintSwitch"
 
 tasks:
   build:
@@ -155,13 +158,13 @@ tasks:
 
   run:
     cmds:
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
-      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
-      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
-      - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
-      - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
+      - mkdir -p "{{.BIN_DIR}}/{{.DEV_BUNDLE_NAME}}.app/Contents/MacOS"
+      - mkdir -p "{{.BIN_DIR}}/{{.DEV_BUNDLE_NAME}}.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.DEV_BUNDLE_NAME}}.app/Contents/Resources"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.DEV_BUNDLE_NAME}}.app/Contents/MacOS"
+      - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.DEV_BUNDLE_NAME}}.app/Contents/Info.plist"
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.DEV_BUNDLE_NAME}}.app"
+      - '"{{.BIN_DIR}}/{{.DEV_BUNDLE_NAME}}.app/Contents/MacOS/{{.APP_NAME}}"'
 
   sign:
     summary: Signs the application bundle with Developer ID
