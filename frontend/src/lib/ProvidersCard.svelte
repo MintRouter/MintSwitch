@@ -70,18 +70,23 @@
   }
 
   // Removing a provider permanently deletes its stored key, so it always goes
-  // through an explicit confirmation dialog first.
+  // through an explicit confirmation dialog first. On failure the dialog
+  // STAYS OPEN with the error inline — closing it would read as "removed".
   let removeTarget = $state<ProviderView | null>(null);
   let removeBusy = $state(false);
+  let removeError = $state("");
 
   async function confirmRemove(): Promise<void> {
     if (!removeTarget || removeBusy) return;
     removeBusy = true;
-    dialogError = "";
+    removeError = "";
     const err = await onRemove(removeTarget.id);
     removeBusy = false;
+    if (err != null) {
+      removeError = err;
+      return;
+    }
     removeTarget = null;
-    if (err != null) dialogError = err;
     // ConfirmDialog restores focus to the row's "×" button, but on success
     // that row is gone — fall back to the Add button so keyboard focus (and
     // the manage dialog's Tab trap) never lands on <body>. setTimeout runs
@@ -139,10 +144,16 @@
   const editing = $derived(providers.find((p) => p.id === formId) ?? null);
 
   // Models can be fetched once there is a usable endpoint + key. On Edit the
-  // stored key counts: the backend uses it when the key input is blank, so
-  // the key value never round-trips to the frontend.
+  // stored key counts (the backend uses it when the key input is blank, so
+  // the key value never round-trips to the frontend) — but ONLY while the
+  // endpoint still matches the stored one: once the URL is edited, the
+  // stored key must not travel to the new host, so a typed key is required.
+  const storedKeyUsable = $derived(
+    isEdit && !!editing?.has_key &&
+    formBase.url === normalizeBaseUrl(editing?.base_url ?? "").url,
+  );
   const canFetch = $derived(
-    isHttpUrl(formBase.url) && (!!formKey.trim() || (isEdit && !!editing?.has_key)),
+    isHttpUrl(formBase.url) && (!!formKey.trim() || storedKeyUsable),
   );
 
   // The backend requires name + key + base URL + a default model
@@ -489,7 +500,7 @@
               <div class="provider-row" class:selected={p.active}>
                 <div class="provider-line">
                   <button class="provider-select" type="button" aria-pressed={p.active}
-                    onclick={() => void setActive(p.id)}
+                    disabled={saving} onclick={() => void setActive(p.id)}
                     title={p.active ? `${p.name} is the active provider` : `Set ${p.name} as the active provider`}>
                     <span class="provider-name">
                       {p.name}
@@ -501,7 +512,8 @@
                     <span class="provider-meta">{p.base_url} · {modelsSummary(p)}</span>
                   </button>
                   <div class="provider-actions">
-                    <button class="btn-ghost sm" type="button" onclick={() => openForm(p)}>
+                    <button class="btn-ghost sm" type="button" disabled={saving}
+                      onclick={() => openForm(p)}>
                       Edit
                     </button>
                     <button class="provider-remove" type="button" disabled={saving}
@@ -591,17 +603,17 @@
         <div class="add-field">
           <div class="models-head">
             <label class="add-label" for="pv-form-model-input">Models</label>
-            {#if fetching}
-              <span class="models-status" role="status">Fetching models…</span>
-            {:else}
-              <button class="btn-ghost sm" type="button" onclick={() => void fetchModels()}
-                disabled={!canFetch}
-                title={canFetch
-                  ? "List the models the endpoint's /models route advertises"
+            <!-- The button stays mounted while fetching (disabled, relabelled)
+                 so keyboard focus is never dropped mid-fetch. -->
+            <button class="btn-ghost sm" type="button" onclick={() => void fetchModels()}
+              disabled={!canFetch || fetching} aria-live="polite"
+              title={canFetch
+                ? "List the models the endpoint's /models route advertises"
+                : isEdit && !!editing?.has_key && isHttpUrl(formBase.url)
+                  ? "Endpoint changed — enter the API key for the new endpoint first"
                   : "Enter the API endpoint and key first"}>
-                {fetchAttempted || fetchError ? "Refetch models" : "Fetch models"}
-              </button>
-            {/if}
+              {fetching ? "Fetching models…" : fetchAttempted || fetchError ? "Refetch models" : "Fetch models"}
+            </button>
           </div>
           <div class="combo" bind:this={comboEl}>
             <div class="combo-field" role="presentation" onpointerdown={onFieldPointerdown}>
@@ -698,11 +710,12 @@
   open={removeTarget != null}
   title={`Remove ${removeTarget?.name ?? "provider"}?`}
   message={`This permanently deletes “${removeTarget?.name ?? ""}” and its stored API key. This cannot be undone.`}
-  confirmLabel="Remove provider"
+  confirmLabel={removeError ? "Try again" : "Remove provider"}
   danger
   busy={removeBusy || saving}
+  error={removeError ? `Couldn't remove: ${removeError}` : ""}
   onConfirm={() => void confirmRemove()}
-  onCancel={() => (removeTarget = null)} />
+  onCancel={() => { removeTarget = null; removeError = ""; }} />
 
 <ConfirmDialog
   open={discardOpen}
@@ -959,11 +972,6 @@
   .models-head .btn-ghost:hover:not(:disabled) {
     background: var(--accent-soft);
     border-color: transparent;
-  }
-  .models-status {
-    font-size: var(--fs-micro);
-    color: var(--muted);
-    line-height: var(--lh-tight);
   }
   .models-error {
     display: flex;

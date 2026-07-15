@@ -10,6 +10,9 @@
     confirmLabel?: string;
     danger?: boolean;
     busy?: boolean;
+    /** Inline failure notice; when set the dialog stays open so the user
+     *  sees why the action did not happen (and may retry or cancel). */
+    error?: string;
     onConfirm: () => void;
     onCancel: () => void;
   }
@@ -20,6 +23,7 @@
     confirmLabel = "Confirm",
     danger = false,
     busy = false,
+    error = "",
     onConfirm,
     onCancel,
   }: Props = $props();
@@ -93,6 +97,9 @@
     >
       <h2 class="title" id="confirm-title">{title}</h2>
       <p class="message" id="confirm-message">{message}</p>
+      {#if error}
+        <p class="error" role="alert">{error}</p>
+      {/if}
       <div class="actions">
         <button class="btn-ghost" type="button" bind:this={cancelBtn} onclick={onCancel} disabled={busy}>
           Cancel
@@ -151,6 +158,13 @@
     font-size: var(--fs-body);
     line-height: var(--lh);
     white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .error {
+    margin: calc(-1 * var(--s-2)) 0 var(--s-3);
+    color: var(--danger);
+    font-size: var(--fs-body);
+    line-height: var(--lh);
     word-break: break-word;
   }
   .actions {
