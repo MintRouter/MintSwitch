@@ -42,6 +42,12 @@ type Provider struct {
 	// SmallFastModel is an optional secondary model used by some tools for
 	// lightweight/background tasks. It need not be a member of Models.
 	SmallFastModel string `json:"small_fast_model,omitempty"`
+	// OpusModel, SonnetModel and HaikuModel optionally pin Claude Code's model
+	// tiers (opus/sonnet/haiku aliases). Empty tiers fall back to Model (Haiku
+	// prefers SmallFastModel). They need not be members of Models.
+	OpusModel   string `json:"opus_model,omitempty"`
+	SonnetModel string `json:"sonnet_model,omitempty"`
+	HaikuModel  string `json:"haiku_model,omitempty"`
 }
 
 // Profile returns the provider's endpoint fields as the [Profile] adapters
@@ -55,6 +61,9 @@ func (pr Provider) Profile() Profile {
 		ModelNames:     pr.ModelNames,
 		Model:          pr.Model,
 		SmallFastModel: pr.SmallFastModel,
+		OpusModel:      pr.OpusModel,
+		SonnetModel:    pr.SonnetModel,
+		HaikuModel:     pr.HaikuModel,
 	}
 }
 

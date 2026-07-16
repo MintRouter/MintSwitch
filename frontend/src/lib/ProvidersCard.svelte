@@ -135,6 +135,12 @@
   let fModels = $state<string[]>([]);
   let fModelNames = $state<Record<string, string>>({});
   let fModel = $state("");
+  // Optional model-tier pins (Claude Code only): Small/Fast plus the
+  // opus/sonnet/haiku aliases. Empty means "follow the default model".
+  let fSmallFastModel = $state("");
+  let fOpusModel = $state("");
+  let fSonnetModel = $state("");
+  let fHaikuModel = $state("");
   let modelInput = $state("");
   let modelInputEl = $state<HTMLInputElement | null>(null);
   let formError = $state("");
@@ -169,7 +175,8 @@
   // dirty on its own). Used to guard Esc/Cancel against losing typed input.
   let formInitial = $state("");
   const formSnapshot = () =>
-    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModel]);
+    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModel,
+      fSmallFastModel, fOpusModel, fSonnetModel, fHaikuModel]);
   const formDirty = $derived(formOpen && (!!formKey || formSnapshot() !== formInitial));
   // Confirmation shown when Esc/Cancel would discard a dirty form.
   let discardOpen = $state(false);
@@ -187,6 +194,10 @@
     }
     fModelNames = seeded;
     fModel = p?.model ?? "";
+    fSmallFastModel = p?.small_fast_model ?? "";
+    fOpusModel = p?.opus_model ?? "";
+    fSonnetModel = p?.sonnet_model ?? "";
+    fHaikuModel = p?.haiku_model ?? "";
     modelInput = "";
     formError = "";
     fetching = false;
@@ -378,7 +389,10 @@
       models: fModels,
       model_names: fModelNames,
       model: fModel,
-      small_fast_model: editing?.small_fast_model ?? "",
+      small_fast_model: fSmallFastModel,
+      opus_model: fOpusModel,
+      sonnet_model: fSonnetModel,
+      haiku_model: fHaikuModel,
     };
     const err = isEdit ? await onUpdate(payload) : await onAdd(payload);
     if (err != null) {
@@ -690,6 +704,37 @@
             <p class="field-hint">At least one model is required; the first one added becomes the default.</p>
           {/if}
         </div>
+
+        <details class="tiers" open={!!(fSmallFastModel || fOpusModel || fSonnetModel || fHaikuModel)}>
+          <summary class="tiers-summary">Model tiers — Claude Code (optional)</summary>
+          <p class="field-hint">
+            Pin the models Claude Code uses for its opus / sonnet / haiku aliases and
+            background (small/fast) tasks. Empty tiers follow the default model. Other
+            tools ignore these.
+          </p>
+          <div class="tiers-grid">
+            {#each [
+              { id: "opus", label: "Opus", get: () => fOpusModel, set: (v: string) => (fOpusModel = v) },
+              { id: "sonnet", label: "Sonnet", get: () => fSonnetModel, set: (v: string) => (fSonnetModel = v) },
+              { id: "haiku", label: "Haiku", get: () => fHaikuModel, set: (v: string) => (fHaikuModel = v) },
+              { id: "smallfast", label: "Small/Fast", get: () => fSmallFastModel, set: (v: string) => (fSmallFastModel = v) },
+            ] as tier (tier.id)}
+              <label class="tier-field" for={`pv-tier-${tier.id}`}>
+                <span class="tier-label">{tier.label}</span>
+                <select class="tier-select" id={`pv-tier-${tier.id}`} value={tier.get()}
+                  onchange={(e) => tier.set(e.currentTarget.value)}>
+                  <option value="">Use default model</option>
+                  {#each fModels as m (m)}
+                    <option value={m}>{displayName(m)}</option>
+                  {/each}
+                  {#if tier.get() && !fModels.includes(tier.get())}
+                    <option value={tier.get()}>{tier.get()}</option>
+                  {/if}
+                </select>
+              </label>
+            {/each}
+          </div>
+        </details>
 
         {#if formError}
           <p class="field-error" role="alert">Couldn't save: {formError}</p>
@@ -1202,4 +1247,65 @@
   }
   .tool-provider-select:hover { border-color: var(--border-strong); }
   .tool-provider-select:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
+
+  /* ---- Model tiers (Claude Code) ---- */
+  .tiers {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.55rem 0.75rem;
+    background: var(--surface-2);
+  }
+  .tiers-summary {
+    cursor: pointer;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text);
+    user-select: none;
+  }
+  .tiers-summary:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--radius-sm); }
+  .tiers .field-hint { margin: 0.45rem 0 0.55rem; }
+  .tiers-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem 0.75rem;
+  }
+  .tier-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+  .tier-label {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-2);
+  }
+  .tier-select {
+    width: 100%;
+    height: var(--control-h-sm);
+    padding: 0 1.8rem 0 0.7rem;
+    font-size: var(--fs-sm);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+    background-color: var(--surface);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 12px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  :global([data-theme="dark"]) .tier-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%2398989d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  .tier-select:hover { border-color: var(--border-strong); }
+  .tier-select:focus-visible { border-color: var(--accent); box-shadow: var(--focus); }
 </style>

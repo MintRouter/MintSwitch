@@ -163,6 +163,18 @@ func TestApplyNewFile(t *testing.T) {
 		env[envModel] != p.Model || env[envSmallFastModel] != p.SmallFastModel {
 		t.Fatalf("env not injected correctly: %+v", env)
 	}
+	// Tier + subagent pinning: with no per-tier models set, opus/sonnet follow
+	// the main model, haiku follows SmallFastModel, and subagents are pinned
+	// to the main model.
+	if env[envDefaultOpus] != p.Model || env[envDefaultSonnet] != p.Model {
+		t.Fatalf("opus/sonnet tiers must default to main model: %+v", env)
+	}
+	if env[envDefaultHaiku] != p.SmallFastModel {
+		t.Fatalf("haiku tier must default to small fast model: %+v", env)
+	}
+	if env[envSubagentModel] != p.Model {
+		t.Fatalf("subagent model must be the main model: %+v", env)
+	}
 	if _, ok := m[core.MarkerKey]; ok {
 		t.Fatal("legacy marker must not be written into settings.json")
 	}
@@ -190,6 +202,63 @@ func TestApplyDefaultsEmptySmallFastModel(t *testing.T) {
 	env := envOf(t, readSettings(t, res.ChangedPath))
 	if env[envSmallFastModel] != p.Model {
 		t.Fatalf("small fast model should default to main model %q: %+v", p.Model, env)
+	}
+	// With no tiers and no small-fast model, every model variable is pinned to
+	// the main model so nothing can fall back to an Anthropic default.
+	for _, k := range []string{envModel, envDefaultOpus, envDefaultSonnet, envDefaultHaiku, envSmallFastModel, envSubagentModel} {
+		if env[k] != p.Model {
+			t.Fatalf("%s = %v, want main model %q", k, env[k], p.Model)
+		}
+	}
+}
+
+// TestApplyPerTierModels proves per-tier pins land in their DEFAULT_* vars:
+// opus/sonnet take their own models, haiku prefers HaikuModel over
+// SmallFastModel, ANTHROPIC_SMALL_FAST_MODEL mirrors the resolved haiku value,
+// and the subagent pin stays on the main model.
+func TestApplyPerTierModels(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	p.OpusModel = "gw/opus-x"
+	p.SonnetModel = "gw/sonnet-x"
+	p.HaikuModel = "gw/haiku-x"
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	env := envOf(t, readSettings(t, res.ChangedPath))
+	want := map[string]string{
+		envModel:          p.Model,
+		envDefaultOpus:    "gw/opus-x",
+		envDefaultSonnet:  "gw/sonnet-x",
+		envDefaultHaiku:   "gw/haiku-x",
+		envSmallFastModel: "gw/haiku-x",
+		envSubagentModel:  p.Model,
+	}
+	for k, w := range want {
+		if env[k] != w {
+			t.Fatalf("%s = %v, want %q", k, env[k], w)
+		}
+	}
+}
+
+// TestResolveTiersHaikuFallbackChain pins the haiku resolution order:
+// HaikuModel > SmallFastModel > Model.
+func TestResolveTiersHaikuFallbackChain(t *testing.T) {
+	p := core.Profile{Model: "main"}
+	if _, _, haiku := resolveTiers(p); haiku != "main" {
+		t.Fatalf("haiku = %q, want main", haiku)
+	}
+	p.SmallFastModel = "fast"
+	if _, _, haiku := resolveTiers(p); haiku != "fast" {
+		t.Fatalf("haiku = %q, want fast", haiku)
+	}
+	p.HaikuModel = "haiku"
+	if _, _, haiku := resolveTiers(p); haiku != "haiku" {
+		t.Fatalf("haiku = %q, want haiku", haiku)
+	}
+	if opus, sonnet, _ := resolveTiers(p); opus != "main" || sonnet != "main" {
+		t.Fatalf("opus/sonnet = %q/%q, want main/main", opus, sonnet)
 	}
 }
 
@@ -570,7 +639,7 @@ func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := core.AsJSONObject(m[envKey])
-	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
+	for _, k := range managedEnvKeys {
 		if _, present := env[k]; present {
 			t.Fatalf("managed key %s must be stripped: %v", k, env)
 		}
@@ -676,6 +745,45 @@ func TestOrphanRestoreNoBackupStrips(t *testing.T) {
 	}
 	if st, _, _ := a.Status(sampleProfile()); st != core.StatusDefault {
 		t.Fatalf("status after strip = %v, want Default", st)
+	}
+}
+
+// TestLegacyFourKeyRemnantStillDetectedAndStripped proves upgrade continuity:
+// a remnant written by an older MintSwitch (only the legacy four env keys, no
+// tier variables) with the marker lost is still detected as an orphan, and a
+// no-backup Restore strips it while preserving user keys.
+func TestLegacyFourKeyRemnantStillDetectedAndStripped(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	path := a.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"theme":"dark","env":{
+		"ANTHROPIC_BASE_URL":"https://gateway.example.com",
+		"ANTHROPIC_AUTH_TOKEN":"sk-old",
+		"ANTHROPIC_MODEL":"gw/main",
+		"ANTHROPIC_SMALL_FAST_MODEL":"gw/fast",
+		"FOO":"bar"}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, detail, _ := a.Status(sampleProfile()); st != core.StatusModifiedExternally || detail != orphanDetail {
+		t.Fatalf("legacy remnant status = %v %q, want ModifiedExternally + orphanDetail", st, detail)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	m := readSettings(t, path)
+	env := core.AsJSONObject(m[envKey])
+	for _, k := range managedEnvKeys {
+		if _, present := env[k]; present {
+			t.Fatalf("managed key %s must be stripped: %v", k, env)
+		}
+	}
+	if env["FOO"] != "bar" || m["theme"] != "dark" {
+		t.Fatalf("user keys must be preserved: %v", m)
 	}
 }
 

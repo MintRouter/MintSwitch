@@ -847,6 +847,39 @@ func TestModelNamesPersistenceRoundtrip(t *testing.T) {
 	}
 }
 
+// TestTierModelsPersistenceRoundtrip: the Claude Code tier pins survive a
+// restart, are trimmed on save, and round-trip through ProviderView so the
+// Edit dialog can re-populate them.
+func TestTierModelsPersistenceRoundtrip(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	p := multiModelProvider("opus-id", "gpt-id")
+	p.OpusModel = " opus-id "
+	p.SonnetModel = "gpt-id"
+	p.HaikuModel = " haiku-id "
+	addProvider(t, svc, p)
+
+	reloaded := NewWithRegistry(reg(a), settings.NewStore(storeFrom(svc).Path))
+	pviews, err := reloaded.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders after reload: %v", err)
+	}
+	pv := pviews[0]
+	if pv.OpusModel != "opus-id" || pv.SonnetModel != "gpt-id" || pv.HaikuModel != "haiku-id" {
+		t.Fatalf("tier models after reload = %q/%q/%q, want opus-id/gpt-id/haiku-id",
+			pv.OpusModel, pv.SonnetModel, pv.HaikuModel)
+	}
+
+	// The tier pins reach the adapter through the effective profile on Apply.
+	if _, err := reloaded.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.OpusModel != "opus-id" ||
+		a.lastApplied.SonnetModel != "gpt-id" || a.lastApplied.HaikuModel != "haiku-id" {
+		t.Fatalf("applied profile tier models wrong: %+v", a.lastApplied)
+	}
+}
+
 // TestV1StateMigratesToDefaultProvider: a v1 single-key on-disk state
 // surfaces as one active Provider named "Default" with zero user action, and
 // still applies.

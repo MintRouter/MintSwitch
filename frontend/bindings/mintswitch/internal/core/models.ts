@@ -81,6 +81,15 @@ export interface Provider {
      * lightweight/background tasks. It need not be a member of Models.
      */
     "small_fast_model"?: string;
+
+    /**
+     * OpusModel, SonnetModel and HaikuModel optionally pin Claude Code's model
+     * tiers (opus/sonnet/haiku aliases). Empty tiers fall back to Model (Haiku
+     * prefers SmallFastModel). They need not be members of Models.
+     */
+    "opus_model"?: string;
+    "sonnet_model"?: string;
+    "haiku_model"?: string;
 }
 
 /**

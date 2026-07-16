@@ -86,6 +86,9 @@ func TestFingerprintStableAndSensitive(t *testing.T) {
 		{APIKey: "k", BaseURL: "https://h2", Model: "m", SmallFastModel: "s"},
 		{APIKey: "k", BaseURL: "https://h", Model: "m2", SmallFastModel: "s"},
 		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s2"},
+		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s", OpusModel: "o"},
+		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s", SonnetModel: "sn"},
+		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s", HaikuModel: "hk"},
 	}
 	for i, c := range changes {
 		if Fingerprint(c) == Fingerprint(base) {
@@ -134,9 +137,11 @@ func TestProviderValidate(t *testing.T) {
 // field and is labeled with the provider name.
 func TestProviderProfile(t *testing.T) {
 	pr := validProvider()
+	pr.OpusModel, pr.SonnetModel, pr.HaikuModel = "o", "sn", "hk"
 	p := pr.Profile()
 	if p.Label != "OpenAI" || p.APIKey != "sk-1" || p.BaseURL != pr.BaseURL ||
-		p.Model != "m1" || p.SmallFastModel != "s" || len(p.Models) != 2 {
+		p.Model != "m1" || p.SmallFastModel != "s" || len(p.Models) != 2 ||
+		p.OpusModel != "o" || p.SonnetModel != "sn" || p.HaikuModel != "hk" {
 		t.Fatalf("resolved profile wrong: %+v", p)
 	}
 	if err := p.Validate(); err != nil {

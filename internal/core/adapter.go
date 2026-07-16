@@ -154,7 +154,7 @@ func NewMarker(p Profile, label string) Marker {
 // adapters must use this so external-modification detection is consistent.
 func Fingerprint(p Profile) string {
 	h := sha256.New()
-	for _, f := range []string{p.BaseURL, p.APIKey, p.Model, p.SmallFastModel} {
+	for _, f := range []string{p.BaseURL, p.APIKey, p.Model, p.SmallFastModel, p.OpusModel, p.SonnetModel, p.HaikuModel} {
 		h.Write([]byte(f))
 		h.Write([]byte{0})
 	}

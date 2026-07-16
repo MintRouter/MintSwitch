@@ -3,24 +3,37 @@
 // Claude Code (both the CLI and the VS Code extension, which share config) reads
 // environment overrides from the top-level "env" object of ~/.claude/settings.json.
 // The adapter injects the active profile's endpoint into that object as the
-// ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL and
-// ANTHROPIC_SMALL_FAST_MODEL variables, preserving every other key in the file.
+// ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,
+// ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL,
+// ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_SMALL_FAST_MODEL and
+// CLAUDE_CODE_SUBAGENT_MODEL variables, preserving every other key in the file.
 //
-// Two values diverge from the profile as stored (Claude Code specifics; other
-// adapters keep the profile verbatim):
+// Every model variable is always written so no Claude Code request can fall
+// back to an Anthropic default model, which fails on gateways that do not
+// serve it. ANTHROPIC_MODEL only pins the main session; the opus/sonnet/haiku
+// tier aliases (used by subagents, plan mode and background tasks) resolve via
+// the ANTHROPIC_DEFAULT_*_MODEL variables, and a subagent declaring a full
+// model ID bypasses even those unless CLAUDE_CODE_SUBAGENT_MODEL is set (that
+// var forces every subagent onto the main model — the accepted trade-off for
+// gateway-only setups). Tier values come from the profile's OpusModel /
+// SonnetModel / HaikuModel when set and fall back to the main model
+// otherwise; see resolveTiers.
+//
+// Values that diverge from the profile as stored (Claude Code specifics;
+// other adapters keep the profile verbatim):
 //
 //   - ANTHROPIC_BASE_URL: Claude Code appends "/v1/messages" to the base URL
 //     itself, so a single trailing "/v1" path segment is stripped before the
 //     write ("https://host/v1" → "https://host", "https://host/api/v1" →
 //     "https://host/api"). URLs without the suffix — including "/v1beta" or a
 //     mid-path "v1" — are written unchanged.
-//   - ANTHROPIC_SMALL_FAST_MODEL: when the profile leaves it empty, it is set
-//     to the profile's main model. If the key were absent, Claude Code's
-//     background requests would fall back to its default Haiku model, which
-//     fails on gateways that do not serve it.
+//   - ANTHROPIC_SMALL_FAST_MODEL: deprecated in favor of
+//     ANTHROPIC_DEFAULT_HAIKU_MODEL but still read by older Claude Code
+//     versions, so it is written with the same resolved haiku value
+//     (HaikuModel, else SmallFastModel, else the main model).
 //
-// Schema reference (verified 2026-06-30): https://code.claude.com/docs/en/env-vars
-// and https://code.claude.com/docs/en/llm-gateway-connect.
+// Schema reference (verified 2026-07-17): https://code.claude.com/docs/en/env-vars
+// and https://code.claude.com/docs/en/model-config.
 package claudecode
 
 import (
@@ -43,7 +56,19 @@ const (
 	envAuthToken      = "ANTHROPIC_AUTH_TOKEN"
 	envModel          = "ANTHROPIC_MODEL"
 	envSmallFastModel = "ANTHROPIC_SMALL_FAST_MODEL"
+	envDefaultOpus    = "ANTHROPIC_DEFAULT_OPUS_MODEL"
+	envDefaultSonnet  = "ANTHROPIC_DEFAULT_SONNET_MODEL"
+	envDefaultHaiku   = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+	envSubagentModel  = "CLAUDE_CODE_SUBAGENT_MODEL"
 )
+
+// managedEnvKeys is every env variable Apply writes; stripManaged removes
+// exactly this set. Order matters only for readability.
+var managedEnvKeys = []string{
+	envBaseURL, envAuthToken, envModel,
+	envDefaultOpus, envDefaultSonnet, envDefaultHaiku,
+	envSmallFastModel, envSubagentModel,
+}
 
 // orphanDetail explains the orphan-remnant state: settings.json still carries
 // the MintSwitch-injected env keys but the managed marker is gone (e.g. a
@@ -166,15 +191,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		}
 	}
 
+	opus, sonnet, haiku := resolveTiers(p)
 	env := core.AsJSONObject(m[envKey])
 	env[envBaseURL] = stripV1Suffix(p.BaseURL)
 	env[envAuthToken] = p.APIKey
 	env[envModel] = p.Model
-	if p.SmallFastModel != "" {
-		env[envSmallFastModel] = p.SmallFastModel
-	} else {
-		env[envSmallFastModel] = p.Model
-	}
+	env[envDefaultOpus] = opus
+	env[envDefaultSonnet] = sonnet
+	env[envDefaultHaiku] = haiku
+	env[envSmallFastModel] = haiku
+	env[envSubagentModel] = p.Model
 	m[envKey] = env
 	delete(m, core.MarkerKey)
 
@@ -213,10 +239,12 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 }
 
 // orphanRemnantAt reports whether the settings file at path still carries the
-// FULL MintSwitch injection signature without requiring a marker: the "env"
-// object holding all four managed keys (ANTHROPIC_BASE_URL,
-// ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL, ANTHROPIC_SMALL_FAST_MODEL) —
-// exactly the shape Apply writes. It is deliberately stricter than
+// MintSwitch injection signature without requiring a marker: the "env" object
+// holding the four core managed keys (ANTHROPIC_BASE_URL,
+// ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL, ANTHROPIC_SMALL_FAST_MODEL). This is
+// a subset of what Apply writes today, kept at the legacy four keys so
+// remnants written by older MintSwitch versions (pre tier variables) are
+// still detected. It is deliberately stricter than
 // stripManaged's gate because a user could set ANTHROPIC_BASE_URL (or a
 // subset of these variables) for their own gateway: only the complete
 // signature is treated as a MintSwitch remnant, so a hand-written config
@@ -251,7 +279,7 @@ func (a *Adapter) stripManaged(path string) (bool, error) {
 	if _, present := env[envBaseURL]; !present {
 		return false, nil
 	}
-	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
+	for _, k := range managedEnvKeys {
 		delete(env, k)
 	}
 	if len(env) == 0 {
@@ -293,6 +321,27 @@ var (
 	_ core.ToolAdapter          = (*Adapter)(nil)
 	_ core.LegacyMarkerStripper = (*Adapter)(nil)
 )
+
+// resolveTiers returns the models to pin Claude Code's opus/sonnet/haiku tier
+// aliases to: the profile's per-tier model when set, else the main model. The
+// haiku tier additionally prefers the profile's SmallFastModel over the main
+// model, preserving the pre-tier behaviour of ANTHROPIC_SMALL_FAST_MODEL.
+func resolveTiers(p core.Profile) (opus, sonnet, haiku string) {
+	opus, sonnet, haiku = p.Model, p.Model, p.Model
+	if p.OpusModel != "" {
+		opus = p.OpusModel
+	}
+	if p.SonnetModel != "" {
+		sonnet = p.SonnetModel
+	}
+	if p.SmallFastModel != "" {
+		haiku = p.SmallFastModel
+	}
+	if p.HaikuModel != "" {
+		haiku = p.HaikuModel
+	}
+	return opus, sonnet, haiku
+}
 
 // stripV1Suffix removes exactly one trailing "/v1" path segment from baseURL
 // (ignoring a trailing slash), since Claude Code appends "/v1/messages" to

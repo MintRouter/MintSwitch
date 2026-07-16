@@ -139,8 +139,13 @@ type ProviderView struct {
 	ModelNames     map[string]string `json:"model_names"`
 	Model          string            `json:"model"`
 	SmallFastModel string            `json:"small_fast_model"`
-	HasKey         bool              `json:"has_key"`
-	Active         bool              `json:"active"`
+	// OpusModel, SonnetModel and HaikuModel are the provider's optional Claude
+	// Code tier pins; empty means the tier follows the default Model.
+	OpusModel   string `json:"opus_model"`
+	SonnetModel string `json:"sonnet_model"`
+	HaikuModel  string `json:"haiku_model"`
+	HasKey      bool   `json:"has_key"`
+	Active      bool   `json:"active"`
 }
 
 // providerRefs maps the state's providers to their minimal non-secret refs.
@@ -172,6 +177,9 @@ func providerView(p core.Provider, active bool) ProviderView {
 		ModelNames:     p.ModelNames,
 		Model:          p.Model,
 		SmallFastModel: p.SmallFastModel,
+		OpusModel:      p.OpusModel,
+		SonnetModel:    p.SonnetModel,
+		HaikuModel:     p.HaikuModel,
 		HasKey:         strings.TrimSpace(p.APIKey) != "",
 		Active:         active,
 	}
@@ -498,6 +506,9 @@ func normalizeProvider(p *core.Provider) {
 	p.BaseURL, _ = core.NormalizeBaseURL(p.BaseURL)
 	p.Model = strings.TrimSpace(p.Model)
 	p.SmallFastModel = strings.TrimSpace(p.SmallFastModel)
+	p.OpusModel = strings.TrimSpace(p.OpusModel)
+	p.SonnetModel = strings.TrimSpace(p.SonnetModel)
+	p.HaikuModel = strings.TrimSpace(p.HaikuModel)
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
 }
