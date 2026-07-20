@@ -122,6 +122,84 @@ func TestStatusTransitions(t *testing.T) {
 	}
 }
 
+// TestStatusAuthDrift pins the post-merger regression: the unified ChatGPT
+// app shares ~/.codex, so a ChatGPT sign-in rewrites auth.json (auth_mode
+// back to "chatgpt") while config.toml still carries the MintSwitch settings.
+// Codex then ignores OPENAI_API_KEY and bypasses the proxy, so Status must
+// report ModifiedExternally (authDriftDetail) instead of a false Applied —
+// and a re-Apply must recover to Applied.
+func TestStatusAuthDrift(t *testing.T) {
+	drifts := map[string]func(auth map[string]any){
+		"chatgpt sign-in flips auth_mode": func(auth map[string]any) {
+			auth[authModeKey] = "chatgpt"
+			auth["tokens"] = map[string]any{"id_token": "oauth-tok"}
+		},
+		"api key replaced": func(auth map[string]any) {
+			auth[authKeyName] = "sk-someone-else"
+		},
+		"api key removed": func(auth map[string]any) {
+			delete(auth, authKeyName)
+		},
+	}
+	for name, mutate := range drifts {
+		t.Run(name, func(t *testing.T) {
+			a, _ := newAdapter(t)
+			a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+			p := sampleProfile()
+			if _, err := a.Apply(p); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+
+			auth, err := core.ReadJSONObject(a.authPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(auth)
+			if err := core.WriteJSONObjectAtomic(a.authPath(), auth); err != nil {
+				t.Fatal(err)
+			}
+
+			st, detail, err := a.Status(p)
+			if err != nil {
+				t.Fatalf("status: %v", err)
+			}
+			if st != core.StatusModifiedExternally || detail != authDriftDetail {
+				t.Fatalf("drifted status = %v %q, want ModifiedExternally + authDriftDetail", st, detail)
+			}
+
+			// Re-applying the profile rewrites auth.json and recovers Applied.
+			if _, err := a.Apply(p); err != nil {
+				t.Fatalf("re-apply: %v", err)
+			}
+			if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+				t.Fatalf("status after re-apply = %v, want Applied", st)
+			}
+		})
+	}
+}
+
+// TestStatusAuthDriftCorruptAuth proves an unreadable auth.json under a
+// managed config never reports a false Applied: Codex cannot be using the
+// MintSwitch key, so Status reports ModifiedExternally.
+func TestStatusAuthDriftCorruptAuth(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := os.WriteFile(a.authPath(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, detail, err := a.Status(p)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st != core.StatusModifiedExternally || detail != authDriftDetail {
+		t.Fatalf("corrupt-auth status = %v %q, want ModifiedExternally + authDriftDetail", st, detail)
+	}
+}
+
 func TestApplyNewFiles(t *testing.T) {
 	a, home := newAdapter(t)
 	p := sampleProfile()

@@ -1,6 +1,13 @@
 // Package codex implements the core.ToolAdapter for OpenAI Codex (the Codex
 // CLI and IDE extension), which share configuration under ~/.codex.
 //
+// Since the July 2026 unification the standalone Codex desktop app ships as
+// the unified ChatGPT app (macOS bundle ID com.openai.codex), but the CLI is
+// still the "codex" binary (npm @openai/codex) and its configuration is
+// unchanged: $CODEX_HOME (default ~/.codex) with config.toml and auth.json.
+// OpenAI documents that no configuration migration is needed, so detection
+// and the managed keys below remain the correct contract.
+//
 // Codex stores user configuration in ~/.codex/config.toml (TOML) and file-based
 // credentials in ~/.codex/auth.json (JSON). To point the built-in "openai"
 // provider at an OpenAI-compatible proxy/router, MintSwitch sets the top-level
@@ -9,8 +16,11 @@
 // Apply also sets auth_mode="apikey" in auth.json: when a ChatGPT session also
 // exists (auth_mode="chatgpt" with tokens present), Codex uses the OAuth token
 // and ignores OPENAI_API_KEY, returning 401 against a proxy openai_base_url.
+// The unified ChatGPT app shares ~/.codex, so signing in with ChatGPT can
+// rewrite auth.json (flipping auth_mode back to "chatgpt") behind MintSwitch's
+// back — Status therefore verifies auth.json as well as config.toml.
 // See https://developers.openai.com/codex/config-advanced and
-// https://developers.openai.com/codex/config-sample.
+// https://developers.openai.com/codex/auth.
 package codex
 
 import (
@@ -44,6 +54,14 @@ const (
 const orphanDetail = "MintSwitch settings are still present but the managed marker is missing " +
 	"(a previous restore may have been interrupted). Restore Default will remove them."
 
+// authDriftDetail explains the auth-drift state: config.toml still routes to
+// the MintSwitch provider, but auth.json no longer selects the MintSwitch API
+// key — typically because a ChatGPT sign-in (CLI or the unified ChatGPT app,
+// which shares ~/.codex) rewrote it. Codex then ignores OPENAI_API_KEY and
+// bypasses the configured endpoint, so the profile must be re-applied.
+const authDriftDetail = "auth.json no longer uses the MintSwitch API key (a ChatGPT sign-in " +
+	"likely replaced it), so Codex bypasses the configured endpoint. Apply the profile again to fix this."
+
 // Adapter applies/restores a MintSwitch profile to the Codex configuration.
 // The managed marker lives in the sidecar marker store, never in config.toml,
 // so Codex configs stay free of the legacy [mintswitchManaged] table.
@@ -69,8 +87,10 @@ func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
 // ID returns the stable adapter identifier.
 func (a *Adapter) ID() string { return "codex" }
 
-// Name returns the display name.
-func (a *Adapter) Name() string { return "Codex (CLI + IDE extension)" }
+// Name returns the display name. Codex now ships as part of the unified
+// ChatGPT app, so the UI leads with ChatGPT; the parenthetical becomes the
+// card subtitle and keeps the Codex CLI/IDE identity visible.
+func (a *Adapter) Name() string { return "ChatGPT (Codex CLI + IDE)" }
 
 // configPath returns the absolute path to config.toml under the Codex home
 // dir ($CODEX_HOME, default ~/.codex).
@@ -94,15 +114,20 @@ func (a *Adapter) Detect() (bool, string) {
 	return a.r.BinaryResolvable(a.lookPath, "codex"), a.configPath()
 }
 
-// Status inspects config.toml relative to the given profile. The marker is
-// read from the sidecar store: no entry means Default — unless the config
-// files still carry the full MintSwitch injection signature (see
+// Status inspects config.toml and auth.json relative to the given profile.
+// The marker is read from the sidecar store: no entry means Default — unless
+// the config files still carry the full MintSwitch injection signature (see
 // orphanRemnant), which reports ModifiedExternally so the UI offers Restore
 // even after the marker was lost (e.g. an interrupted restore). An entry
 // whose managed key (openai_base_url) has been removed from the file also
 // means Default (the file is back to an unmanaged state, e.g. after an
 // external restore/wipe); otherwise the marker fingerprint decides Applied vs
-// ModifiedExternally, exactly as with the legacy in-file marker.
+// ModifiedExternally, exactly as with the legacy in-file marker. Even with a
+// matching fingerprint, auth.json must still select the MintSwitch key
+// (auth_mode="apikey" with the profile's OPENAI_API_KEY): a ChatGPT sign-in —
+// via the CLI or the unified ChatGPT app, which shares ~/.codex — rewrites
+// auth.json and makes Codex bypass the configured endpoint, so that state
+// reports ModifiedExternally (authDriftDetail) instead of a false Applied.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, _ := a.Detect()
 	if !installed {
@@ -125,10 +150,31 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	if _, present := cfg["openai_base_url"]; !present {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
-	if marker.Fingerprint == core.Fingerprint(p) {
-		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
+	if marker.Fingerprint != core.Fingerprint(p) {
+		return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 	}
-	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
+	if a.authDrifted(p) {
+		return core.StatusModifiedExternally, authDriftDetail, nil
+	}
+	return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
+}
+
+// authDrifted reports whether auth.json no longer selects the MintSwitch API
+// key that Apply wrote for the given profile: auth_mode flipped away from
+// "apikey" (e.g. a ChatGPT sign-in set "chatgpt"), the OPENAI_API_KEY was
+// removed or replaced, or the file is unreadable/corrupt. It is only
+// meaningful when config.toml is confirmed MintSwitch-managed with a matching
+// fingerprint, so any mismatch here is by definition an external change.
+func (a *Adapter) authDrifted(p core.Profile) bool {
+	auth, err := core.ReadJSONObject(a.authPath())
+	if err != nil {
+		return true
+	}
+	if mode, _ := auth[authModeKey].(string); mode != authModeAPIKey {
+		return true
+	}
+	key, _ := auth[authKeyName].(string)
+	return key != p.APIKey
 }
 
 // Apply backs up both files (only when config.toml is not already
