@@ -152,6 +152,49 @@ func TestApplyNewFileAndStatus(t *testing.T) {
 	}
 }
 
+// TestApplyWritesModalities pins the vision fix: every model entry MintSwitch
+// writes must declare modalities so Kilo enables image/video input. Verified
+// against Kilo-Org/kilocode provider.ts: config model without modalities falls
+// back to capabilities.input.image = false (openai-compatible is not in the
+// models.dev database, so existingModel is undefined), and transform.ts
+// unsupportedParts strips image parts.
+func TestApplyWritesModalities(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	root := readJSON(t, res.ChangedPath)
+	prov := root["provider"].(map[string]any)[providerID].(map[string]any)
+	models := prov["models"].(map[string]any)
+	entry, ok := models[p.Model].(map[string]any)
+	if !ok {
+		t.Fatalf("model entry missing: %v", models)
+	}
+	mod, ok := entry["modalities"].(map[string]any)
+	if !ok {
+		t.Fatalf("modalities missing from model entry: %v", entry)
+	}
+	input, ok := mod["input"].([]any)
+	if !ok {
+		t.Fatalf("modalities.input not a list: %v", mod)
+	}
+	got := map[string]bool{}
+	for _, v := range input {
+		got[v.(string)] = true
+	}
+	for _, want := range []string{"text", "image", "video"} {
+		if !got[want] {
+			t.Fatalf("modalities.input missing %q: %v", want, mod["input"])
+		}
+	}
+	output, ok := mod["output"].([]any)
+	if !ok || len(output) != 1 || output[0].(string) != "text" {
+		t.Fatalf("modalities.output must be [\"text\"]: %v", mod["output"])
+	}
+}
+
 func TestApplyPreservesExistingKeys(t *testing.T) {
 	a, _ := newAdapter(t)
 	path := a.jsonPath()

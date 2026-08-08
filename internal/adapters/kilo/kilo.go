@@ -206,7 +206,17 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 			"apiKey":  p.APIKey,
 		},
 		"models": map[string]any{
-			p.Model: map[string]any{"name": p.Model},
+			p.Model: map[string]any{
+				"name": p.Model,
+				// ponytail: hằng theo spec MintRouter (OpenAI-compatible multimodal);
+				// thiếu modalities thì Kilo strip image input (openai-compatible
+				// không có trong models.dev nên existingModel undefined, fallback
+				// capabilities.input.image = false — provider.ts:1488).
+				"modalities": map[string]any{
+					"input":  []string{"text", "image", "video"},
+					"output": []string{"text"},
+				},
+			},
 		},
 	}
 	root["provider"] = provider
