@@ -149,6 +149,69 @@ func TestApplyAllModels(t *testing.T) {
 	}
 }
 
+// TestApplyModelDisplayNames pins the display-name UX: a model with a
+// ModelNames entry gets that display name as its "name" field (the "id" field
+// stays the canonical ID), while a model without one keeps name = ID — in
+// both single-model and "All models" mode.
+func TestApplyModelDisplayNames(t *testing.T) {
+	modelEntry := func(t *testing.T, path, id string) map[string]any {
+		t.Helper()
+		models := readJSON(t, path)
+		prov := models["providers"].(map[string]any)[providerID].(map[string]any)
+		for _, e := range prov["models"].([]any) {
+			entry := e.(map[string]any)
+			if entry["id"] == id {
+				return entry
+			}
+		}
+		t.Fatalf("model entry %q missing", id)
+		return nil
+	}
+
+	t.Run("single-model with display name", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		p := sampleProfile()
+		p.ModelNames = map[string]string{"gpt-mint": "GPT Mint"}
+		res, err := a.Apply(p)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if got := modelEntry(t, res.ChangedPath, "gpt-mint")["name"]; got != "GPT Mint" {
+			t.Fatalf("name = %v, want display name %q", got, "GPT Mint")
+		}
+	})
+
+	t.Run("single-model without display name", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		p := sampleProfile()
+		res, err := a.Apply(p)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if got := modelEntry(t, res.ChangedPath, "gpt-mint")["name"]; got != "gpt-mint" {
+			t.Fatalf("name = %v, want ID fallback %q", got, "gpt-mint")
+		}
+	})
+
+	t.Run("all-models mixed", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		p := sampleProfile()
+		p.Models = []string{"gpt-mint", "claude-mint"}
+		p.ApplyAllModels = true
+		p.ModelNames = map[string]string{"claude-mint": "Claude Mint"}
+		res, err := a.Apply(p)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if got := modelEntry(t, res.ChangedPath, "gpt-mint")["name"]; got != "gpt-mint" {
+			t.Fatalf("gpt-mint name = %v, want ID fallback", got)
+		}
+		if got := modelEntry(t, res.ChangedPath, "claude-mint")["name"]; got != "Claude Mint" {
+			t.Fatalf("claude-mint name = %v, want display name %q", got, "Claude Mint")
+		}
+	})
+}
+
 func TestApplyPreservesExistingKeys(t *testing.T) {
 	a, _ := newAdapter(t)
 	installed(a)

@@ -248,10 +248,17 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		providers = map[string]any{}
 	}
 	// One entry per applied model ([core.Profile.ApplyModels]: just the
-	// selected model, or every provider model in "All models" mode).
+	// selected model, or every provider model in "All models" mode). "id" stays
+	// the canonical model ID; "name" is display-only, so it takes the profile's
+	// ModelNames display name when one exists (falling back to the ID), same as
+	// the claudedesktop adapter's labelOverride.
 	modelEntries := make([]any, 0)
 	for _, m := range p.ApplyModels() {
-		modelEntries = append(modelEntries, map[string]any{"id": m, "name": m})
+		name := m
+		if label := p.ModelNames[m]; label != "" {
+			name = label
+		}
+		modelEntries = append(modelEntries, map[string]any{"id": m, "name": name})
 	}
 	providers[providerID] = map[string]any{
 		"baseUrl": p.BaseURL,
