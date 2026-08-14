@@ -16,6 +16,16 @@ export interface InstallResult {
 }
 
 /**
+ * ModelOption is one advertised model returned by the models fetch: its
+ * canonical ID plus the optional human-friendly display name the endpoint
+ * advertises. Never secret — safe to return to the frontend.
+ */
+export interface ModelOption {
+    "id": string;
+    "display_name"?: string;
+}
+
+/**
  * ProviderRef is the minimal non-secret reference to one provider (for
  * per-tool dropdowns): ID, display name and whether it is the globally
  * active provider — never any part of the key value, not even masked.

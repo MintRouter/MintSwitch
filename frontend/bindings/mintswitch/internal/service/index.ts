@@ -8,6 +8,7 @@ export {
 
 export type {
     InstallResult,
+    ModelOption,
     ProviderRef,
     ProviderView,
     ToolOpResult,
