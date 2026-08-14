@@ -59,7 +59,9 @@ export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult
  * one request and is never stored, logged, or included in errors. When apiKey
  * is blank and providerID names a stored provider, that provider's stored key
  * is used instead (the Edit flow, where the key never round-trips to the
- * frontend). Read-only: it never mutates settings, and errors stay
+ * frontend) — but only when the normalized baseURL matches the provider's
+ * stored base URL, so a stored key can never be sent to an arbitrary
+ * endpoint. Read-only: it never mutates settings, and errors stay
  * display-safe.
  */
 export function FetchEndpointModels(baseURL: string, apiKey: string, providerID: string): $CancellablePromise<$models.ModelOption[] | null> {
