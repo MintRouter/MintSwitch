@@ -35,6 +35,14 @@ type UninstallPlan struct {
 	CanExecute bool   `json:"can_execute"`
 }
 
+// ModelOption is one advertised model returned by the models fetch: its
+// canonical ID plus the optional human-friendly display name the endpoint
+// advertises. Never secret — safe to return to the frontend.
+type ModelOption struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
 // FetchProviderModels queries the stored provider's OpenAI-compatible
 // endpoint (GET {base_url}/models with a Bearer key) and returns the sorted,
 // de-duplicated model IDs it advertises. It is read-only: it never mutates
@@ -56,18 +64,28 @@ func (s *Service) FetchProviderModels(providerID string) ([]string, error) {
 	if base == "" {
 		return nil, errors.New("service: the provider has no base URL saved; set one before fetching models")
 	}
-	return s.fetchModels(base, pr.APIKey)
+	options, err := s.fetchModels(base, pr.APIKey)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(options))
+	for i, o := range options {
+		ids[i] = o.ID
+	}
+	return ids, nil
 }
 
 // FetchEndpointModels queries {baseURL}/models like [Service.FetchProviderModels]
 // but for endpoint values that may not be saved yet, so the Add/Edit dialog
-// can list models before the provider is persisted. The API key is transient:
-// it is used only for this one request and is never stored, logged, or
-// included in errors. When apiKey is blank and providerID names a stored
-// provider, that provider's stored key is used instead (the Edit flow, where
-// the key never round-trips to the frontend). Read-only: it never mutates
-// settings, and errors stay display-safe.
-func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]string, error) {
+// can list models before the provider is persisted. It returns each model's
+// ID plus the display name the endpoint advertises (when any), so the dialog
+// can seed friendly names. The API key is transient: it is used only for this
+// one request and is never stored, logged, or included in errors. When apiKey
+// is blank and providerID names a stored provider, that provider's stored key
+// is used instead (the Edit flow, where the key never round-trips to the
+// frontend). Read-only: it never mutates settings, and errors stay
+// display-safe.
+func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]ModelOption, error) {
 	base, _ := core.NormalizeBaseURL(baseURL)
 	if base == "" {
 		return nil, errors.New("service: enter a valid base URL before fetching models")
@@ -90,10 +108,11 @@ func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]str
 }
 
 // fetchModels performs the actual GET {base}/models request with an optional
-// Bearer key and parses the advertised model IDs. Shared by the stored-
-// provider and transient-endpoint entry points; errors never include the key,
-// the Authorization header, or the endpoint's response body.
-func (s *Service) fetchModels(base, key string) ([]string, error) {
+// Bearer key and parses the advertised models (ID + optional display name).
+// Shared by the stored-provider and transient-endpoint entry points; errors
+// never include the key, the Authorization header, or the endpoint's
+// response body.
+func (s *Service) fetchModels(base, key string) ([]ModelOption, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsFetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
@@ -127,11 +146,11 @@ func (s *Service) fetchModels(base, key string) ([]string, error) {
 	if err != nil {
 		return nil, errors.New("service: the endpoint's response could not be read")
 	}
-	models, ok := parseModelIDs(body)
+	models, ok := parseModelOptions(body)
 	if !ok {
 		return nil, errors.New("service: the endpoint's response was not a recognizable model list")
 	}
-	sort.Strings(models)
+	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	return models, nil
 }
 
@@ -153,11 +172,13 @@ func httpStatusHint(code int) string {
 
 // modelEntry decodes one element of a models listing. It tolerates the OpenAI
 // object shape ({"id": ...}, with "name"/"model" as fallbacks) as well as a
-// bare string element.
+// bare string element. DisplayName ("display_name", with "name" as fallback
+// when it wasn't consumed as the ID) is the optional human-friendly label.
 type modelEntry struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Model string `json:"model"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Model       string `json:"model"`
+	DisplayName string `json:"display_name"`
 }
 
 func (m *modelEntry) UnmarshalJSON(b []byte) error {
@@ -175,10 +196,10 @@ func (m *modelEntry) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// parseModelIDs extracts model IDs from an OpenAI-style models response
+// parseModelOptions extracts models from an OpenAI-style models response
 // ({"data":[{"id":...}]}), tolerating a "models" key or a top-level array.
 // ok=false means the payload was not a recognizable model list.
-func parseModelIDs(body []byte) (ids []string, ok bool) {
+func parseModelOptions(body []byte) (options []ModelOption, ok bool) {
 	var envelope struct {
 		Data   []modelEntry `json:"data"`
 		Models []modelEntry `json:"models"`
@@ -188,33 +209,44 @@ func parseModelIDs(body []byte) (ids []string, ok bool) {
 		if entries == nil {
 			entries = envelope.Models
 		}
-		return idsOf(entries), true
+		return optionsOf(entries), true
 	}
 	var list []modelEntry
 	if err := json.Unmarshal(body, &list); err == nil && list != nil {
-		return idsOf(list), true
+		return optionsOf(list), true
 	}
 	return nil, false
 }
 
-// idsOf collects the non-empty identifier of each entry (ID, else Model, else
-// Name), trimmed and de-duplicated, preserving nothing secret.
-func idsOf(entries []modelEntry) []string {
-	ids := make([]string, 0, len(entries))
+// optionsOf collects the non-empty identifier of each entry (ID, else Model,
+// else Name), trimmed and de-duplicated, plus its optional display name
+// ("display_name", else "name" when Name wasn't consumed as the ID). Display
+// names equal to the ID are dropped as noise. Nothing secret is preserved.
+func optionsOf(entries []modelEntry) []ModelOption {
+	options := make([]ModelOption, 0, len(entries))
 	seen := make(map[string]bool, len(entries))
 	for _, e := range entries {
+		nameUsedAsID := false
 		id := strings.TrimSpace(e.ID)
 		if id == "" {
 			id = strings.TrimSpace(e.Model)
 		}
 		if id == "" {
 			id = strings.TrimSpace(e.Name)
+			nameUsedAsID = id != ""
 		}
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		ids = append(ids, id)
+		display := strings.TrimSpace(e.DisplayName)
+		if display == "" && !nameUsedAsID {
+			display = strings.TrimSpace(e.Name)
+		}
+		if display == id {
+			display = ""
+		}
+		options = append(options, ModelOption{ID: id, DisplayName: display})
 	}
-	return ids
+	return options
 }

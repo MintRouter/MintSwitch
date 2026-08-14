@@ -204,6 +204,7 @@
     fetchAttempted = false;
     fetchError = "";
     fetchedModels = [];
+    fetchedNames = {};
     dropdownOpen = false;
     activeIndex = -1;
     discardOpen = false;
@@ -243,6 +244,10 @@
   let fetchAttempted = $state(false);
   let fetchError = $state("");
   let fetchedModels = $state<string[]>([]);
+  // Display names the endpoint advertised alongside the fetched IDs. They are
+  // copied into fModelNames only when a model is ADDED — an auto-fetch on
+  // Edit must never dirty the form by itself.
+  let fetchedNames = $state<Record<string, string>>({});
   // Monotonic token so a stale (slow) response can never clobber the state of
   // a newer fetch or a reopened form.
   let fetchSeq = 0;
@@ -253,14 +258,19 @@
     fetching = true;
     fetchError = "";
     try {
-      const ids = (await Service.FetchEndpointModels(formBase.url, formKey, formId)) ?? [];
+      const options = (await Service.FetchEndpointModels(formBase.url, formKey, formId)) ?? [];
       if (seq !== fetchSeq) return;
-      fetchedModels = ids;
+      fetchedModels = options.map((o) => o.id);
+      const names: Record<string, string> = {};
+      for (const o of options) {
+        if (o.display_name) names[o.id] = o.display_name;
+      }
+      fetchedNames = names;
       fetchAttempted = true;
       fetching = false;
       // Fresh suggestions open the dropdown so the checkbox list is visible
       // without an extra click.
-      if (ids.length) dropdownOpen = true;
+      if (options.length) dropdownOpen = true;
     } catch (e) {
       if (seq !== fetchSeq) return;
       fetchError = errMsg(e);
@@ -281,6 +291,11 @@
   const filteredModels = $derived(
     modelQuery ? fetchedModels.filter((m) => m.toLowerCase().includes(modelQuery)) : fetchedModels,
   );
+  // "Select all" mirrors the visible rows, so with a filter active it applies
+  // to the matches only.
+  const allFilteredSelected = $derived(
+    filteredModels.length > 0 && filteredModels.every((m) => fModels.includes(m)),
+  );
 
   function openDropdown(): void {
     dropdownOpen = true;
@@ -294,6 +309,17 @@
   function toggleModel(m: string): void {
     if (fModels.includes(m)) removeModel(m);
     else addModelId(m);
+    modelInputEl?.focus();
+  }
+
+  // The "Select all" row: ticks every visible model, or unticks them all when
+  // they are already all selected.
+  function toggleAllFiltered(): void {
+    if (allFilteredSelected) {
+      for (const m of filteredModels) removeModel(m);
+    } else {
+      for (const m of filteredModels) addModelId(m);
+    }
     modelInputEl?.focus();
   }
 
@@ -328,13 +354,17 @@
   }
 
   // Add one model ID (trimmed, deduped); the first model added becomes the
-  // default automatically.
+  // default automatically. Adding also seeds the endpoint's display name into
+  // fModelNames (never overwriting a name the user already has) so the chip —
+  // and the saved ModelNames — get the friendly label.
   function addModelId(id: string): void {
     const v = id.trim();
     if (!v) return;
     if (!fModels.includes(v)) {
       fModels = [...fModels, v];
       if (!fModel) fModel = v;
+      const name = fetchedNames[v];
+      if (name && !fModelNames[v]) fModelNames = { ...fModelNames, [v]: name };
     }
   }
 
@@ -671,6 +701,25 @@
                       : "No models from endpoint — type to add manually"}
                   </div>
                 {:else}
+                  <button class="combo-option combo-all" type="button" role="option"
+                    id="pv-model-opt-all" tabindex="-1" aria-selected={allFilteredSelected}
+                    class:checked={allFilteredSelected}
+                    onmousedown={(e) => e.preventDefault()} onclick={toggleAllFiltered}
+                    title={allFilteredSelected ? "Unselect all listed models" : "Select all listed models"}>
+                    <span class="combo-check" aria-hidden="true">
+                      {#if allFilteredSelected}
+                        <svg viewBox="0 0 10 8" fill="none">
+                          <path d="M1 4.2 3.8 7 9 1" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                      {/if}
+                    </span>
+                    <span class="combo-id">
+                      {modelQuery
+                        ? `Select all matches (${filteredModels.length})`
+                        : `Select all (${filteredModels.length})`}
+                    </span>
+                  </button>
                   {#each filteredModels as m, i (m)}
                     <button class="combo-option" type="button" role="option" id={`pv-model-opt-${i}`}
                       tabindex="-1" aria-selected={fModels.includes(m)}
@@ -686,6 +735,9 @@
                         {/if}
                       </span>
                       <span class="combo-id">{m}</span>
+                      {#if fetchedNames[m]}
+                        <span class="combo-name">{fetchedNames[m]}</span>
+                      {/if}
                     </button>
                   {/each}
                 {/if}
@@ -1185,6 +1237,15 @@
   .combo-option.checked .combo-check { background: var(--accent); border-color: var(--accent); }
   .combo-check svg { width: 9px; height: 8px; }
   .combo-id { min-width: 0; overflow-wrap: anywhere; }
+  .combo-name {
+    flex: 0 1 auto;
+    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+  .combo-all { font-weight: 600; }
   .combo-note {
     display: flex;
     align-items: center;

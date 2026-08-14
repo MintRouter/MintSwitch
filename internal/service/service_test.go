@@ -1403,6 +1403,41 @@ func TestFetchProviderModelsUnknownProvider(t *testing.T) {
 	}
 }
 
+// TestFetchEndpointModelsDisplayNames: the Add/Edit dialog entry point
+// returns each model's optional display name ("display_name", else "name"
+// unless it was consumed as the ID; names equal to the ID are dropped).
+func TestFetchEndpointModelsDisplayNames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[
+			{"id":"gpt-x","display_name":"GPT X"},
+			{"id":"claude-y","name":"Claude Y"},
+			{"name":"bare-name"},
+			{"id":"plain","name":"plain"}
+		]}`))
+	}))
+	defer srv.Close()
+	svc, id := newModelsService(t, srv)
+	options, err := svc.FetchEndpointModels(srv.URL, "", id)
+	if err != nil {
+		t.Fatalf("FetchEndpointModels: %v", err)
+	}
+	want := []ModelOption{
+		{ID: "bare-name"},
+		{ID: "claude-y", DisplayName: "Claude Y"},
+		{ID: "gpt-x", DisplayName: "GPT X"},
+		{ID: "plain"},
+	}
+	if len(options) != len(want) {
+		t.Fatalf("options = %+v, want %+v", options, want)
+	}
+	for i := range want {
+		if options[i] != want[i] {
+			t.Fatalf("options[%d] = %+v, want %+v", i, options[i], want[i])
+		}
+	}
+}
+
 // TestPlanUninstallContract covers every UI-visible classification and proves
 // the service preview is read-only: neither commands nor deletes are performed.
 func TestPlanUninstallContract(t *testing.T) {
