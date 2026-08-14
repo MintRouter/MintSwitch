@@ -78,6 +78,7 @@ const npmPackages: Record<string, { pkg: string; installFlags?: string[] }> = {
   "claude-code": { pkg: "@anthropic-ai/claude-code" },
   codex: { pkg: "@openai/codex" },
   opencode: { pkg: "opencode-ai" },
+  pi: { pkg: "@earendil-works/pi-coding-agent" },
 };
 
 /**
@@ -98,8 +99,10 @@ export function npmCommand(action: "install" | "uninstall", toolID: string): str
  */
 export const builtinLogoIds = new Set<string>([
   "claude-code",
+  "claude-desktop",
   "codex",
   "opencode",
+  "pi",
 ]);
 
 /**

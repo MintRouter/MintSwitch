@@ -117,6 +117,15 @@ type LegacyMarkerStripper interface {
 	StripLegacyMarker() error
 }
 
+// ModelFilter is an optional interface tool adapters implement when the tool
+// only accepts a subset of a provider's models (e.g. Claude Desktop's 3P mode
+// rejects non-claude-* model names). The service filters the per-tool model
+// dropdown through it so the UI never offers a model the tool would reject.
+type ModelFilter interface {
+	// SupportsModel reports whether the tool can be configured with model.
+	SupportsModel(model string) bool
+}
+
 // MarkerKey is the LEGACY sentinel key older MintSwitch versions wrote into a
 // tool's config file to mark it as MintSwitch-managed. Markers now live in the
 // sidecar store (internal/markers); adapters must never write this key. It is

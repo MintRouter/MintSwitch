@@ -30,8 +30,10 @@ import (
 	"sync"
 
 	"mintswitch/internal/adapters/claudecode"
+	"mintswitch/internal/adapters/claudedesktop"
 	"mintswitch/internal/adapters/codex"
 	"mintswitch/internal/adapters/opencode"
+	"mintswitch/internal/adapters/pi"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
 	"mintswitch/internal/installer"
@@ -226,8 +228,10 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg := core.NewRegistry()
 	mk := markers.NewStore(r.MarkersPath())
 	reg.Register(claudecode.New(r, e, mk))
+	reg.Register(claudedesktop.New(r, e, mk))
 	reg.Register(codex.New(r, e, mk))
 	reg.Register(opencode.New(r, e, mk))
+	reg.Register(pi.New(r, e, mk))
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
 	store := settings.NewStore(r.SettingsPath())
 	s := NewWithInstaller(reg, store, inst)
@@ -332,6 +336,17 @@ func (s *Service) viewFor(a core.ToolAdapter, st *settings.State) ToolView {
 	models := p.Models
 	if len(models) == 0 && strings.TrimSpace(p.Model) != "" {
 		models = []string{p.Model}
+	}
+	// Adapters that only accept a subset of models (core.ModelFilter) get a
+	// filtered dropdown so the UI never offers a model the tool would reject.
+	if f, ok := a.(core.ModelFilter); ok {
+		kept := make([]string, 0, len(models))
+		for _, m := range models {
+			if f.SupportsModel(m) {
+				kept = append(kept, m)
+			}
+		}
+		models = kept
 	}
 	_, installable := installer.Spec(a.ID())
 	return ToolView{
