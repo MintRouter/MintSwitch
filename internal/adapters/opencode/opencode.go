@@ -165,14 +165,20 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		provider = map[string]any{}
 	}
 	// One entry per applied model ([core.Profile.ApplyModels]: just the selected
-	// model, or every provider model in "All models" mode). Lưu ý: modalities
-	// là hằng theo spec MintRouter (OpenAI-compatible multimodal); thiếu
-	// modalities thì OpenCode strip image input (custom provider không có
-	// models.dev fallback).
+	// model, or every provider model in "All models" mode). The entry key stays
+	// the canonical model ID; "name" is display-only, so it takes the profile's
+	// ModelNames display name when one exists (falling back to the ID), same as
+	// the claudedesktop adapter's labelOverride. Lưu ý: modalities là hằng theo
+	// spec MintRouter (OpenAI-compatible multimodal); thiếu modalities thì
+	// OpenCode strip image input (custom provider không có models.dev fallback).
 	modelEntries := map[string]any{}
 	for _, m := range p.ApplyModels() {
+		name := m
+		if label := p.ModelNames[m]; label != "" {
+			name = label
+		}
 		modelEntries[m] = map[string]any{
-			"name": m,
+			"name": name,
 			"modalities": map[string]any{
 				"input":  []string{"text", "image", "video"},
 				"output": []string{"text"},
