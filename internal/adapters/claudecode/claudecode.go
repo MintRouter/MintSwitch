@@ -49,7 +49,7 @@ import (
 
 const (
 	id   = "claude-code"
-	name = "Claude Code (CLI + IDE)"
+	name = "Claude Code (CLI & VS Code extension)"
 
 	envKey            = "env"
 	envBaseURL        = "ANTHROPIC_BASE_URL"
@@ -108,13 +108,31 @@ func (a *Adapter) settingsPath() string { return filepath.Join(a.r.ClaudeDir(), 
 // ConfigPaths returns the config files this adapter manages.
 func (a *Adapter) ConfigPaths() []string { return []string{a.settingsPath()} }
 
-// Detect reports whether Claude Code is installed, defined solely as the
-// "claude" CLI binary being resolvable (via PATH or a curated set of common
-// bin dirs). A leftover ~/.claude dir/settings.json is not an installed signal,
-// so an uninstall is reflected. The active path is always settings.json and is
-// returned even when not installed, since Status/Apply rely on it.
+// Detect reports whether Claude Code is installed: either the "claude" CLI
+// binary is resolvable (via PATH or a curated set of common bin dirs) or the
+// Claude Code editor extension is present (see extensionInstalled). A leftover
+// ~/.claude dir/settings.json is not an installed signal, so an uninstall is
+// reflected. The active path is always settings.json and is returned even when
+// not installed, since Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
-	return a.r.BinaryResolvable(a.lookPath, "claude"), a.settingsPath()
+	installed := a.r.BinaryResolvable(a.lookPath, "claude") || a.extensionInstalled()
+	return installed, a.settingsPath()
+}
+
+// extensionInstalled reports whether the Claude Code editor extension is
+// installed, by globbing for anthropic.claude-code-* under the VS Code and
+// Cursor per-user extension dirs. Extension-only installs share
+// ~/.claude/settings.json with the CLI, so the adapter covers them without a
+// resolvable binary. Only filesystem globs — no subprocesses — so it is safe
+// to call on every Detect/ListTools.
+func (a *Adapter) extensionInstalled() bool {
+	for _, editorDir := range []string{".vscode", ".cursor"} {
+		pattern := a.r.Join(editorDir, "extensions", "anthropic.claude-code-*")
+		if matches, err := filepath.Glob(pattern); err == nil && len(matches) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Status inspects settings.json relative to profile p. The marker is read from

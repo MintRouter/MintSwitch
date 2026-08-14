@@ -86,7 +86,7 @@ func envOf(t *testing.T, m map[string]any) map[string]any {
 
 func TestIDAndName(t *testing.T) {
 	a, _ := newAdapter(t)
-	if a.ID() != "claude-code" || a.Name() != "Claude Code (CLI + IDE)" {
+	if a.ID() != "claude-code" || a.Name() != "Claude Code (CLI & VS Code extension)" {
 		t.Fatalf("unexpected id/name: %q %q", a.ID(), a.Name())
 	}
 	if got := a.ConfigPaths(); len(got) != 1 {
@@ -110,6 +110,34 @@ func TestDetect(t *testing.T) {
 	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
 	if installed, _ := a.Detect(); !installed {
 		t.Fatal("expected installed once claude binary is resolvable")
+	}
+}
+
+// TestDetectViaEditorExtension proves an extension-only install (no "claude"
+// binary anywhere) is detected via the anthropic.claude-code-* extension dir
+// glob for both VS Code and Cursor, and that empty extension roots or foreign
+// extensions are not an installed signal.
+func TestDetectViaEditorExtension(t *testing.T) {
+	for _, editorDir := range []string{".vscode", ".cursor"} {
+		t.Run(editorDir, func(t *testing.T) {
+			a, r := newAdapter(t)
+			if err := os.MkdirAll(r.Join(editorDir, "extensions", "other.some-extension-1.0.0"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if installed, _ := a.Detect(); installed {
+				t.Fatal("foreign extensions must not be an installed signal")
+			}
+			if err := os.MkdirAll(r.Join(editorDir, "extensions", "anthropic.claude-code-2.1.0"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			installed, path := a.Detect()
+			if !installed {
+				t.Fatalf("expected installed via %s extension dir", editorDir)
+			}
+			if filepath.Base(path) != "settings.json" {
+				t.Fatalf("Detect() path = %q, want settings.json", path)
+			}
+		})
 	}
 }
 
