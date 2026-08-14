@@ -1,6 +1,6 @@
 # MintSwitch — AI Tool API Config Switcher
 
-MintSwitch is a cross-platform **desktop-only** app for switching AI coding tools (Claude Code, Codex, OpenCode, Factory Droid, Zed, and Kilo Code) to a custom OpenAI-compatible endpoint. It supports per-tool or global apply, automatic backups, and one-click restore.
+MintSwitch is a cross-platform **desktop-only** app for switching AI coding tools (Claude Code, Claude Desktop, Codex, OpenCode, and Pi) to a custom OpenAI-compatible endpoint. It supports per-tool or global apply, automatic backups, and one-click restore.
 
 A profile can contain multiple named API keys. One active key applies to all tools, with optional per-tool overrides in the Manage dialog. Keys are stored in the OS keychain (with a settings-file fallback), and key values are never displayed.
 
