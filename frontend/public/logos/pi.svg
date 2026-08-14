@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-hidden="true">
+  <rect width="48" height="48" rx="11" fill="#111418"/>
+  <!-- Pi "P" mark (block P with square counter) + square i-dot, scaled from
+       the official 800x800 logo path onto the shared 48x48 tile. -->
+  <path fill="#ffffff" fill-rule="evenodd" d="M11.9 11.9h21.1v14.1h-7v7h-7.1v7.1h-7V11.9Zm7 7v7h7v-7h-7Z"/>
+  <path fill="#ffffff" d="M33 26h7v14.1h-7z"/>
+</svg>

@@ -60,6 +60,7 @@ var binaries = map[string]binSpec{
 	"claude-code": {bin: "claude", brew: "claude"},
 	"codex":       {bin: "codex", brew: "codex"},
 	"opencode":    {bin: "opencode", brew: "opencode"},
+	"pi":          {bin: "pi", brew: "pi"},
 }
 
 // brewPrefixes are the Homebrew install prefixes used as a secondary signal when
@@ -83,6 +84,7 @@ var packages = map[string]Package{
 	"claude-code": {NpmPackage: "@anthropic-ai/claude-code"},
 	"codex":       {NpmPackage: "@openai/codex"},
 	"opencode":    {NpmPackage: "opencode-ai"},
+	"pi":          {NpmPackage: "@earendil-works/pi-coding-agent"},
 }
 
 // Spec returns the whitelisted package for toolID and whether it is known.
