@@ -245,8 +245,11 @@
   let fetchError = $state("");
   let fetchedModels = $state<string[]>([]);
   // Display names the endpoint advertised alongside the fetched IDs. They are
-  // copied into fModelNames only when a model is ADDED — an auto-fetch on
-  // Edit must never dirty the form by itself.
+  // copied into fModelNames when a model is ADDED, and a successful fetch also
+  // seeds them for models already in the form (never overwriting a user-set
+  // name). When that seeding lands on a pristine form — the auto-fetch on
+  // Edit — the initial snapshot is retaken so an auto-fetch never dirties the
+  // form by itself; Save still persists the seeded names.
   let fetchedNames = $state<Record<string, string>>({});
   // Monotonic token so a stale (slow) response can never clobber the state of
   // a newer fetch or a reopened form.
@@ -266,6 +269,24 @@
         if (o.display_name) names[o.id] = o.display_name;
       }
       fetchedNames = names;
+      // Seed advertised names for models already selected (chips added before
+      // this fetch, or stored on the provider being edited). A user-set name
+      // always wins. If the form was pristine, re-snapshot so the seeding
+      // alone does not trigger the discard-confirmation flow.
+      const pristine = formSnapshot() === formInitial;
+      const merged = { ...fModelNames };
+      let seededAny = false;
+      for (const m of fModels) {
+        const n = names[m];
+        if (n && !merged[m]) {
+          merged[m] = n;
+          seededAny = true;
+        }
+      }
+      if (seededAny) {
+        fModelNames = merged;
+        if (pristine) formInitial = formSnapshot();
+      }
       fetchAttempted = true;
       fetching = false;
       // Fresh suggestions open the dropdown so the checkbox list is visible
