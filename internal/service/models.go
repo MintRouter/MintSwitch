@@ -83,7 +83,9 @@ func (s *Service) FetchProviderModels(providerID string) ([]string, error) {
 // one request and is never stored, logged, or included in errors. When apiKey
 // is blank and providerID names a stored provider, that provider's stored key
 // is used instead (the Edit flow, where the key never round-trips to the
-// frontend). Read-only: it never mutates settings, and errors stay
+// frontend) — but only when the normalized baseURL matches the provider's
+// stored base URL, so a stored key can never be sent to an arbitrary
+// endpoint. Read-only: it never mutates settings, and errors stay
 // display-safe.
 func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]ModelOption, error) {
 	base, _ := core.NormalizeBaseURL(baseURL)
@@ -100,6 +102,10 @@ func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]Mod
 			pr, ok := st.Provider(id)
 			if !ok {
 				return nil, fmt.Errorf("service: unknown provider %q", id)
+			}
+			stored, _ := core.NormalizeBaseURL(pr.BaseURL)
+			if stored == "" || stored != base {
+				return nil, errors.New("service: enter the API key for the new endpoint before fetching models")
 			}
 			key = strings.TrimSpace(pr.APIKey)
 		}

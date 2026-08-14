@@ -1438,6 +1438,64 @@ func TestFetchEndpointModelsDisplayNames(t *testing.T) {
 	}
 }
 
+// countingTransport wraps an http.RoundTripper and counts every request made
+// through it, so tests can prove a code path performs no network I/O at all.
+type countingTransport struct {
+	inner http.RoundTripper
+	calls *int
+}
+
+func (c countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	*c.calls++
+	return c.inner.RoundTrip(r)
+}
+
+// TestFetchEndpointModelsStoredKeyURLGuard pins the defense-in-depth guard:
+// the provider's stored key is attached only when the normalized baseURL
+// matches the provider's stored base URL. Any other URL fails with a
+// display-safe error and makes no HTTP request, so a stored key can never be
+// sent to an attacker-chosen endpoint.
+func TestFetchEndpointModelsStoredKeyURLGuard(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+	svc, id := newModelsService(t, srv)
+	calls := 0
+	svc.modelsClient = &http.Client{Transport: countingTransport{inner: srv.Client().Transport, calls: &calls}}
+
+	// Matching URL (trailing slash proves both sides are normalized): the
+	// stored key is used.
+	if _, err := svc.FetchEndpointModels(srv.URL+"/", "", id); err != nil {
+		t.Fatalf("FetchEndpointModels matching URL: %v", err)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Fatalf("Authorization = %q, want the stored bearer key", gotAuth)
+	}
+	if calls != 1 {
+		t.Fatalf("matching URL made %d request(s), want 1", calls)
+	}
+
+	// Different URL: a display-safe error that never carries the key, and no
+	// request at all.
+	calls = 0
+	_, err := svc.FetchEndpointModels("https://attacker.example.com/v1", "", id)
+	if err == nil {
+		t.Fatal("FetchEndpointModels mismatched URL: want error")
+	}
+	if !strings.Contains(err.Error(), "enter the API key for the new endpoint") {
+		t.Fatalf("error = %q, want the enter-the-key message", err)
+	}
+	if strings.Contains(err.Error(), "sk-test") {
+		t.Fatalf("error = %q must not include the stored key", err)
+	}
+	if calls != 0 {
+		t.Fatalf("mismatched URL made %d request(s), want none", calls)
+	}
+}
+
 // TestPlanUninstallContract covers every UI-visible classification and proves
 // the service preview is read-only: neither commands nor deletes are performed.
 func TestPlanUninstallContract(t *testing.T) {

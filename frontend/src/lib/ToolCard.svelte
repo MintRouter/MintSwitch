@@ -125,7 +125,7 @@
   {#if tool.status === "modified_externally"}
     <div class="status-notice" role="status">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4m0 4h.01"/><path d="M10.3 3.7 2.4 17.4A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.6L13.7 3.7a2 2 0 0 0-3.4 0Z"/></svg>
-      Configuration changed outside MintSwitch
+      Configuration differs from the last apply
     </div>
   {/if}
 
