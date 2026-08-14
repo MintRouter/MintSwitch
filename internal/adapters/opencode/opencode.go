@@ -165,7 +165,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		provider = map[string]any{}
 	}
 	// One entry per applied model ([core.Profile.ApplyModels]: just the selected
-	// model, or every provider model in "All models" mode). ponytail: modalities
+	// model, or every provider model in "All models" mode). Lưu ý: modalities
 	// là hằng theo spec MintRouter (OpenAI-compatible multimodal); thiếu
 	// modalities thì OpenCode strip image input (custom provider không có
 	// models.dev fallback).
