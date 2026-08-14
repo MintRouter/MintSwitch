@@ -86,24 +86,6 @@ func (r *Resolver) ConfigJoin(elem ...string) string {
 	return filepath.Join(append([]string{r.ConfigDir()}, elem...)...)
 }
 
-// ZedConfigDir returns the directory holding Zed's settings.json:
-// %APPDATA%\Zed on Windows (Zed follows the native convention there),
-// ~/.config/zed (XDG-aware) on macOS and Linux, per Zed's documentation.
-func (r *Resolver) ZedConfigDir() string {
-	return r.zedConfigDir(runtime.GOOS)
-}
-
-// zedConfigDir is the GOOS-parameterised implementation of
-// [Resolver.ZedConfigDir], so tests can exercise every branch from any host
-// OS. On Windows it falls back to the XDG-style dir when NativeConfigDir is
-// unset (test resolvers constructed without it).
-func (r *Resolver) zedConfigDir(goos string) string {
-	if goos == "windows" && r.NativeConfigDir != "" {
-		return filepath.Join(r.NativeConfigDir, "Zed")
-	}
-	return r.ConfigJoin("zed")
-}
-
 // CodexDir returns the Codex home directory: CodexHome ($CODEX_HOME) when set,
 // otherwise Home/.codex (the documented default on every OS).
 func (r *Resolver) CodexDir() string {

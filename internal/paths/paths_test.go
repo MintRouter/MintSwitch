@@ -103,34 +103,6 @@ func TestCodexAndClaudeDirDefaults(t *testing.T) {
 	}
 }
 
-// TestZedConfigDirPerOS covers all three GOOS branches of zedConfigDir:
-// Windows uses the native config dir (%APPDATA%\Zed), macOS and Linux use the
-// XDG-aware ~/.config/zed, and Windows without a NativeConfigDir (test
-// resolvers) falls back to the XDG-style dir.
-func TestZedConfigDirPerOS(t *testing.T) {
-	home := t.TempDir()
-	native := t.TempDir()
-	tests := []struct {
-		name   string
-		goos   string
-		native string
-		want   string
-	}{
-		{"windows uses APPDATA/Zed", "windows", native, filepath.Join(native, "Zed")},
-		{"darwin uses ~/.config/zed", "darwin", native, filepath.Join(home, ".config", "zed")},
-		{"linux uses ~/.config/zed", "linux", native, filepath.Join(home, ".config", "zed")},
-		{"windows without native falls back", "windows", "", filepath.Join(home, ".config", "zed")},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := &Resolver{Home: home, NativeConfigDir: tt.native}
-			if got := r.zedConfigDir(tt.goos); got != tt.want {
-				t.Fatalf("zedConfigDir(%q) = %q, want %q", tt.goos, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestBinaryResolvable covers the no-subprocess binary lookup: a lookPath hit,
 // an executable file in a curated HOME-derived dir (the narrow-PATH GUI case),
 // and the negative cases (absent, and a non-executable file).
@@ -139,12 +111,12 @@ func TestBinaryResolvable(t *testing.T) {
 	r := &Resolver{Home: home}
 	miss := func(string) (string, error) { return "", errors.New("not found") }
 
-	if r.BinaryResolvable(miss, "droid") {
+	if r.BinaryResolvable(miss, "sometool") {
 		t.Fatal("expected not resolvable with empty home and missing PATH")
 	}
 
-	hit := func(string) (string, error) { return "/usr/local/bin/droid", nil }
-	if !r.BinaryResolvable(hit, "droid") {
+	hit := func(string) (string, error) { return "/usr/local/bin/sometool", nil }
+	if !r.BinaryResolvable(hit, "sometool") {
 		t.Fatal("expected resolvable via lookPath hit")
 	}
 
@@ -152,10 +124,10 @@ func TestBinaryResolvable(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(binDir, "droid"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "sometool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !r.BinaryResolvable(miss, "droid") {
+	if !r.BinaryResolvable(miss, "sometool") {
 		t.Fatal("expected resolvable via curated ~/.local/bin even with missing PATH")
 	}
 
@@ -186,8 +158,8 @@ func TestResolveBinaryWindows(t *testing.T) {
 	}{
 		{"exe suffix", "codex.exe", "codex"},
 		{"cmd shim", "claude.cmd", "claude"},
-		{"bat shim", "kilo.bat", "kilo"},
-		{"bare name without exec bit", "droid", "droid"},
+		{"bat shim", "opencode.bat", "opencode"},
+		{"bare name without exec bit", "sometool", "sometool"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

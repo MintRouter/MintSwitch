@@ -31,10 +31,7 @@ import (
 
 	"mintswitch/internal/adapters/claudecode"
 	"mintswitch/internal/adapters/codex"
-	"mintswitch/internal/adapters/droid"
-	"mintswitch/internal/adapters/kilo"
 	"mintswitch/internal/adapters/opencode"
-	"mintswitch/internal/adapters/zed"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
 	"mintswitch/internal/installer"
@@ -231,9 +228,6 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg.Register(claudecode.New(r, e, mk))
 	reg.Register(codex.New(r, e, mk))
 	reg.Register(opencode.New(r, e, mk))
-	reg.Register(droid.New(r, e, mk))
-	reg.Register(zed.New(r, e, mk))
-	reg.Register(kilo.New(r, e, mk))
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
 	store := settings.NewStore(r.SettingsPath())
 	s := NewWithInstaller(reg, store, inst)

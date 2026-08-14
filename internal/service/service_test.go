@@ -192,6 +192,37 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+// TestRemovedToolOverridesIgnored: settings persisted by older builds may
+// still carry per-tool overrides for tools whose adapters were removed
+// (droid, zed, kilo). Those stale entries must be ignored: Load and ListTools
+// succeed, and the remaining tools are unaffected.
+func TestRemovedToolOverridesIgnored(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true, status: core.StatusDefault}
+	store := settings.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	p := validProvider()
+	p.ID = "p1"
+	if err := store.Save(&settings.State{
+		Providers:        []core.Provider{p},
+		ActiveProviderID: "p1",
+		ToolModels:       map[string]string{"droid": "gpt-test", "zed": "gpt-test", "kilo": "gpt-test"},
+		ToolProviders:    map[string]string{"droid": "p1", "zed": "p1", "kilo": "p1"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	svc := NewWithRegistry(reg(a), store)
+
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools error: %v", err)
+	}
+	if len(views) != 1 || views[0].ID != "alpha" {
+		t.Fatalf("want only alpha, got %+v", views)
+	}
+	if views[0].ProviderName != "Test" || views[0].ProviderOverridden {
+		t.Fatalf("alpha must use the active provider, got %+v", views[0])
+	}
+}
+
 func TestAddProviderValidation(t *testing.T) {
 	tests := []struct {
 		name    string

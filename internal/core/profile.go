@@ -2,7 +2,7 @@
 // that every MintSwitch tool adapter and backend service builds on.
 //
 // The central abstraction is [ToolAdapter]: each supported AI coding tool
-// (Claude Code, Codex, OpenCode, Factory Droid, Pi, ...) implements it so the
+// (Claude Code, Codex, OpenCode, Pi, ...) implements it so the
 // rest of the application can detect, inspect, apply and restore that tool's
 // OpenAI-compatible endpoint configuration in a uniform way.
 package core

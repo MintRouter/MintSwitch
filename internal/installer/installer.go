@@ -60,8 +60,6 @@ var binaries = map[string]binSpec{
 	"claude-code": {bin: "claude", brew: "claude"},
 	"codex":       {bin: "codex", brew: "codex"},
 	"opencode":    {bin: "opencode", brew: "opencode"},
-	"droid":       {bin: "droid", brew: "droid"},
-	"kilo":        {bin: "kilo", brew: "kilo"},
 }
 
 // brewPrefixes are the Homebrew install prefixes used as a secondary signal when
@@ -85,8 +83,6 @@ var packages = map[string]Package{
 	"claude-code": {NpmPackage: "@anthropic-ai/claude-code"},
 	"codex":       {NpmPackage: "@openai/codex"},
 	"opencode":    {NpmPackage: "opencode-ai"},
-	"droid":       {NpmPackage: "droid"},
-	"kilo":        {NpmPackage: "@kilocode/cli"},
 }
 
 // Spec returns the whitelisted package for toolID and whether it is known.
@@ -96,7 +92,7 @@ func Spec(toolID string) (Package, bool) {
 }
 
 // InstallArgs returns the full argv for installing toolID, e.g.
-// ["npm","install","-g","@kilocode/cli"].
+// ["npm","install","-g","@openai/codex"].
 // It returns ErrUnknownTool for an unrecognised toolID.
 func InstallArgs(toolID string) ([]string, error) {
 	p, ok := packages[toolID]

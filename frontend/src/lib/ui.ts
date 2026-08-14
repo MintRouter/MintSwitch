@@ -78,8 +78,6 @@ const npmPackages: Record<string, { pkg: string; installFlags?: string[] }> = {
   "claude-code": { pkg: "@anthropic-ai/claude-code" },
   codex: { pkg: "@openai/codex" },
   opencode: { pkg: "opencode-ai" },
-  droid: { pkg: "droid" },
-  kilo: { pkg: "@kilocode/cli" },
 };
 
 /**
@@ -102,9 +100,6 @@ export const builtinLogoIds = new Set<string>([
   "claude-code",
   "codex",
   "opencode",
-  "droid",
-  "zed",
-  "kilo",
 ]);
 
 /**
