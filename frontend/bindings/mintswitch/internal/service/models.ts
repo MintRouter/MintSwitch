@@ -125,6 +125,12 @@ export interface ToolView {
     "provider_overridden": boolean;
 
     /**
+     * ApplyMode is the tool's apply mode: "all" applies every model of the
+     * effective provider, "one" (the default) applies only the selected model.
+     */
+    "apply_mode": string;
+
+    /**
      * Installable is true when the tool has a whitelisted npm package the
      * installer can install/uninstall. It is false for tools distributed only as
      * a standalone binary, so the UI can hide the Install action for those.

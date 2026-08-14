@@ -153,6 +153,18 @@ export function SetActiveProvider(providerID: string): $CancellablePromise<void>
 }
 
 /**
+ * SetToolApplyMode records the per-tool apply mode for toolID: "all" applies
+ * every model of the effective provider, "one" only the selected model. "one"
+ * (the default) deletes the entry so the settings file stays minimal. The
+ * toolID must be a registered tool and the mode one of the two values,
+ * otherwise a clear error is returned. The selection is persisted via the
+ * settings store.
+ */
+export function SetToolApplyMode(toolID: string, mode: string): $CancellablePromise<void> {
+    return $Call.ByID(3498050441, toolID, mode);
+}
+
+/**
  * SetToolModel records (or clears) the per-tool model selection for toolID.
  * An empty model deletes the selection so the tool uses the effective
  * provider's default. A non-empty model must be a member of the EFFECTIVE
