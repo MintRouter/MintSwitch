@@ -100,6 +100,11 @@ func (a *Adapter) configPath() string { return filepath.Join(a.r.CodexDir(), "co
 // ($CODEX_HOME, default ~/.codex).
 func (a *Adapter) authPath() string { return filepath.Join(a.r.CodexDir(), "auth.json") }
 
+// catalogPath returns the absolute path to MintSwitch's model-catalog file
+// under the Codex home dir ($CODEX_HOME, default ~/.codex), written in "All
+// models" mode and referenced by config.toml's model_catalog_json.
+func (a *Adapter) catalogPath() string { return filepath.Join(a.r.CodexDir(), catalogFileName) }
+
 // ConfigPaths returns the config files this adapter manages.
 func (a *Adapter) ConfigPaths() []string {
 	return []string{a.configPath(), a.authPath()}
@@ -180,9 +185,11 @@ func (a *Adapter) authDrifted(p core.Profile) bool {
 // Apply backs up both files (only when config.toml is not already
 // MintSwitch-managed), then injects openai_base_url + model into config.toml
 // and OPENAI_API_KEY plus auth_mode="apikey" into auth.json, preserving all
-// other existing keys in each file. The managed marker is recorded in the
-// sidecar store — never in config.toml — and a leftover legacy in-file marker
-// table is stripped in the same write.
+// other existing keys in each file. In "All models" mode it additionally
+// writes the mintswitch-models.json catalog under the Codex home dir and sets
+// model_catalog_json to it (single-model mode removes both again). The
+// managed marker is recorded in the sidecar store — never in config.toml —
+// and a leftover legacy in-file marker table is stripped in the same write.
 //
 // "Already managed" (the backup gate) means a store entry OR a legacy in-file
 // marker, so upgrading from a legacy-marker install never snapshots a managed
@@ -259,6 +266,29 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		}
 	}
 
+	// "All models" mode writes MintSwitch's model catalog and points
+	// model_catalog_json at it (before config.toml, so the reference never
+	// lands ahead of the file); single-model mode removes both again, gated on
+	// managedCatalogRef so a user's own catalog reference is never touched. A
+	// catalog file left behind by a failed config.toml write routes no traffic
+	// and is overwritten or removed by the next Apply/Restore.
+	catalogPath := a.catalogPath()
+	if p.ApplyAllModels {
+		if err := core.WriteJSONObjectAtomic(catalogPath, catalogObject(p)); err != nil {
+			rollbackAuth()
+			return core.ApplyResult{}, err
+		}
+		cfg[catalogKey] = catalogPath
+	} else {
+		if managedCatalogRef(cfg, catalogPath) {
+			delete(cfg, catalogKey)
+		}
+		if err := os.Remove(catalogPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			rollbackAuth()
+			return core.ApplyResult{}, err
+		}
+	}
+
 	cfg["openai_base_url"] = p.BaseURL
 	cfg["model"] = p.Model
 	delete(cfg, core.MarkerKey)
@@ -285,8 +315,10 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // file has no backup but Codex is still MintSwitch-managed (marker in store,
 // or — with the marker lost — the full injection signature still in the
 // files, see orphanRemnant), Restore falls back to stripping the managed keys
-// from it — openai_base_url and model in config.toml, OPENAI_API_KEY and
-// auth_mode in auth.json — preserving every other key.
+// from it — openai_base_url, model and MintSwitch's model_catalog_json in
+// config.toml, OPENAI_API_KEY and auth_mode in auth.json — preserving every
+// other key. The mintswitch-models.json catalog file is MintSwitch's own
+// creation (never part of any pre-apply backup), so it is simply removed.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	cfgPath, authPath := a.configPath(), a.authPath()
 	_, inStore, err := a.m.Get(a.ID())
@@ -315,6 +347,11 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 	if !authRestored && (inStore || orphan) {
 		authStripped, err = stripManagedAuth(authPath)
 		if err != nil {
+			return core.RestoreResult{}, err
+		}
+	}
+	if inStore || orphan {
+		if err := os.Remove(a.catalogPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return core.RestoreResult{}, err
 		}
 	}
@@ -376,8 +413,9 @@ func (a *Adapter) orphanRemnant() bool {
 	return mode == authModeAPIKey
 }
 
-// stripManagedConfig removes the MintSwitch-managed keys (openai_base_url and
-// model) from config.toml, preserving every other key. It is the Restore
+// stripManagedConfig removes the MintSwitch-managed keys (openai_base_url,
+// model, and model_catalog_json when it points at MintSwitch's own catalog
+// file) from config.toml, preserving every other key. It is the Restore
 // fallback when no pristine backup exists. Gated on the managed signal
 // (openai_base_url present) so an unmanaged file is never rewritten; it never
 // creates the file.
@@ -391,6 +429,9 @@ func stripManagedConfig(path string) (bool, error) {
 	}
 	delete(cfg, "openai_base_url")
 	delete(cfg, "model")
+	if v, _ := cfg[catalogKey].(string); hasCatalogBase(v) {
+		delete(cfg, catalogKey)
+	}
 	return true, writeTOML(path, cfg)
 }
 

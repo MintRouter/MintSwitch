@@ -618,6 +618,59 @@ func TestApplyOneUsesPerToolModel(t *testing.T) {
 	}
 }
 
+// TestSetToolApplyModePersistsAndValidates: "all" persists, "one" (the
+// default) removes the entry, an unknown mode or tool errors, ListTools
+// surfaces the mode, and the effective profile carries ApplyAllModels.
+func TestSetToolApplyModePersistsAndValidates(t *testing.T) {
+	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
+	svc := newTestService(t, a)
+	addProvider(t, svc, multiModelProvider("gpt-test", "m2"))
+
+	if err := svc.SetToolApplyMode("alpha", ApplyModeAll); err != nil {
+		t.Fatalf("SetToolApplyMode all: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolApplyModes["alpha"] != ApplyModeAll {
+		t.Fatalf("ToolApplyModes = %v, want alpha=all", st.ToolApplyModes)
+	}
+	views, err := svc.ListTools()
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if views[0].ApplyMode != ApplyModeAll {
+		t.Fatalf("ApplyMode = %q, want all", views[0].ApplyMode)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || !a.lastApplied.ApplyAllModels {
+		t.Fatalf("effective profile missing ApplyAllModels: %+v", a.lastApplied)
+	}
+
+	if err := svc.SetToolApplyMode("alpha", ApplyModeOne); err != nil {
+		t.Fatalf("SetToolApplyMode one: %v", err)
+	}
+	if st, _ := storeFrom(svc).Load(); st.ToolApplyModes["alpha"] != "" {
+		t.Fatalf("one did not delete entry: %v", st.ToolApplyModes)
+	}
+	views, _ = svc.ListTools()
+	if views[0].ApplyMode != ApplyModeOne {
+		t.Fatalf("ApplyMode = %q, want one (default)", views[0].ApplyMode)
+	}
+	if _, err := svc.ApplyOne("alpha"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if a.lastApplied == nil || a.lastApplied.ApplyAllModels {
+		t.Fatalf("single-model profile must not carry ApplyAllModels: %+v", a.lastApplied)
+	}
+
+	if err := svc.SetToolApplyMode("alpha", "everything"); err == nil {
+		t.Fatal("SetToolApplyMode unknown mode want error")
+	}
+	if err := svc.SetToolApplyMode("missing", ApplyModeAll); err == nil {
+		t.Fatal("SetToolApplyMode unknown tool want error")
+	}
+}
+
 // TestSetToolProviderPersistsAndValidates: a managed provider persists, an
 // unknown one is rejected, "" clears the entry, and an unknown tool errors.
 func TestSetToolProviderPersistsAndValidates(t *testing.T) {

@@ -38,6 +38,11 @@ type State struct {
 	// that tool, overriding the active provider when applying. An absent or
 	// stale entry falls back to the active provider.
 	ToolProviders map[string]string `json:"tool_providers,omitempty"`
+	// ToolApplyModes maps a tool ID to its apply mode: "all" applies every
+	// model of the effective provider to the tool's config, "one" (or an
+	// absent entry — the default, including every settings file saved before
+	// the mode existed) applies only the selected model.
+	ToolApplyModes map[string]string `json:"tool_apply_modes,omitempty"`
 
 	// LegacyProfile is the pre-provider active_profile shape (v1 single-key or
 	// Wave 2 multi-key). It is read only so migrate() can convert it into

@@ -468,10 +468,13 @@ var _ core.ToolAdapter = (*Adapter)(nil)
 
 // claudeModels returns the profile's claude-* models in inferenceModels
 // order: the selected model leads when it is itself a claude-* model,
-// followed by the remaining claude-* members of Models in their saved order.
-// When the selected model is not claude-*, the first claude-* model becomes
-// the effective default and fellBack is true. An empty result means the
-// profile has no claude-* model at all.
+// followed — in "All models" mode (ApplyAllModels) — by the remaining
+// claude-* members of Models in their saved order. Claude Desktop's 3P
+// validator rejects non-claude-* names, so the list is ALWAYS filtered to
+// claude-* regardless of mode; in single-model mode the result is at most one
+// model. When the selected model is not claude-*, the first claude-* member
+// of Models becomes the effective default and fellBack is true. An empty
+// result means the profile has no claude-* model at all.
 func claudeModels(p core.Profile) (models []string, fellBack bool) {
 	seen := map[string]bool{}
 	add := func(m string) {
@@ -481,8 +484,13 @@ func claudeModels(p core.Profile) (models []string, fellBack bool) {
 		}
 	}
 	add(p.Model)
-	for _, m := range p.Models {
-		add(m)
+	if p.ApplyAllModels || len(models) == 0 {
+		for _, m := range p.Models {
+			add(m)
+			if !p.ApplyAllModels && len(models) > 0 {
+				break
+			}
+		}
 	}
 	return models, !strings.HasPrefix(p.Model, modelPrefix)
 }

@@ -1,6 +1,6 @@
 // Package markers persists MintSwitch's per-tool managed markers in a sidecar
 // JSON store (<DataDir>/markers.json) instead of inside each tool's own config
-// file. Several tools validate their config strictly (OpenCode/Kilo via zod
+// file. Several tools validate their config strictly (OpenCode via zod
 // .strict(), Claude Code's settings.json) and reject files carrying the legacy
 // top-level "mintswitchManaged" key, so the marker must live outside the tool
 // configs entirely.

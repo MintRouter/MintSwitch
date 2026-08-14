@@ -164,6 +164,21 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if provider == nil {
 		provider = map[string]any{}
 	}
+	// One entry per applied model ([core.Profile.ApplyModels]: just the selected
+	// model, or every provider model in "All models" mode). ponytail: modalities
+	// là hằng theo spec MintRouter (OpenAI-compatible multimodal); thiếu
+	// modalities thì OpenCode strip image input (custom provider không có
+	// models.dev fallback).
+	modelEntries := map[string]any{}
+	for _, m := range p.ApplyModels() {
+		modelEntries[m] = map[string]any{
+			"name": m,
+			"modalities": map[string]any{
+				"input":  []string{"text", "image", "video"},
+				"output": []string{"text"},
+			},
+		}
+	}
 	provider[providerID] = map[string]any{
 		"npm":  npmPackage,
 		"name": providerName,
@@ -171,18 +186,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 			"baseURL": p.BaseURL,
 			"apiKey":  p.APIKey,
 		},
-		"models": map[string]any{
-			p.Model: map[string]any{
-				"name": p.Model,
-				// ponytail: hằng theo spec MintRouter (OpenAI-compatible multimodal);
-				// thiếu modalities thì OpenCode strip image input (custom provider
-				// không có models.dev fallback).
-				"modalities": map[string]any{
-					"input":  []string{"text", "image", "video"},
-					"output": []string{"text"},
-				},
-			},
-		},
+		"models": modelEntries,
 	}
 	root["provider"] = provider
 	root["model"] = providerID + "/" + p.Model

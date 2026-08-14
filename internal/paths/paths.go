@@ -26,7 +26,7 @@ type Resolver struct {
 	// NativeConfigDir is the OS-native per-user config root from
 	// os.UserConfigDir(): %APPDATA% on Windows, ~/Library/Application Support on
 	// macOS, $XDG_CONFIG_HOME or ~/.config on Linux. Tools that follow the
-	// native convention on Windows (e.g. Zed) resolve their config under it.
+	// native convention on Windows resolve their config under it.
 	NativeConfigDir string
 	// CodexHome, when non-empty, overrides the Codex home directory used by
 	// [Resolver.CodexDir]. NewResolver seeds it from $CODEX_HOME.

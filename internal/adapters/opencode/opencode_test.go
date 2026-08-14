@@ -151,6 +151,47 @@ func TestApplyWritesModalities(t *testing.T) {
 	}
 }
 
+// TestApplyAllModels proves "All models" mode writes one provider.models
+// entry per profile model (each with modalities) and that switching back to
+// single-model mode is detected via the fingerprint until re-apply.
+func TestApplyAllModels(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	p := sampleProfile()
+	p.Models = []string{"gpt-mint", "claude-mint"}
+	p.ApplyAllModels = true
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	root := readJSON(t, res.ChangedPath)
+	prov := root["provider"].(map[string]any)[providerID].(map[string]any)
+	models := prov["models"].(map[string]any)
+	if len(models) != 2 {
+		t.Fatalf("models = %v, want 2 entries", models)
+	}
+	for _, id := range p.Models {
+		entry, ok := models[id].(map[string]any)
+		if !ok {
+			t.Fatalf("model entry %q missing: %v", id, models)
+		}
+		if _, ok := entry["modalities"].(map[string]any); !ok {
+			t.Fatalf("modalities missing from %q: %v", id, entry)
+		}
+	}
+	if root["model"] != "mintrouter/gpt-mint" {
+		t.Fatalf("model = %v, want selected model as default", root["model"])
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("expected AppliedByMintSwitch, got %v", st)
+	}
+	one := p
+	one.ApplyAllModels = false
+	if st, _, _ := a.Status(one); st != core.StatusModifiedExternally {
+		t.Fatalf("expected ModifiedExternally after mode switch, got %v", st)
+	}
+}
+
 func TestApplyPreservesExistingKeys(t *testing.T) {
 	a, _ := newAdapter(t)
 	path := a.configPath()

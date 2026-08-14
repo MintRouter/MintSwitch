@@ -101,10 +101,31 @@ type ToolView struct {
 	// ProviderOverridden is true when the provider in effect comes from a
 	// per-tool override rather than the active provider.
 	ProviderOverridden bool `json:"provider_overridden"`
+	// ApplyMode is the tool's apply mode: "all" applies every model of the
+	// effective provider, "one" (the default) applies only the selected model.
+	ApplyMode string `json:"apply_mode"`
 	// Installable is true when the tool has a whitelisted npm package the
 	// installer can install/uninstall. It is false for tools distributed only as
 	// a standalone binary, so the UI can hide the Install action for those.
 	Installable bool `json:"installable"`
+}
+
+// Apply modes selectable per tool (see [Service.SetToolApplyMode]).
+const (
+	// ApplyModeOne applies only the selected model (the original behaviour).
+	ApplyModeOne = "one"
+	// ApplyModeAll applies every model of the effective provider.
+	ApplyModeAll = "all"
+)
+
+// applyModeFor returns the persisted apply mode for toolID, defaulting to
+// ApplyModeOne for absent or unrecognized entries so old settings files keep
+// their original behaviour.
+func applyModeFor(st *settings.State, toolID string) string {
+	if st.ToolApplyModes[toolID] == ApplyModeAll {
+		return ApplyModeAll
+	}
+	return ApplyModeOne
 }
 
 // ToolOpResult is the per-tool outcome of a bulk apply/restore operation.
@@ -363,6 +384,7 @@ func (s *Service) viewFor(a core.ToolAdapter, st *settings.State) ToolView {
 		SelectedProviderID: selectedProviderID,
 		ProviderName:       providerName,
 		ProviderOverridden: overridden,
+		ApplyMode:          applyModeFor(st, a.ID()),
 		Installable:        installable,
 	}
 }
@@ -603,6 +625,37 @@ func (s *Service) SetToolProvider(toolID, providerID string) error {
 	return s.store.Save(st)
 }
 
+// SetToolApplyMode records the per-tool apply mode for toolID: "all" applies
+// every model of the effective provider, "one" only the selected model. "one"
+// (the default) deletes the entry so the settings file stays minimal. The
+// toolID must be a registered tool and the mode one of the two values,
+// otherwise a clear error is returned. The selection is persisted via the
+// settings store.
+func (s *Service) SetToolApplyMode(toolID, mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.reg.Get(toolID); !ok {
+		return fmt.Errorf("service: unknown tool %q", toolID)
+	}
+	mode = strings.TrimSpace(mode)
+	if mode != ApplyModeOne && mode != ApplyModeAll {
+		return fmt.Errorf("service: unknown apply mode %q (want %q or %q)", mode, ApplyModeOne, ApplyModeAll)
+	}
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	if mode == ApplyModeOne {
+		delete(st.ToolApplyModes, toolID)
+		return s.store.Save(st)
+	}
+	if st.ToolApplyModes == nil {
+		st.ToolApplyModes = make(map[string]string)
+	}
+	st.ToolApplyModes[toolID] = mode
+	return s.store.Save(st)
+}
+
 // normalizeModels trims and de-duplicates the saved model list, preserving
 // first-seen order and dropping empties. It then guarantees the selected model
 // is a member: a non-empty selected model that is absent is prepended (which
@@ -714,6 +767,7 @@ func (s *Service) effectiveProfileFor(toolID string) (core.Profile, error) {
 	if sel := st.ToolModels[toolID]; sel != "" && pr.HasModel(sel) {
 		p.Model = sel
 	}
+	p.ApplyAllModels = applyModeFor(st, toolID) == ApplyModeAll
 	return p, nil
 }
 

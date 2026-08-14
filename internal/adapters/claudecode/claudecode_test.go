@@ -215,6 +215,42 @@ func TestApplyNewFile(t *testing.T) {
 	}
 }
 
+// TestApplyAllModelsSetsDiscoveryEnv proves "All models" mode writes
+// CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1, a single-model re-apply
+// removes it again, and a mode switch is detected via the fingerprint until
+// re-apply.
+func TestApplyAllModelsSetsDiscoveryEnv(t *testing.T) {
+	a, _ := newAdapter(t)
+	// Binary resolvable so Status reaches the config-reading branch.
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	p := sampleProfile()
+	p.ApplyAllModels = true
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	env := envOf(t, readSettings(t, res.ChangedPath))
+	if env[envModelDiscovery] != "1" {
+		t.Fatalf("%s = %v, want \"1\" in all mode", envModelDiscovery, env[envModelDiscovery])
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied in all mode, got %v", st)
+	}
+
+	one := p
+	one.ApplyAllModels = false
+	if st, _, _ := a.Status(one); st != core.StatusModifiedExternally {
+		t.Fatalf("want ModifiedExternally after mode switch, got %v", st)
+	}
+	if _, err := a.Apply(one); err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	env = envOf(t, readSettings(t, a.settingsPath()))
+	if _, present := env[envModelDiscovery]; present {
+		t.Fatalf("%s not removed on single-model re-apply: %+v", envModelDiscovery, env)
+	}
+}
+
 // TestApplyDefaultsEmptySmallFastModel proves an empty SmallFastModel is
 // written as the profile's main model: without the key, Claude Code's
 // background requests fall back to its default Haiku model, which fails on

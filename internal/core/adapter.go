@@ -107,7 +107,7 @@ type ToolAdapter interface {
 // LegacyMarkerStripper is an optional interface tool adapters implement to
 // clean the legacy in-file marker (see [MarkerKey]) out of a tool's config.
 // The service calls it once per adapter at startup (best-effort) so configs
-// broken by the legacy key — strict validators like OpenCode/Kilo/Claude Code
+// broken by the legacy key — strict validators like OpenCode/Claude Code
 // reject unknown top-level keys — heal without any user action.
 type LegacyMarkerStripper interface {
 	// StripLegacyMarker removes the legacy top-level [MarkerKey] from the
@@ -161,11 +161,25 @@ func NewMarker(p Profile, label string) Marker {
 
 // Fingerprint returns a stable hex SHA-256 over the managed profile fields. All
 // adapters must use this so external-modification detection is consistent.
+//
+// In "All models" mode (ApplyAllModels) the apply mode and the full model list
+// are folded into the hash, so switching the mode or changing the provider's
+// model set reports ModifiedExternally until the profile is re-applied. In
+// single-model mode the hash covers exactly the pre-mode fields, so markers
+// written by earlier MintSwitch versions keep matching after an upgrade.
 func Fingerprint(p Profile) string {
 	h := sha256.New()
 	for _, f := range []string{p.BaseURL, p.APIKey, p.Model, p.SmallFastModel, p.OpusModel, p.SonnetModel, p.HaikuModel} {
 		h.Write([]byte(f))
 		h.Write([]byte{0})
+	}
+	if p.ApplyAllModels {
+		h.Write([]byte("apply_all_models"))
+		h.Write([]byte{0})
+		for _, m := range p.Models {
+			h.Write([]byte(m))
+			h.Write([]byte{0})
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

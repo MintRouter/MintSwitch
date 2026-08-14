@@ -97,6 +97,47 @@ func TestFingerprintStableAndSensitive(t *testing.T) {
 	}
 }
 
+// TestFingerprintApplyMode pins the apply-mode contract: single-model mode
+// ignores Models (so pre-mode markers keep matching), while "All models" mode
+// folds the mode and the model list into the hash so a mode switch or a
+// provider model-set change is detected as an external modification.
+func TestFingerprintApplyMode(t *testing.T) {
+	base := Profile{APIKey: "k", BaseURL: "https://h", Model: "m", Models: []string{"m", "x"}}
+	oneNoModels := Profile{APIKey: "k", BaseURL: "https://h", Model: "m"}
+	if Fingerprint(base) != Fingerprint(oneNoModels) {
+		t.Fatal("single-model fingerprint must not depend on Models")
+	}
+	all := base
+	all.ApplyAllModels = true
+	if Fingerprint(all) == Fingerprint(base) {
+		t.Fatal("mode switch did not alter fingerprint")
+	}
+	grown := all
+	grown.Models = []string{"m", "x", "y"}
+	if Fingerprint(grown) == Fingerprint(all) {
+		t.Fatal("model-list change in all mode did not alter fingerprint")
+	}
+}
+
+// TestApplyModels pins the ordering/dedup contract adapters rely on.
+func TestApplyModels(t *testing.T) {
+	p := Profile{Model: "b", Models: []string{"a", "b", "c", "", "a"}}
+	if got := p.ApplyModels(); len(got) != 1 || got[0] != "b" {
+		t.Fatalf("single-model mode = %v, want [b]", got)
+	}
+	p.ApplyAllModels = true
+	got := p.ApplyModels()
+	want := []string{"b", "a", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("all mode = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("all mode = %v, want %v", got, want)
+		}
+	}
+}
+
 // validProvider is a fully-populated provider for Provider tests.
 func validProvider() Provider {
 	return Provider{

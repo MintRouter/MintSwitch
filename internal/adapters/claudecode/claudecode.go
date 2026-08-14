@@ -7,6 +7,9 @@
 // ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL,
 // ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_SMALL_FAST_MODEL and
 // CLAUDE_CODE_SUBAGENT_MODEL variables, preserving every other key in the file.
+// In "All models" mode it additionally sets
+// CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 so Claude Code (>= v2.1.129)
+// adds the gateway's claude-*/anthropic-* models to its /model picker.
 //
 // Every model variable is always written so no Claude Code request can fall
 // back to an Anthropic default model, which fails on gateways that do not
@@ -60,14 +63,18 @@ const (
 	envDefaultSonnet  = "ANTHROPIC_DEFAULT_SONNET_MODEL"
 	envDefaultHaiku   = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
 	envSubagentModel  = "CLAUDE_CODE_SUBAGENT_MODEL"
+	// envModelDiscovery makes Claude Code (>= v2.1.129) query the gateway's
+	// model list and add its claude-*/anthropic-* models to the /model picker.
+	// Written as "1" in "All models" mode; removed in single-model mode.
+	envModelDiscovery = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 )
 
-// managedEnvKeys is every env variable Apply writes; stripManaged removes
+// managedEnvKeys is every env variable Apply can write; stripManaged removes
 // exactly this set. Order matters only for readability.
 var managedEnvKeys = []string{
 	envBaseURL, envAuthToken, envModel,
 	envDefaultOpus, envDefaultSonnet, envDefaultHaiku,
-	envSmallFastModel, envSubagentModel,
+	envSmallFastModel, envSubagentModel, envModelDiscovery,
 }
 
 // orphanDetail explains the orphan-remnant state: settings.json still carries
@@ -219,6 +226,14 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	env[envDefaultHaiku] = haiku
 	env[envSmallFastModel] = haiku
 	env[envSubagentModel] = p.Model
+	// "All models" mode enables gateway model discovery so the /model picker
+	// lists the gateway's claude-*/anthropic-* models; single-model mode
+	// removes the key so a mode switch back is fully reverted on re-apply.
+	if p.ApplyAllModels {
+		env[envModelDiscovery] = "1"
+	} else {
+		delete(env, envModelDiscovery)
+	}
 	m[envKey] = env
 	delete(m, core.MarkerKey)
 

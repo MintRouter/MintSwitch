@@ -237,6 +237,118 @@ func TestApplyNewFiles(t *testing.T) {
 	}
 }
 
+// TestApplyAllModelsWritesCatalog proves "All models" mode writes the
+// mintswitch-models.json catalog (one entry per profile model, each carrying
+// base_instructions) and points config.toml's model_catalog_json at it; a
+// re-apply in single-model mode removes both again; and a mode switch is
+// detected via the fingerprint until re-apply.
+func TestApplyAllModelsWritesCatalog(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	p.Models = []string{"gpt-5.5", "gpt-5.5-mini"}
+	p.ApplyAllModels = true
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+
+	catalogPath := filepath.Join(home, ".codex", catalogFileName)
+	cfg, err := readTOML(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[catalogKey] != catalogPath {
+		t.Fatalf("%s = %v, want %q", catalogKey, cfg[catalogKey], catalogPath)
+	}
+	catalog, err := core.ReadJSONObject(catalogPath)
+	if err != nil {
+		t.Fatalf("catalog not written: %v", err)
+	}
+	entries, _ := catalog["models"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("catalog models = %v, want 2 entries", entries)
+	}
+	for i, id := range []string{"gpt-5.5", "gpt-5.5-mini"} {
+		entry := entries[i].(map[string]any)
+		if entry["slug"] != id {
+			t.Fatalf("entry %d slug = %v, want %q", i, entry["slug"], id)
+		}
+		if instr, _ := entry["base_instructions"].(string); instr == "" {
+			t.Fatalf("entry %d missing base_instructions", i)
+		}
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied in all mode, got %v", st)
+	}
+
+	one := p
+	one.ApplyAllModels = false
+	if st, _, _ := a.Status(one); st != core.StatusModifiedExternally {
+		t.Fatalf("want ModifiedExternally after mode switch, got %v", st)
+	}
+	if _, err := a.Apply(one); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(catalogPath); !os.IsNotExist(err) {
+		t.Fatalf("catalog file not removed on single-model re-apply: %v", err)
+	}
+	cfg, err = readTOML(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg[catalogKey]; present {
+		t.Fatalf("%s not removed on single-model re-apply: %+v", catalogKey, cfg)
+	}
+}
+
+// TestApplyKeepsUserCatalogRef proves a hand-configured model_catalog_json
+// pointing at the user's own file is never touched by a single-model Apply.
+func TestApplyKeepsUserCatalogRef(t *testing.T) {
+	a, home := newAdapter(t)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userRef := "/home/user/my-catalog.json"
+	if err := writeTOML(filepath.Join(codexDir, "config.toml"),
+		map[string]any{catalogKey: userRef}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[catalogKey] != userRef {
+		t.Fatalf("user %s changed: %v", catalogKey, cfg[catalogKey])
+	}
+}
+
+// TestRestoreRemovesCatalog proves Restore deletes the MintSwitch catalog
+// file and strips the managed model_catalog_json reference when no pristine
+// backup covers config.toml.
+func TestRestoreRemovesCatalog(t *testing.T) {
+	a, home := newAdapter(t)
+	p := sampleProfile()
+	p.Models = []string{"gpt-5.5", "gpt-5.5-mini"}
+	p.ApplyAllModels = true
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	catalogPath := filepath.Join(home, ".codex", catalogFileName)
+	if _, err := os.Stat(catalogPath); err != nil {
+		t.Fatalf("catalog missing after apply: %v", err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(catalogPath); !os.IsNotExist(err) {
+		t.Fatalf("catalog file not removed on restore: %v", err)
+	}
+}
+
 func TestApplyPreservesExistingKeys(t *testing.T) {
 	a, home := newAdapter(t)
 	codexDir := filepath.Join(home, ".codex")

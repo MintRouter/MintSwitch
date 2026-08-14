@@ -232,13 +232,17 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if providers == nil {
 		providers = map[string]any{}
 	}
+	// One entry per applied model ([core.Profile.ApplyModels]: just the
+	// selected model, or every provider model in "All models" mode).
+	modelEntries := make([]any, 0)
+	for _, m := range p.ApplyModels() {
+		modelEntries = append(modelEntries, map[string]any{"id": m, "name": m})
+	}
 	providers[providerID] = map[string]any{
 		"baseUrl": p.BaseURL,
 		"api":     apiType,
 		"apiKey":  p.APIKey,
-		"models": []any{
-			map[string]any{"id": p.Model, "name": p.Model},
-		},
+		"models":  modelEntries,
 	}
 	models["providers"] = providers
 	if err := core.WriteJSONObjectAtomic(modelsPath, models); err != nil {

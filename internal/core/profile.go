@@ -71,15 +71,21 @@ type Profile struct {
 	BaseURL string `json:"base_url"`
 	// Models is the user's saved set of selectable model identifiers. The
 	// currently selected one is Model, which must be a member when Models is
-	// non-empty. Adapters never read Models; they consume only Model.
+	// non-empty. Adapters consume it via [Profile.ApplyModels].
 	Models []string `json:"models,omitempty"`
 	// ModelNames optionally maps a member of Models to a human-friendly display
-	// name shown by the UI. Adapters never read it; tool configs always receive
-	// the canonical model identifier. Missing entries fall back to the ID.
+	// name. Tool configs always receive the canonical model identifier; adapters
+	// may use these names only for display fields (e.g. Claude Desktop's
+	// labelOverride). Missing entries fall back to the ID.
 	ModelNames map[string]string `json:"model_names,omitempty"`
-	// Model is the currently selected model identifier and the single value
+	// Model is the currently selected model identifier and the default value
 	// adapters write to tool configs. Required.
 	Model string `json:"model"`
+	// ApplyAllModels selects the per-tool "All models" apply mode: adapters
+	// that support it expose every member of Models in the tool's config (see
+	// [Profile.ApplyModels]) instead of only the selected Model. The zero
+	// value keeps the original single-model behaviour.
+	ApplyAllModels bool `json:"apply_all_models,omitempty"`
 	// SmallFastModel is an optional secondary model used by some tools for
 	// lightweight/background tasks. It need not be a member of Models.
 	SmallFastModel string `json:"small_fast_model,omitempty"`
@@ -129,4 +135,24 @@ func (p Profile) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ApplyModels returns the ordered, de-duplicated model list an adapter should
+// write to the tool's config: the selected Model first, followed by the
+// remaining members of Models in their saved order when ApplyAllModels is set.
+// In single-model mode (ApplyAllModels false) it is exactly [Model].
+func (p Profile) ApplyModels() []string {
+	out := []string{p.Model}
+	if !p.ApplyAllModels {
+		return out
+	}
+	seen := map[string]bool{p.Model: true}
+	for _, m := range p.Models {
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
 }

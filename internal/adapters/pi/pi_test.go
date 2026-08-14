@@ -110,6 +110,45 @@ func TestApplyNewFilesAndStatus(t *testing.T) {
 	}
 }
 
+// TestApplyAllModels proves "All models" mode writes one models entry per
+// profile model (selected first) while defaultModel stays the selected model,
+// and that a mode switch is detected via the fingerprint until re-apply.
+func TestApplyAllModels(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	p := sampleProfile()
+	p.Models = []string{"gpt-mint", "claude-mint"}
+	p.ApplyAllModels = true
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	models := readJSON(t, res.ChangedPath)
+	prov := models["providers"].(map[string]any)[providerID].(map[string]any)
+	list := prov["models"].([]any)
+	if len(list) != 2 {
+		t.Fatalf("models list = %v, want 2 entries", list)
+	}
+	for i, id := range []string{"gpt-mint", "claude-mint"} {
+		entry := list[i].(map[string]any)
+		if entry["id"] != id || entry["name"] != id {
+			t.Fatalf("entry %d = %v, want id/name %q", i, entry, id)
+		}
+	}
+	settings := readJSON(t, a.settingsPath())
+	if settings["defaultModel"] != p.Model {
+		t.Fatalf("defaultModel = %v, want selected model", settings["defaultModel"])
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("expected AppliedByMintSwitch, got %v", st)
+	}
+	one := p
+	one.ApplyAllModels = false
+	if st, _, _ := a.Status(one); st != core.StatusModifiedExternally {
+		t.Fatalf("expected ModifiedExternally after mode switch, got %v", st)
+	}
+}
+
 func TestApplyPreservesExistingKeys(t *testing.T) {
 	a, _ := newAdapter(t)
 	installed(a)

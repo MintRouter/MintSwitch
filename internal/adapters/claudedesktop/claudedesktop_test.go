@@ -93,8 +93,9 @@ func TestDetectViaAppBundle(t *testing.T) {
 
 // TestApplyWritesThreeFiles proves Apply produces the same shape as the
 // verified hand-written 3P config: 3p mode, gateway provider with a stripped
-// /v1 base URL and claude-* models only (selected first, labelOverride from
-// ModelNames), and _meta.json linking appliedId to the provider entry.
+// /v1 base URL and — in the default single-model mode — exactly the selected
+// claude-* model (labelOverride from ModelNames), and _meta.json linking
+// appliedId to the provider entry.
 func TestApplyWritesThreeFiles(t *testing.T) {
 	a, _, appDir := newAdapter(t)
 	installApp(t, appDir)
@@ -126,9 +127,8 @@ func TestApplyWritesThreeFiles(t *testing.T) {
 		t.Fatal("api key not written")
 	}
 	names := modelNamesOf(t, prov)
-	want := []string{"claude-opus-5", "claude-haiku-4-5"}
-	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
-		t.Fatalf("inferenceModels = %v, want %v (claude-* only, selected first)", names, want)
+	if len(names) != 1 || names[0] != "claude-opus-5" {
+		t.Fatalf("inferenceModels = %v, want [claude-opus-5] (single-model mode)", names)
 	}
 	first := prov["inferenceModels"].([]any)[0].(map[string]any)
 	if first["labelOverride"] != "Claude Opus 5" {
@@ -136,6 +136,36 @@ func TestApplyWritesThreeFiles(t *testing.T) {
 	}
 	if res.ChangedPath != a.configPath() {
 		t.Fatalf("ChangedPath = %q", res.ChangedPath)
+	}
+}
+
+// TestApplyAllModels proves "All models" mode writes every claude-* model
+// (selected first, non-claude filtered out regardless of mode) and that
+// switching modes flips the fingerprint so Status reports ModifiedExternally
+// until re-apply.
+func TestApplyAllModels(t *testing.T) {
+	a, _, appDir := newAdapter(t)
+	installApp(t, appDir)
+	p := sampleProfile()
+	p.ApplyAllModels = true
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	uuid := managedUUID(readJSON(t, a.metaPath()))
+	names := modelNamesOf(t, readJSON(t, a.providerPath(uuid)))
+	want := []string{"claude-opus-5", "claude-haiku-4-5"}
+	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
+		t.Fatalf("inferenceModels = %v, want %v (all claude-*, selected first)", names, want)
+	}
+	st, _, err := a.Status(p)
+	if err != nil || st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("Status in all mode = %v, %v; want Applied", st, err)
+	}
+	one := p
+	one.ApplyAllModels = false
+	st, _, err = a.Status(one)
+	if err != nil || st != core.StatusModifiedExternally {
+		t.Fatalf("Status after mode switch = %v, %v; want ModifiedExternally", st, err)
 	}
 }
 
