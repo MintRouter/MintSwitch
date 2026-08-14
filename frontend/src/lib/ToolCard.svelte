@@ -10,10 +10,11 @@
     onInstall: (id: string) => void;
     onUninstall: (id: string) => void;
     onModelChange: (toolID: string, model: string) => void;
+    onApplyModeChange: (toolID: string, mode: string) => void;
   }
   let {
     tool, busy,
-    onApply, onRestore, onInstall, onUninstall, onModelChange,
+    onApply, onRestore, onInstall, onUninstall, onModelChange, onApplyModeChange,
   }: Props = $props();
 
   // The provider in effect for this tool (per-tool override or the active
@@ -88,6 +89,19 @@
     e.currentTarget.value = selectedModel;
     onModelChange(tool.id, chosen);
   }
+
+  // Per-tool apply mode: "one" (default) applies only the selected model,
+  // "all" applies every model of the effective provider — the dropdown then
+  // picks the DEFAULT model. Anything unrecognized renders as "one" (matches
+  // the backend's applyModeFor fallback).
+  const applyMode = $derived(tool.apply_mode === "all" ? "all" : "one");
+  // Claude Code / Claude Desktop only accept claude-* models in "all" mode
+  // (an Anthropic-side limit) — surface that as a small note under the row.
+  const claudeOnlyAll = $derived(tool.id === "claude-code" || tool.id === "claude-desktop");
+  function selectMode(mode: "one" | "all"): void {
+    if (mode === applyMode) return;
+    onApplyModeChange(tool.id, mode);
+  }
 </script>
 
 <article class="tool-card" class:is-uninstalled={!tool.installed} class:is-modified={tool.status === "modified_externally"} aria-labelledby={`tool-${tool.id}`}>
@@ -117,13 +131,22 @@
 
   <div class="tool-body">
     {#if hasModelRow}
-      <label class="model-control" for={`model-${tool.id}`}>
-        <span>Model</span>
-        <select class="tool-model-select" id={`model-${tool.id}`} aria-label={`Model for ${nameParts.name}`} value={selectedModel} disabled={busy} onchange={onSelectModel}>
+      <div class="model-control">
+        <div class="model-head">
+          <label class="control-label" for={`model-${tool.id}`}>{applyMode === "all" ? "Default model" : "Model"}</label>
+          <div class="mode-toggle" role="group" aria-label={`Apply mode for ${nameParts.name}`}>
+            <button type="button" class="mode-btn" class:active={applyMode === "one"} aria-pressed={applyMode === "one"} disabled={busy} onclick={() => selectMode("one")}>1 model</button>
+            <button type="button" class="mode-btn" class:active={applyMode === "all"} aria-pressed={applyMode === "all"} disabled={busy} onclick={() => selectMode("all")}>All models</button>
+          </div>
+        </div>
+        <select class="tool-model-select" id={`model-${tool.id}`} aria-label={`${applyMode === "all" ? "Default model" : "Model"} for ${nameParts.name}`} value={selectedModel} disabled={busy} onchange={onSelectModel}>
           <option value="">Use provider default</option>
           {#each models as m (m)}<option value={m}>{modelNames[m] || m}</option>{/each}
         </select>
-      </label>
+        {#if applyMode === "all" && claudeOnlyAll}
+          <p class="mode-note">All mode adds Claude models only (Anthropic limit).</p>
+        {/if}
+      </div>
     {:else}
       <div class="model-control placeholder" aria-hidden="true"><span>Model</span><div>{tool.installed ? "Add models to your provider" : "Install to configure"}</div></div>
     {/if}
@@ -163,7 +186,7 @@
   .tool-card{min-width:0;display:flex;flex-direction:column;gap:12px;padding:14px;border:1px solid var(--border);border-radius:15px;background:var(--surface);box-shadow:var(--shadow-card);transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}.tool-card:hover{transform:translateY(-1px);border-color:var(--border-strong);box-shadow:0 2px 4px rgba(23,28,40,.04),0 12px 30px rgba(23,28,40,.07)}.tool-card.is-modified{border-color:color-mix(in srgb,var(--warn) 25%,var(--border))}.tool-card.is-uninstalled{background:color-mix(in srgb,var(--surface) 72%,var(--surface-2))}
   .tool-head{display:flex;align-items:center;gap:10px;min-width:0}.logo-wrap{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;border-radius:11px;background:var(--surface-2);border:1px solid var(--border)}.logo-wrap.inactive{filter:grayscale(.65);opacity:.7}.tool-logo{display:block;width:30px;height:30px;border-radius:8px}.tool-logo.monogram{display:grid;place-items:center;color:var(--text);font-size:14px;font-weight:750}.tool-titles{flex:1;min-width:0}.tool-name{margin:0;color:var(--text);font-size:14px;line-height:1.2;font-weight:720;letter-spacing:-.015em}.tool-subtitle{margin:3px 0 0;color:var(--muted);font-size:10.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tool-status{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;padding:4px 7px;border-radius:99px;background:var(--surface-2);color:var(--muted);font-size:9.5px;font-weight:650}.tool-status .dot{width:6px;height:6px;border-radius:50%;background:var(--muted)}.tool-status.tone-success{color:var(--ok-strong);background:color-mix(in srgb,var(--ok) 9%,var(--surface))}.tool-status.tone-success .dot{background:var(--ok)}.tool-status.tone-warning{color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--surface))}.tool-status.tone-warning .dot{background:var(--warn)}
   .status-notice{display:flex;align-items:center;gap:6px;margin:-2px 0;padding:7px 8px;border-radius:8px;background:color-mix(in srgb,var(--warn) 8%,var(--surface-2));color:var(--warn);font-size:10px;font-weight:600}.status-notice svg{flex:0 0 auto}
-  .tool-body{display:flex;flex-direction:column;gap:9px;padding:10px;border-radius:11px;background:var(--surface-2);border:1px solid color-mix(in srgb,var(--border) 75%,transparent)}.model-control{display:flex;flex-direction:column;gap:5px;min-width:0}.model-control>span,.provider-label{color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.075em;text-transform:uppercase}.tool-model-select{width:100%;height:31px;min-width:0;padding:0 28px 0 9px;color:var(--text);background-color:var(--surface);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='m1 1 4 4 4-4' stroke='%2369707d' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;border:1px solid var(--border);border-radius:8px;outline:none;appearance:none;font-size:11px;white-space:nowrap;text-overflow:ellipsis}.tool-model-select:hover{border-color:var(--border-strong)}.tool-model-select:focus{border-color:var(--accent);box-shadow:var(--focus)}.model-control.placeholder div{height:31px;display:flex;align-items:center;padding:0 9px;border:1px dashed var(--border);border-radius:8px;color:var(--muted);font-size:10.5px}.provider-row{display:flex;align-items:end;justify-content:space-between;gap:8px;padding-top:8px;border-top:1px solid var(--border)}.provider-copy{min-width:0;display:flex;flex-direction:column;gap:3px}.provider-copy strong{color:var(--text);font-size:10.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.override-pill{padding:3px 6px;border-radius:99px;background:var(--accent-soft);color:var(--accent-soft-text);font-size:9px;font-weight:650}
+  .tool-body{display:flex;flex-direction:column;gap:9px;padding:10px;border-radius:11px;background:var(--surface-2);border:1px solid color-mix(in srgb,var(--border) 75%,transparent)}.model-control{display:flex;flex-direction:column;gap:5px;min-width:0}.model-control>span,.control-label,.provider-label{color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.075em;text-transform:uppercase}.model-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.mode-toggle{display:inline-flex;flex:0 0 auto;padding:2px;border:1px solid var(--border);border-radius:99px;background:var(--surface)}.mode-btn{padding:2px 8px;border:0;border-radius:99px;background:transparent;color:var(--muted);font-size:9px;font-weight:650;line-height:1.4;cursor:pointer;white-space:nowrap}.mode-btn:hover:not(:disabled):not(.active){color:var(--text)}.mode-btn.active{background:var(--accent-soft);color:var(--accent-soft-text)}.mode-btn:disabled{opacity:.5;cursor:default}.mode-note{margin:0;color:var(--muted);font-size:9.5px;line-height:1.35}.tool-model-select{width:100%;height:31px;min-width:0;padding:0 28px 0 9px;color:var(--text);background-color:var(--surface);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='m1 1 4 4 4-4' stroke='%2369707d' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;border:1px solid var(--border);border-radius:8px;outline:none;appearance:none;font-size:11px;white-space:nowrap;text-overflow:ellipsis}.tool-model-select:hover{border-color:var(--border-strong)}.tool-model-select:focus{border-color:var(--accent);box-shadow:var(--focus)}.model-control.placeholder div{height:31px;display:flex;align-items:center;padding:0 9px;border:1px dashed var(--border);border-radius:8px;color:var(--muted);font-size:10.5px}.provider-row{display:flex;align-items:end;justify-content:space-between;gap:8px;padding-top:8px;border-top:1px solid var(--border)}.provider-copy{min-width:0;display:flex;flex-direction:column;gap:3px}.provider-copy strong{color:var(--text);font-size:10.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.override-pill{padding:3px 6px;border-radius:99px;background:var(--accent-soft);color:var(--accent-soft-text);font-size:9px;font-weight:650}
   .tool-actions{display:flex;flex-direction:column;gap:7px;margin-top:auto}.primary-action{width:100%;min-height:32px}.secondary-actions{min-height:20px;display:flex;align-items:center;justify-content:space-between;gap:8px}.text-action{padding:2px 0;color:var(--muted);background:transparent;border:0;cursor:pointer;font-size:10px;font-weight:600}.text-action:hover:not(:disabled){color:var(--text)}.text-action.danger{margin-left:auto}.text-action.danger:hover:not(:disabled){color:var(--danger-strong)}.text-action:disabled{opacity:.35;cursor:default}.manual-note{margin-left:auto;color:var(--muted);font-size:9.5px}
   @media(max-width:860px){.tool-card{padding:13px}.tool-body{padding:9px}}
 </style>

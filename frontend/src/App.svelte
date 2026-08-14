@@ -277,6 +277,18 @@
     await safeRefresh();
   }
 
+  // Persist a per-tool apply mode ("one" or "all") then refresh: ListTools
+  // re-evaluates status against the new mode, so an applied tool flips to
+  // "modified" (needs re-apply) when its on-disk config no longer matches.
+  async function changeToolApplyMode(id: string, mode: string): Promise<void> {
+    try {
+      await Service.SetToolApplyMode(id, mode);
+    } catch (e) {
+      flash(errMsg(e));
+    }
+    await safeRefresh();
+  }
+
   // Persist (or clear, with an empty providerID) a per-tool provider
   // override, then refresh so the providers dialog and the tool cards'
   // provider badge pick up the change. Returns the error message (instead of
@@ -435,7 +447,8 @@
             <div class="tool-grid">
               {#each tools as t (t.id)}
                 <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")}
-                  onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel} />
+                  onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel}
+                  onApplyModeChange={changeToolApplyMode} />
               {/each}
             </div>
           {/if}
