@@ -321,6 +321,38 @@ func TestStatusSettingsDrift(t *testing.T) {
 	}
 }
 
+// TestStatusModelOnlyDrift pins the milder /model-picker case: settings.json
+// still selects the MintSwitch provider (mintrouter), only defaultModel was
+// changed — e.g. between models applied in "All models" mode. Traffic still
+// flows through the endpoint, so the detail must say so (modelDriftDetail)
+// rather than the misleading "bypasses the configured endpoint" wording.
+func TestStatusModelOnlyDrift(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	p := sampleProfile()
+	p.Models = []string{p.Model, "other-mint"}
+	p.ApplyAllModels = true
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	settings := readJSON(t, a.settingsPath())
+	settings["defaultModel"] = "other-mint"
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.settingsPath(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, detail, err := a.Status(p)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st != core.StatusModifiedExternally || detail != modelDriftDetail {
+		t.Fatalf("model drift status = %v %q, want ModifiedExternally + modelDriftDetail", st, detail)
+	}
+}
+
 // TestRestoreNoBackupStripsManagedKeys covers the missing-backup fallback:
 // with the backups dir deleted, Restore must strip providers.mintrouter and
 // defaultProvider/defaultModel while preserving every other key in both files.

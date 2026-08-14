@@ -46,11 +46,19 @@ const orphanDetail = "The MintSwitch provider is still present but the managed m
 
 // settingsDriftDetail explains the settings-drift state: models.json still
 // carries the MintSwitch provider, but settings.json no longer selects it as
-// the default — typically because the user switched models inside Pi (/model
-// rewrites defaultProvider/defaultModel). Pi then routes traffic elsewhere, so
-// the profile must be re-applied.
-const settingsDriftDetail = "settings.json no longer selects the MintSwitch provider/model as default " +
+// the default — typically because the user picked another provider inside Pi
+// (/model rewrites defaultProvider/defaultModel). Pi then routes traffic
+// elsewhere, so the profile must be re-applied.
+const settingsDriftDetail = "settings.json no longer selects the MintSwitch provider as default " +
 	"(Pi's /model picker likely changed it), so Pi bypasses the configured endpoint. Apply the profile again to fix this."
+
+// modelDriftDetail explains the milder drift where settings.json still selects
+// the MintSwitch provider but its default model was changed inside Pi (the
+// /model picker, e.g. between models applied in "All models" mode). Requests
+// still go through the configured endpoint — only the default model differs
+// from the profile.
+const modelDriftDetail = "Pi's default model was changed inside Pi (the /model picker), but requests " +
+	"still go through the MintSwitch endpoint. Apply the profile again to reset the default model."
 
 // Ensure Adapter satisfies the shared adapter contract.
 var _ core.ToolAdapter = (*Adapter)(nil)
@@ -116,8 +124,10 @@ func (a *Adapter) Detect() (bool, string) {
 // ModifiedExternally. Even with a matching fingerprint, settings.json must
 // still select the MintSwitch provider and model as default: Pi's /model
 // picker rewrites defaultProvider/defaultModel behind MintSwitch's back, so
-// that state reports ModifiedExternally (settingsDriftDetail) instead of a
-// false Applied.
+// that state reports ModifiedExternally instead of a false Applied — with a
+// detail distinguishing a repointed provider (settingsDriftDetail) from a
+// mere default-model change still routed through the endpoint
+// (modelDriftDetail); see settingsDrift.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
@@ -144,28 +154,33 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	if marker.Fingerprint != core.Fingerprint(p) {
 		return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
 	}
-	if a.settingsDrifted(p) {
-		return core.StatusModifiedExternally, settingsDriftDetail, nil
+	if detail := a.settingsDrift(p); detail != "" {
+		return core.StatusModifiedExternally, detail, nil
 	}
 	return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 }
 
-// settingsDrifted reports whether settings.json no longer selects the
-// MintSwitch provider and model that Apply wrote for the given profile:
-// defaultProvider flipped away from "mintrouter", defaultModel was changed, or
-// the file is unreadable/corrupt. It is only meaningful when models.json is
-// confirmed MintSwitch-managed with a matching fingerprint, so any mismatch
-// here is by definition an external change.
-func (a *Adapter) settingsDrifted(p core.Profile) bool {
+// settingsDrift reports whether settings.json no longer selects the MintSwitch
+// provider and model that Apply wrote for the given profile, returning the
+// matching drift detail ("" when nothing drifted). defaultProvider flipped
+// away from "mintrouter" — or an unreadable/corrupt file — means Pi bypasses
+// the endpoint entirely (settingsDriftDetail); defaultProvider intact but
+// defaultModel changed means only the default model drifted while traffic
+// still flows through the endpoint (modelDriftDetail). It is only meaningful
+// when models.json is confirmed MintSwitch-managed with a matching
+// fingerprint, so any mismatch here is by definition an external change.
+func (a *Adapter) settingsDrift(p core.Profile) string {
 	settings, err := core.ReadJSONObject(a.settingsPath())
 	if err != nil {
-		return true
+		return settingsDriftDetail
 	}
 	if prov, _ := settings["defaultProvider"].(string); prov != providerID {
-		return true
+		return settingsDriftDetail
 	}
-	model, _ := settings["defaultModel"].(string)
-	return model != p.Model
+	if model, _ := settings["defaultModel"].(string); model != p.Model {
+		return modelDriftDetail
+	}
+	return ""
 }
 
 // Apply backs up both files (only when Pi is not already MintSwitch-managed),
