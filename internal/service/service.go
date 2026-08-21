@@ -159,11 +159,13 @@ type ProviderView struct {
 	ModelNames     map[string]string `json:"model_names"`
 	Model          string            `json:"model"`
 	SmallFastModel string            `json:"small_fast_model"`
-	// OpusModel, SonnetModel and HaikuModel are the provider's optional Claude
-	// Code tier pins; empty means the tier follows the default Model.
+	// OpusModel, SonnetModel, HaikuModel and FableModel are the provider's
+	// optional Claude Code tier pins; empty means the tier follows the default
+	// Model.
 	OpusModel   string `json:"opus_model"`
 	SonnetModel string `json:"sonnet_model"`
 	HaikuModel  string `json:"haiku_model"`
+	FableModel  string `json:"fable_model"`
 	HasKey      bool   `json:"has_key"`
 	Active      bool   `json:"active"`
 }
@@ -200,6 +202,7 @@ func providerView(p core.Provider, active bool) ProviderView {
 		OpusModel:      p.OpusModel,
 		SonnetModel:    p.SonnetModel,
 		HaikuModel:     p.HaikuModel,
+		FableModel:     p.FableModel,
 		HasKey:         strings.TrimSpace(p.APIKey) != "",
 		Active:         active,
 	}
@@ -540,6 +543,7 @@ func normalizeProvider(p *core.Provider) {
 	p.OpusModel = strings.TrimSpace(p.OpusModel)
 	p.SonnetModel = strings.TrimSpace(p.SonnetModel)
 	p.HaikuModel = strings.TrimSpace(p.HaikuModel)
+	p.FableModel = strings.TrimSpace(p.FableModel)
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
 }

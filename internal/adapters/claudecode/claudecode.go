@@ -5,22 +5,27 @@
 // The adapter injects the active profile's endpoint into that object as the
 // ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,
 // ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL,
-// ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_SMALL_FAST_MODEL and
-// CLAUDE_CODE_SUBAGENT_MODEL variables, preserving every other key in the file.
-// In "All models" mode it additionally sets
+// ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_FABLE_MODEL,
+// ANTHROPIC_SMALL_FAST_MODEL and CLAUDE_CODE_SUBAGENT_MODEL variables,
+// preserving every other key in the file. When the profile names a resolved
+// tier model (Profile.ModelNames), the matching
+// ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL_NAME variable is also
+// written so Claude Code (>= v2.1.238) shows that friendly name in its /model
+// picker; unnamed tiers get no _NAME key (and a stale one is removed) so
+// re-apply reverts cleanly. In "All models" mode it additionally sets
 // CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 so Claude Code (>= v2.1.129)
 // adds the gateway's claude-*/anthropic-* models to its /model picker.
 //
 // Every model variable is always written so no Claude Code request can fall
 // back to an Anthropic default model, which fails on gateways that do not
-// serve it. ANTHROPIC_MODEL only pins the main session; the opus/sonnet/haiku
-// tier aliases (used by subagents, plan mode and background tasks) resolve via
-// the ANTHROPIC_DEFAULT_*_MODEL variables, and a subagent declaring a full
-// model ID bypasses even those unless CLAUDE_CODE_SUBAGENT_MODEL is set (that
-// var forces every subagent onto the main model — the accepted trade-off for
-// gateway-only setups). Tier values come from the profile's OpusModel /
-// SonnetModel / HaikuModel when set and fall back to the main model
-// otherwise; see resolveTiers.
+// serve it. ANTHROPIC_MODEL only pins the main session; the
+// opus/sonnet/haiku/fable tier aliases (used by subagents, plan mode and
+// background tasks) resolve via the ANTHROPIC_DEFAULT_*_MODEL variables, and a
+// subagent declaring a full model ID bypasses even those unless
+// CLAUDE_CODE_SUBAGENT_MODEL is set (that var forces every subagent onto the
+// main model — the accepted trade-off for gateway-only setups). Tier values
+// come from the profile's OpusModel / SonnetModel / HaikuModel / FableModel
+// when set and fall back to the main model otherwise; see resolveTiers.
 //
 // Values that diverge from the profile as stored (Claude Code specifics;
 // other adapters keep the profile verbatim):
@@ -62,7 +67,15 @@ const (
 	envDefaultOpus    = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 	envDefaultSonnet  = "ANTHROPIC_DEFAULT_SONNET_MODEL"
 	envDefaultHaiku   = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
-	envSubagentModel  = "CLAUDE_CODE_SUBAGENT_MODEL"
+	envDefaultFable   = "ANTHROPIC_DEFAULT_FABLE_MODEL"
+	// envDefault*Name give the tier models friendly display names in the
+	// /model picker of Claude Code >= v2.1.238. Written only when the profile
+	// names the resolved tier model (Profile.ModelNames); removed otherwise.
+	envDefaultOpusName   = "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"
+	envDefaultSonnetName = "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"
+	envDefaultHaikuName  = "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"
+	envDefaultFableName  = "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"
+	envSubagentModel     = "CLAUDE_CODE_SUBAGENT_MODEL"
 	// envModelDiscovery makes Claude Code (>= v2.1.129) query the gateway's
 	// model list and add its claude-*/anthropic-* models to the /model picker.
 	// Written as "1" in "All models" mode; removed in single-model mode.
@@ -73,7 +86,8 @@ const (
 // exactly this set. Order matters only for readability.
 var managedEnvKeys = []string{
 	envBaseURL, envAuthToken, envModel,
-	envDefaultOpus, envDefaultSonnet, envDefaultHaiku,
+	envDefaultOpus, envDefaultSonnet, envDefaultHaiku, envDefaultFable,
+	envDefaultOpusName, envDefaultSonnetName, envDefaultHaikuName, envDefaultFableName,
 	envSmallFastModel, envSubagentModel, envModelDiscovery,
 }
 
@@ -216,7 +230,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		}
 	}
 
-	opus, sonnet, haiku := resolveTiers(p)
+	opus, sonnet, haiku, fable := resolveTiers(p)
 	env := core.AsJSONObject(m[envKey])
 	env[envBaseURL] = stripV1Suffix(p.BaseURL)
 	env[envAuthToken] = p.APIKey
@@ -224,8 +238,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	env[envDefaultOpus] = opus
 	env[envDefaultSonnet] = sonnet
 	env[envDefaultHaiku] = haiku
+	env[envDefaultFable] = fable
 	env[envSmallFastModel] = haiku
 	env[envSubagentModel] = p.Model
+	// Tier display names for the /model picker (Claude Code >= v2.1.238):
+	// written only when the profile names the resolved tier model; otherwise
+	// a stale key from a previous apply is removed so re-apply reverts cleanly.
+	setTierName(env, p, envDefaultOpusName, opus)
+	setTierName(env, p, envDefaultSonnetName, sonnet)
+	setTierName(env, p, envDefaultHaikuName, haiku)
+	setTierName(env, p, envDefaultFableName, fable)
 	// "All models" mode enables gateway model discovery so the /model picker
 	// lists the gateway's claude-*/anthropic-* models; single-model mode
 	// removes the key so a mode switch back is fully reverted on re-apply.
@@ -355,12 +377,12 @@ var (
 	_ core.LegacyMarkerStripper = (*Adapter)(nil)
 )
 
-// resolveTiers returns the models to pin Claude Code's opus/sonnet/haiku tier
-// aliases to: the profile's per-tier model when set, else the main model. The
-// haiku tier additionally prefers the profile's SmallFastModel over the main
-// model, preserving the pre-tier behaviour of ANTHROPIC_SMALL_FAST_MODEL.
-func resolveTiers(p core.Profile) (opus, sonnet, haiku string) {
-	opus, sonnet, haiku = p.Model, p.Model, p.Model
+// resolveTiers returns the models to pin Claude Code's opus/sonnet/haiku/fable
+// tier aliases to: the profile's per-tier model when set, else the main model.
+// The haiku tier additionally prefers the profile's SmallFastModel over the
+// main model, preserving the pre-tier behaviour of ANTHROPIC_SMALL_FAST_MODEL.
+func resolveTiers(p core.Profile) (opus, sonnet, haiku, fable string) {
+	opus, sonnet, haiku, fable = p.Model, p.Model, p.Model, p.Model
 	if p.OpusModel != "" {
 		opus = p.OpusModel
 	}
@@ -373,7 +395,21 @@ func resolveTiers(p core.Profile) (opus, sonnet, haiku string) {
 	if p.HaikuModel != "" {
 		haiku = p.HaikuModel
 	}
-	return opus, sonnet, haiku
+	if p.FableModel != "" {
+		fable = p.FableModel
+	}
+	return opus, sonnet, haiku, fable
+}
+
+// setTierName writes the tier's _NAME env key when the profile has a display
+// name for the resolved tier model, and deletes the key otherwise so a name
+// removed from the profile disappears from settings.json on re-apply.
+func setTierName(env map[string]any, p core.Profile, key, model string) {
+	if name := strings.TrimSpace(p.ModelNames[model]); name != "" {
+		env[key] = name
+		return
+	}
+	delete(env, key)
 }
 
 // stripV1Suffix removes exactly one trailing "/v1" path segment from baseURL

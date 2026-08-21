@@ -191,11 +191,17 @@ func TestApplyNewFile(t *testing.T) {
 		env[envModel] != p.Model || env[envSmallFastModel] != p.SmallFastModel {
 		t.Fatalf("env not injected correctly: %+v", env)
 	}
-	// Tier + subagent pinning: with no per-tier models set, opus/sonnet follow
-	// the main model, haiku follows SmallFastModel, and subagents are pinned
-	// to the main model.
-	if env[envDefaultOpus] != p.Model || env[envDefaultSonnet] != p.Model {
-		t.Fatalf("opus/sonnet tiers must default to main model: %+v", env)
+	// Tier + subagent pinning: with no per-tier models set, opus/sonnet/fable
+	// follow the main model, haiku follows SmallFastModel, and subagents are
+	// pinned to the main model.
+	if env[envDefaultOpus] != p.Model || env[envDefaultSonnet] != p.Model || env[envDefaultFable] != p.Model {
+		t.Fatalf("opus/sonnet/fable tiers must default to main model: %+v", env)
+	}
+	// No ModelNames on the profile, so no _NAME key may be written.
+	for _, k := range []string{envDefaultOpusName, envDefaultSonnetName, envDefaultHaikuName, envDefaultFableName} {
+		if _, present := env[k]; present {
+			t.Fatalf("%s must not be written without model names: %+v", k, env)
+		}
 	}
 	if env[envDefaultHaiku] != p.SmallFastModel {
 		t.Fatalf("haiku tier must default to small fast model: %+v", env)
@@ -269,7 +275,7 @@ func TestApplyDefaultsEmptySmallFastModel(t *testing.T) {
 	}
 	// With no tiers and no small-fast model, every model variable is pinned to
 	// the main model so nothing can fall back to an Anthropic default.
-	for _, k := range []string{envModel, envDefaultOpus, envDefaultSonnet, envDefaultHaiku, envSmallFastModel, envSubagentModel} {
+	for _, k := range []string{envModel, envDefaultOpus, envDefaultSonnet, envDefaultHaiku, envDefaultFable, envSmallFastModel, envSubagentModel} {
 		if env[k] != p.Model {
 			t.Fatalf("%s = %v, want main model %q", k, env[k], p.Model)
 		}
@@ -277,7 +283,7 @@ func TestApplyDefaultsEmptySmallFastModel(t *testing.T) {
 }
 
 // TestApplyPerTierModels proves per-tier pins land in their DEFAULT_* vars:
-// opus/sonnet take their own models, haiku prefers HaikuModel over
+// opus/sonnet/fable take their own models, haiku prefers HaikuModel over
 // SmallFastModel, ANTHROPIC_SMALL_FAST_MODEL mirrors the resolved haiku value,
 // and the subagent pin stays on the main model.
 func TestApplyPerTierModels(t *testing.T) {
@@ -286,6 +292,7 @@ func TestApplyPerTierModels(t *testing.T) {
 	p.OpusModel = "gw/opus-x"
 	p.SonnetModel = "gw/sonnet-x"
 	p.HaikuModel = "gw/haiku-x"
+	p.FableModel = "gw/fable-x"
 	res, err := a.Apply(p)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -296,6 +303,7 @@ func TestApplyPerTierModels(t *testing.T) {
 		envDefaultOpus:    "gw/opus-x",
 		envDefaultSonnet:  "gw/sonnet-x",
 		envDefaultHaiku:   "gw/haiku-x",
+		envDefaultFable:   "gw/fable-x",
 		envSmallFastModel: "gw/haiku-x",
 		envSubagentModel:  p.Model,
 	}
@@ -310,19 +318,79 @@ func TestApplyPerTierModels(t *testing.T) {
 // HaikuModel > SmallFastModel > Model.
 func TestResolveTiersHaikuFallbackChain(t *testing.T) {
 	p := core.Profile{Model: "main"}
-	if _, _, haiku := resolveTiers(p); haiku != "main" {
+	if _, _, haiku, _ := resolveTiers(p); haiku != "main" {
 		t.Fatalf("haiku = %q, want main", haiku)
 	}
 	p.SmallFastModel = "fast"
-	if _, _, haiku := resolveTiers(p); haiku != "fast" {
+	if _, _, haiku, _ := resolveTiers(p); haiku != "fast" {
 		t.Fatalf("haiku = %q, want fast", haiku)
 	}
 	p.HaikuModel = "haiku"
-	if _, _, haiku := resolveTiers(p); haiku != "haiku" {
+	if _, _, haiku, _ := resolveTiers(p); haiku != "haiku" {
 		t.Fatalf("haiku = %q, want haiku", haiku)
 	}
-	if opus, sonnet, _ := resolveTiers(p); opus != "main" || sonnet != "main" {
+	if opus, sonnet, _, _ := resolveTiers(p); opus != "main" || sonnet != "main" {
 		t.Fatalf("opus/sonnet = %q/%q, want main/main", opus, sonnet)
+	}
+}
+
+// TestResolveTiersFableFallback pins the fable resolution order: FableModel
+// when set, else the main model — never SmallFastModel.
+func TestResolveTiersFableFallback(t *testing.T) {
+	p := core.Profile{Model: "main", SmallFastModel: "fast"}
+	if _, _, _, fable := resolveTiers(p); fable != "main" {
+		t.Fatalf("fable = %q, want main (SmallFastModel must not leak in)", fable)
+	}
+	p.FableModel = "fable"
+	if _, _, _, fable := resolveTiers(p); fable != "fable" {
+		t.Fatalf("fable = %q, want fable", fable)
+	}
+}
+
+// TestApplyTierModelNames proves the _NAME picker variables (Claude Code >=
+// v2.1.238): a named resolved tier model gets its _NAME key, an unnamed tier
+// gets none, and removing the name from the profile removes the stale key on
+// re-apply.
+func TestApplyTierModelNames(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	p.OpusModel = "gw/opus-x"
+	p.FableModel = "gw/fable-x"
+	p.ModelNames = map[string]string{
+		"gw/opus-x":  "Opus X",
+		"gw/fable-x": "Fable X",
+		p.SmallFastModel: "Fast Haiku", // resolved haiku tier (via SmallFastModel)
+	}
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	env := envOf(t, readSettings(t, res.ChangedPath))
+	want := map[string]string{
+		envDefaultOpusName:  "Opus X",
+		envDefaultFableName: "Fable X",
+		envDefaultHaikuName: "Fast Haiku",
+	}
+	for k, w := range want {
+		if env[k] != w {
+			t.Fatalf("%s = %v, want %q", k, env[k], w)
+		}
+	}
+	// Sonnet resolves to the unnamed main model: no _NAME key.
+	if _, present := env[envDefaultSonnetName]; present {
+		t.Fatalf("%s must not be written for unnamed tier: %+v", envDefaultSonnetName, env)
+	}
+
+	// Re-apply after dropping every name: all _NAME keys must be removed.
+	p.ModelNames = nil
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	env = envOf(t, readSettings(t, a.settingsPath()))
+	for _, k := range []string{envDefaultOpusName, envDefaultSonnetName, envDefaultHaikuName, envDefaultFableName} {
+		if _, present := env[k]; present {
+			t.Fatalf("%s not removed on re-apply without names: %+v", k, env)
+		}
 	}
 }
 
@@ -687,7 +755,11 @@ func TestRestoreNoBackupStripsManagedKeys(t *testing.T) {
 	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Apply(sampleProfile()); err != nil {
+	// Name the main model so the _NAME picker keys are written too and the
+	// strip fallback is proven to remove them.
+	named := sampleProfile()
+	named.ModelNames = map[string]string{named.Model: "Main Model"}
+	if _, err := a.Apply(named); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(r.BackupsDir()); err != nil {

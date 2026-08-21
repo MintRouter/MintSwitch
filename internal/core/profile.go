@@ -89,14 +89,15 @@ type Profile struct {
 	// SmallFastModel is an optional secondary model used by some tools for
 	// lightweight/background tasks. It need not be a member of Models.
 	SmallFastModel string `json:"small_fast_model,omitempty"`
-	// OpusModel, SonnetModel and HaikuModel optionally pin Claude Code's model
-	// tiers (the opus/sonnet/haiku aliases used by subagents, plan mode and
-	// background tasks) to specific models. Only the claudecode adapter reads
-	// them; an empty tier falls back to Model (Haiku additionally prefers
-	// SmallFastModel). They need not be members of Models.
+	// OpusModel, SonnetModel, HaikuModel and FableModel optionally pin Claude
+	// Code's model tiers (the opus/sonnet/haiku/fable aliases used by
+	// subagents, plan mode and background tasks) to specific models. Only the
+	// claudecode adapter reads them; an empty tier falls back to Model (Haiku
+	// additionally prefers SmallFastModel). They need not be members of Models.
 	OpusModel   string `json:"opus_model,omitempty"`
 	SonnetModel string `json:"sonnet_model,omitempty"`
 	HaikuModel  string `json:"haiku_model,omitempty"`
+	FableModel  string `json:"fable_model,omitempty"`
 }
 
 // Validate reports whether the profile carries the minimum information needed
