@@ -660,6 +660,32 @@ func (s *Service) SetToolApplyMode(toolID, mode string) error {
 	return s.store.Save(st)
 }
 
+// OnboardingDismissed reports whether the user dismissed the first-run
+// "Get started" checklist. Settings files saved before the flag existed
+// report false, so existing users simply see the checklist until their
+// state completes it (or they dismiss it).
+func (s *Service) OnboardingDismissed() (bool, error) {
+	st, err := s.store.Load()
+	if err != nil {
+		return false, err
+	}
+	return st.OnboardingDismissed, nil
+}
+
+// DismissOnboarding persists the dismissal of the first-run checklist so it
+// never reappears after a restart. It is deliberately one-way: the checklist
+// is a first-run aid, and un-dismissing has no UI.
+func (s *Service) DismissOnboarding() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	st.OnboardingDismissed = true
+	return s.store.Save(st)
+}
+
 // normalizeModels trims and de-duplicates the saved model list, preserving
 // first-seen order and dropping empties. It then guarantees the selected model
 // is a member: a non-empty selected model that is absent is prepended (which

@@ -13,6 +13,7 @@
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import PromoBanner from "./lib/PromoBanner.svelte";
+  import OnboardingChecklist from "./lib/OnboardingChecklist.svelte";
 
   let tools = $state<ToolView[]>([]);
   let providers = $state<ProviderView[]>([]);
@@ -94,7 +95,10 @@
     loading = true;
     loadError = "";
     try {
-      await refresh();
+      // The dismissed flag rides along with the initial load (it only ever
+      // changes through dismissOnboarding below, so refresh() never needs it).
+      const [, dismissed] = await Promise.all([refresh(), Service.OnboardingDismissed()]);
+      onboardingDismissed = dismissed;
     } catch (e) {
       loadError = errMsg(e);
     } finally {
@@ -309,6 +313,34 @@
   const installedCount = $derived(tools.filter((t) => t.installed).length);
   const appliedCount = $derived(tools.filter((t) => t.status === "applied_by_mintswitch").length);
   const modifiedCount = $derived(tools.filter((t) => t.status === "modified_externally").length);
+
+  // ---- First-run onboarding checklist ----
+  // Each step is derived from real state so it can never disagree with the
+  // app: (1) a provider exists, (2) a model is available/selected, (3) at
+  // least one tool got the config applied. The checklist hides itself once
+  // all three hold, or permanently after an explicit dismiss (persisted).
+  let onboardingDismissed = $state(true);
+  let providersCard = $state<ReturnType<typeof ProvidersCard>>();
+  let toolsAnchorEl = $state<HTMLElement | null>(null);
+  const providerStepDone = $derived(!!activeProvider);
+  const modelStepDone = $derived(
+    tools.some((t) => !!t.selected_model) || (activeProvider?.models?.length ?? 0) > 0,
+  );
+  const applyStepDone = $derived(appliedCount > 0);
+  const showOnboarding = $derived(
+    !onboardingDismissed && !(providerStepDone && modelStepDone && applyStepDone),
+  );
+
+  // Optimistic dismiss: hide immediately, then persist. A failed persist only
+  // means the checklist returns on the next launch, so a toast is enough.
+  function dismissOnboarding(): void {
+    onboardingDismissed = true;
+    Service.DismissOnboarding().catch((e) => flash(errMsg(e)));
+  }
+
+  function showTools(): void {
+    toolsAnchorEl?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
   const canApplyAll = $derived(!!activeProvider && installedCount > 0 && busyIds.length === 0);
   const canRestoreAll = $derived(tools.some((t) => t.installed && t.status !== "default" && t.status !== "not_installed") && busyIds.length === 0);
   // Summarize a bulk apply/restore. On failure, name the failing tools and
@@ -380,7 +412,7 @@
       </div>
 
       <div class="sidebar-scroll">
-        <ProvidersCard {providers} {tools} {saving}
+        <ProvidersCard bind:this={providersCard} {providers} {tools} {saving}
           onAdd={addProvider} onUpdate={updateProvider} onRemove={removeProvider}
           onSetActive={setActiveProvider} onToolProviderChange={changeToolProvider} />
         <section class="health-card" aria-labelledby="health-title">
@@ -431,6 +463,10 @@
         {:else if loadError}
           <div class="state-card error" role="alert"><div><strong>We couldn't load your tools</strong><span>{loadError}</span></div><button class="btn-primary" type="button" onclick={load}>Try again</button></div>
         {:else}
+          {#if showOnboarding}
+            <OnboardingChecklist providerDone={providerStepDone} modelDone={modelStepDone} applyDone={applyStepDone}
+              onAddProvider={() => providersCard?.openAddProvider()} onShowTools={showTools} onDismiss={dismissOnboarding} />
+          {/if}
           {#if installLog}
             <div class="install-log" class:ok={installLog.ok} aria-label="Last command result">
               <span class="install-mark" aria-hidden="true">{installLog.ok ? "✓" : "!"}</span>
@@ -442,9 +478,9 @@
             </div>
           {/if}
           {#if tools.length === 0}
-            <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌘</div><h2>No tools detected</h2><p>Install a supported AI coding tool, then refresh this workspace.</p></div>
+            <div class="empty-state" bind:this={toolsAnchorEl}><div class="empty-icon" aria-hidden="true">⌘</div><h2>No tools detected</h2><p>Install a supported AI coding tool, then refresh this workspace.</p></div>
           {:else}
-            <div class="tool-grid">
+            <div class="tool-grid" bind:this={toolsAnchorEl}>
               {#each tools as t (t.id)}
                 <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")} {providers}
                   onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel}

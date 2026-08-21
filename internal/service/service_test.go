@@ -671,6 +671,42 @@ func TestSetToolApplyModePersistsAndValidates(t *testing.T) {
 	}
 }
 
+// TestDismissOnboardingPersists: the flag defaults to false (old settings
+// files have no field), DismissOnboarding persists true, and the flag
+// survives a reload through a fresh store on the same file.
+func TestDismissOnboardingPersists(t *testing.T) {
+	svc := newTestService(t, &fakeAdapter{id: "alpha", name: "Alpha"})
+
+	dismissed, err := svc.OnboardingDismissed()
+	if err != nil {
+		t.Fatalf("OnboardingDismissed: %v", err)
+	}
+	if dismissed {
+		t.Fatal("OnboardingDismissed = true on a fresh store, want false")
+	}
+
+	if err := svc.DismissOnboarding(); err != nil {
+		t.Fatalf("DismissOnboarding: %v", err)
+	}
+	dismissed, err = svc.OnboardingDismissed()
+	if err != nil {
+		t.Fatalf("OnboardingDismissed after dismiss: %v", err)
+	}
+	if !dismissed {
+		t.Fatal("OnboardingDismissed = false after DismissOnboarding, want true")
+	}
+
+	// Simulate an app restart: a new store over the same file must still
+	// report the dismissal.
+	st, err := settings.NewStore(storeFrom(svc).Path).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !st.OnboardingDismissed {
+		t.Fatal("OnboardingDismissed not persisted across reload")
+	}
+}
+
 // TestSetToolProviderPersistsAndValidates: a managed provider persists, an
 // unknown one is rejected, "" clears the entry, and an unknown tool errors.
 func TestSetToolProviderPersistsAndValidates(t *testing.T) {

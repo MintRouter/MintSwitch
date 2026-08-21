@@ -43,6 +43,11 @@ type State struct {
 	// absent entry — the default, including every settings file saved before
 	// the mode existed) applies only the selected model.
 	ToolApplyModes map[string]string `json:"tool_apply_modes,omitempty"`
+	// OnboardingDismissed records that the user dismissed the first-run
+	// "Get started" checklist, so it never reappears after a restart. It is
+	// additive and omitempty: settings files saved before the field existed
+	// simply decode to false (checklist shown until completed or dismissed).
+	OnboardingDismissed bool `json:"onboarding_dismissed,omitempty"`
 
 	// LegacyProfile is the pre-provider active_profile shape (v1 single-key or
 	// Wave 2 multi-key). It is read only so migrate() can convert it into
