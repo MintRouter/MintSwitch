@@ -128,6 +128,7 @@
   let formId = $state("");
   let formDialogEl = $state<HTMLDivElement | null>(null);
   let formNameEl = $state<HTMLInputElement | null>(null);
+  let formKeyEl = $state<HTMLInputElement | null>(null);
   let formName = $state("");
   let formNote = $state("");
   let formBaseUrl = $state("");
@@ -156,6 +157,18 @@
     isHttpUrl(formBase.url) && (!!formKey.trim() || storedKeyUsable),
   );
 
+  // Visible (non-tooltip) explanation for why "Fetch models" is disabled, so
+  // the next step is never hidden behind a hover.
+  const fetchDisabledReason = $derived(
+    canFetch
+      ? ""
+      : isEdit && !!editing?.has_key && isHttpUrl(formBase.url)
+        ? "Endpoint changed — enter the API key for the new endpoint to fetch models."
+        : !isHttpUrl(formBase.url)
+          ? "Enter a valid API endpoint (https://…) to fetch models."
+          : "Enter the API key to fetch models.",
+  );
+
   // The backend requires name + key + base URL + a default model
   // (core.Provider.Validate); on Edit a blank key keeps the stored one.
   const canSave = $derived(
@@ -173,6 +186,38 @@
   const formDirty = $derived(formOpen && (!!formKey || formSnapshot() !== formInitial));
   // Confirmation shown when Esc/Cancel would discard a dirty form.
   let discardOpen = $state(false);
+
+  // ---- Presets (Add only) ----
+  // Common OpenAI-compatible endpoints so a new provider needs no manual URL
+  // typing: picking one prefills name + base URL and moves focus to the API
+  // key (the prefill itself marks the form dirty via the snapshot). "Custom"
+  // keeps the blank form for anything else. Never shown on Edit.
+  const presets = [
+    { id: "mintrouter", label: "MintRouter.AI", name: "MintRouter.AI", baseUrl: "https://api.mintrouter.ai/v1" },
+    { id: "openrouter", label: "OpenRouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
+    { id: "openai", label: "OpenAI", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
+    { id: "custom", label: "Custom", name: "", baseUrl: "" },
+  ];
+  let selectedPreset = $state("");
+
+  function applyPreset(id: string): void {
+    selectedPreset = id;
+    if (id === "custom") {
+      // Clear the prefill only while it is still an untouched preset value, so
+      // switching to Custom never throws away hand-typed input.
+      if (presets.some((p) => p.id !== "custom" && formName === p.name && formBaseUrl === p.baseUrl)) {
+        formName = "";
+        formBaseUrl = "";
+      }
+      formNameEl?.focus();
+      return;
+    }
+    const p = presets.find((q) => q.id === id);
+    if (!p) return;
+    formName = p.name;
+    formBaseUrl = p.baseUrl;
+    formKeyEl?.focus();
+  }
 
   function openForm(p: ProviderView | null): void {
     formId = p?.id ?? "";
@@ -197,6 +242,9 @@
     dropdownOpen = false;
     activeIndex = -1;
     discardOpen = false;
+    selectedPreset = "";
+    autoFetchDone = new Set();
+    cancelAutoFetch();
     formInitial = formSnapshot();
     formOpen = true;
     // Edit opens with a stored endpoint + key: fetching here sends a blank
@@ -206,11 +254,22 @@
     if (p) void fetchModels();
   }
 
+  // Exposed to App (via bind:this) so the onboarding checklist's step-1
+  // action can jump straight into the Add form. Manage opens first so the
+  // usual navigation holds: Esc/Cancel returns to the provider list, and
+  // closing everything restores focus to the checklist button.
+  export function openAddProvider(): void {
+    if (!manageOpen) openManage();
+    openForm(null);
+  }
+
   function closeForm(): void {
     formOpen = false;
     formId = "";
     formKey = "";
     discardOpen = false;
+    cancelAutoFetch();
+    autoFetchDone = new Set();
     fetchSeq++;
     fetching = false;
     closeDropdown();
@@ -224,11 +283,11 @@
   }
 
   // ---- Fetching the endpoint's advertised models ----
-  // Runs only on an explicit user action — the "Fetch models" button, or
-  // opening Edit (stored endpoint + stored key) — via the read-only
-  // FetchEndpointModels binding: a typed key travels only for that one
-  // request and is never stored or echoed back. Failures degrade to a quiet
-  // notice — manual entry and Save keep working regardless.
+  // Runs on an explicit user action — the "Fetch models" button, or opening
+  // Edit (stored endpoint + stored key) — or on the one-shot auto-fetch below,
+  // via the read-only FetchEndpointModels binding: a typed key travels only
+  // for that one request and is never stored or echoed back. Failures degrade
+  // to a quiet notice — manual entry and Save keep working regardless.
   let fetching = $state(false);
   let fetchAttempted = $state(false);
   let fetchError = $state("");
@@ -247,6 +306,10 @@
   async function fetchModels(): Promise<void> {
     if (!canFetch || fetching) return;
     const seq = ++fetchSeq;
+    // Any fetch with a typed key marks its URL+key pair as attempted, so the
+    // one-shot auto-fetch never repeats a pair that already ran (auto or
+    // manual) — editing either field arms it again.
+    if (formKey.trim()) autoFetchDone.add(`${formBase.url}\u0000${formKey}`);
     fetching = true;
     fetchError = "";
     try {
@@ -287,6 +350,36 @@
       fetchAttempted = true;
       fetching = false;
     }
+  }
+
+  // ---- Auto-fetch on a typed key ----
+  // Once the endpoint URL is valid and a key has been TYPED (never the stored
+  // key — that path stays behind storedKeyUsable and explicit actions), models
+  // fetch on key blur or ~600ms after typing pauses. Each URL+key pair
+  // auto-fetches at most once (autoFetchDone) so a failing endpoint never
+  // loops; the Fetch button remains the manual retry. Plain variables, not
+  // $state — only touched inside handlers.
+  let autoFetchDone = new Set<string>();
+  let autoFetchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelAutoFetch(): void {
+    if (autoFetchTimer != null) {
+      clearTimeout(autoFetchTimer);
+      autoFetchTimer = null;
+    }
+  }
+
+  function tryAutoFetch(): void {
+    cancelAutoFetch();
+    if (!formOpen || fetching) return;
+    if (!formKey.trim() || !isHttpUrl(formBase.url)) return;
+    if (autoFetchDone.has(`${formBase.url}\u0000${formKey}`)) return;
+    void fetchModels();
+  }
+
+  function scheduleAutoFetch(): void {
+    cancelAutoFetch();
+    autoFetchTimer = setTimeout(tryAutoFetch, 600);
   }
 
   // ---- Models combobox (chips-in-field + checkbox dropdown) ----
@@ -630,6 +723,19 @@
       tabindex="-1" bind:this={formDialogEl}>
       <h2 class="title" id="pv-form-title">{isEdit ? `Edit ${editing?.name ?? "provider"}` : "Add a provider"}</h2>
       <div class="add-body">
+        {#if !isEdit}
+          <div class="add-field">
+            <span class="add-label" id="pv-preset-label">Start from a preset</span>
+            <div class="preset-row" role="group" aria-labelledby="pv-preset-label">
+              {#each presets as p (p.id)}
+                <button class="preset-btn" type="button" aria-pressed={selectedPreset === p.id}
+                  class:selected={selectedPreset === p.id} onclick={() => applyPreset(p.id)}>
+                  {p.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
         <div class="add-field">
           <label class="add-label" for="pv-form-name">Provider name</label>
           <input class="field-input" id="pv-form-name" type="text" bind:value={formName}
@@ -644,7 +750,8 @@
         <div class="add-field">
           <label class="add-label" for="pv-form-base">API endpoint</label>
           <input class="field-input" id="pv-form-base" type="url" bind:value={formBaseUrl}
-            placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false" />
+            placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
+            onblur={tryAutoFetch} />
         </div>
         {#if formBase.upgraded}
           <p class="field-notice">
@@ -653,9 +760,13 @@
         {/if}
         <div class="add-field">
           <label class="add-label" for="pv-form-key">API key</label>
+          <!-- Typing (debounced) or leaving the field triggers the one-shot
+               auto-fetch; the URL field only triggers on blur so a typed key
+               never travels to a half-typed endpoint. -->
           <input class="field-input" id="pv-form-key" type="password" bind:value={formKey}
+            bind:this={formKeyEl}
             placeholder={isEdit ? "Unchanged unless typed" : "Enter the API key"}
-            autocomplete="off" />
+            autocomplete="off" oninput={scheduleAutoFetch} onblur={tryAutoFetch} />
         </div>
 
         <div class="add-field">
@@ -758,6 +869,9 @@
               </div>
             {/if}
           </div>
+          {#if fetchDisabledReason}
+            <p class="field-hint" role="status">{fetchDisabledReason}</p>
+          {/if}
           {#if fetchError}
             <p class="models-error" role="status">
               <strong>Model list unavailable.</strong>
@@ -766,6 +880,8 @@
           {/if}
           {#if fModels.length && !fModels.includes(fModel)}
             <p class="field-hint">Pick a default model by clicking one of the chips above.</p>
+          {:else if fModels.length >= 2}
+            <p class="field-hint">Click a model to make it the default.</p>
           {:else if !fModels.length}
             <p class="field-hint">At least one model is required; the first one added becomes the default.</p>
           {/if}
@@ -921,6 +1037,26 @@
   }
   .add-field .field-input { width: 100%; }
   .note-input { resize: vertical; min-height: 2.4rem; font-family: inherit; }
+
+  /* Preset picker (Add only): pill buttons that prefill name + endpoint. */
+  .preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .preset-btn {
+    padding: 0.3rem 0.7rem;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  }
+  .preset-btn:hover { border-color: var(--border-strong); }
+  .preset-btn.selected {
+    color: var(--accent-soft-text);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
 
   /* Manage dialog header row: the list label left, quiet-accent Add action
      right — the single entry point into the unified Add/Edit form. */
