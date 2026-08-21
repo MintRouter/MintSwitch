@@ -22,7 +22,7 @@ Unicode true
 ## !define INFO_PROJECTNAME    "my-project" # Default "MintSwitch"
 ## !define INFO_COMPANYNAME    "My Company" # Default "My Company"
 ## !define INFO_PRODUCTNAME    "My Product Name" # Default "MintSwitch"
-## !define INFO_PRODUCTVERSION "1.5.1"     # Default "0.1.0"
+## !define INFO_PRODUCTVERSION "1.6.0"     # Default "0.1.0"
 ## !define INFO_COPYRIGHT      "(c) Now, My Company" # Default "© 2026, My Company"
 ###
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
@@ -33,7 +33,7 @@ Unicode true
 ####
 !define INFO_COMPANYNAME    "MintRouter.AI"
 !define INFO_PRODUCTNAME    "MintSwitch By MintRouter.AI"
-!define INFO_PRODUCTVERSION "1.5.1"
+!define INFO_PRODUCTVERSION "1.6.0"
 !define INFO_COPYRIGHT      "© 2026 MintRouter.AI"
 ####
 ## Include the wails tools
