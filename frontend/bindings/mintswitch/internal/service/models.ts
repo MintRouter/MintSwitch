@@ -57,12 +57,14 @@ export interface ProviderView {
     "small_fast_model": string;
 
     /**
-     * OpusModel, SonnetModel and HaikuModel are the provider's optional Claude
-     * Code tier pins; empty means the tier follows the default Model.
+     * OpusModel, SonnetModel, HaikuModel and FableModel are the provider's
+     * optional Claude Code tier pins; empty means the tier follows the default
+     * Model.
      */
     "opus_model": string;
     "sonnet_model": string;
     "haiku_model": string;
+    "fable_model": string;
     "has_key": boolean;
     "active": boolean;
 }
