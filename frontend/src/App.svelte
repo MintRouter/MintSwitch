@@ -446,9 +446,9 @@
           {:else}
             <div class="tool-grid">
               {#each tools as t (t.id)}
-                <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")}
+                <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")} {providers}
                   onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel}
-                  onApplyModeChange={changeToolApplyMode} />
+                  onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider} />
               {/each}
             </div>
           {/if}
