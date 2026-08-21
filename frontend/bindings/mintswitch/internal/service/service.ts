@@ -51,6 +51,15 @@ export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult
 }
 
 /**
+ * DismissOnboarding persists the dismissal of the first-run checklist so it
+ * never reappears after a restart. It is deliberately one-way: the checklist
+ * is a first-run aid, and un-dismissing has no UI.
+ */
+export function DismissOnboarding(): $CancellablePromise<void> {
+    return $Call.ByID(1273431029);
+}
+
+/**
  * FetchEndpointModels queries {baseURL}/models like [Service.FetchProviderModels]
  * but for endpoint values that may not be saved yet, so the Add/Edit dialog
  * can list models before the provider is persisted. It returns each model's
@@ -107,6 +116,16 @@ export function ListProviders(): $CancellablePromise<$models.ProviderView[] | nu
  */
 export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
     return $Call.ByID(3280393555);
+}
+
+/**
+ * OnboardingDismissed reports whether the user dismissed the first-run
+ * "Get started" checklist. Settings files saved before the flag existed
+ * report false, so existing users simply see the checklist until their
+ * state completes it (or they dismiss it).
+ */
+export function OnboardingDismissed(): $CancellablePromise<boolean> {
+    return $Call.ByID(3634241590);
 }
 
 /**
