@@ -13,7 +13,6 @@
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import PromoBanner from "./lib/PromoBanner.svelte";
-  import OnboardingChecklist from "./lib/OnboardingChecklist.svelte";
 
   let tools = $state<ToolView[]>([]);
   let providers = $state<ProviderView[]>([]);
@@ -98,21 +97,9 @@
       await refresh();
     } catch (e) {
       loadError = errMsg(e);
+    } finally {
       loading = false;
-      return;
     }
-    // The settings flags ride along with the initial load but must never fail
-    // it: the tools/providers above already loaded fine. WHY the fallbacks: a
-    // failed read degrades to showing the first-run aids — the checklist
-    // self-hides once all steps are done, so a set-up user still never sees
-    // it, and an extra first-apply confirm costs one click at most.
-    const [dismissed, confirmed] = await Promise.allSettled([
-      Service.OnboardingDismissed(),
-      Service.ApplyConfirmed(),
-    ]);
-    onboardingDismissed = dismissed.status === "fulfilled" ? dismissed.value : false;
-    applyConfirmed = confirmed.status === "fulfilled" ? confirmed.value : false;
-    loading = false;
   }
 
   onMount(load);
@@ -201,47 +188,21 @@
     }
   }
 
-  // The apply itself; applyOne() runs it directly once the one-time
-  // first-apply explanation has been acknowledged.
-  function runApplyOne(id: string): Promise<void> {
-    return withBusy(id, async () => {
-      try {
-        const r = await Service.ApplyOne(id);
-        flash(r.message || "Applied.", "success");
-      } catch (e) {
-        flash(errMsg(e));
-      }
-      await safeRefresh();
-    });
-  }
-
-  // Persist the one-time first-apply acknowledgement optimistically (same
-  // pattern as dismissOnboarding): a failed persist only means the dialog
-  // shows once more on the next launch.
-  function markApplyConfirmed(): void {
-    applyConfirmed = true;
-    Service.ConfirmApply().catch((e) => flash(errMsg(e)));
-  }
-
-  // First apply on this install: explain exactly which file is written, that
-  // the original is backed up and that Restore is one click. Later applies
-  // (this one included, once acknowledged) run straight — the trust message
-  // only needs to be read once.
   function applyOne(id: string): void {
-    if (applyConfirmed) {
-      void runApplyOne(id);
-      return;
-    }
-    const t = tools.find((x) => x.id === id);
-    const files = (t?.config_paths ?? []).join("\n");
+    const name = tools.find((t) => t.id === id)?.name ?? id;
     ask({
-      title: `Apply configuration to ${t?.name ?? id}?`,
-      message: `MintSwitch writes your provider settings to:\n\n${files || "the tool's config file"}\n\nThe original is backed up first — Restore brings it back with one click. This is only asked once.`,
+      title: `Apply profile to ${name}?`,
+      message: "This writes your profile to the tool's real config file (a backup is created first).",
       confirmLabel: "Apply",
-      action: () => {
-        markApplyConfirmed();
-        return runApplyOne(id);
-      },
+      action: () => withBusy(id, async () => {
+        try {
+          const r = await Service.ApplyOne(id);
+          flash(r.message || "Applied.", "success");
+        } catch (e) {
+          flash(errMsg(e));
+        }
+        await safeRefresh();
+      }),
     });
   }
 
@@ -348,54 +309,6 @@
   const installedCount = $derived(tools.filter((t) => t.installed).length);
   const appliedCount = $derived(tools.filter((t) => t.status === "applied_by_mintswitch").length);
   const modifiedCount = $derived(tools.filter((t) => t.status === "modified_externally").length);
-
-  // Shown by the "No tools detected" empty state so a new user knows exactly
-  // which tools MintSwitch can manage. IDs match builtinLogoIds (ui.ts), so
-  // every entry has a bundled /logos/<id>.svg icon.
-  const supportedTools = [
-    { id: "claude-code", name: "Claude Code" },
-    { id: "claude-desktop", name: "Claude Desktop" },
-    { id: "codex", name: "Codex" },
-    { id: "opencode", name: "OpenCode" },
-    { id: "pi", name: "Pi" },
-  ];
-
-  // ---- First-run onboarding checklist ----
-  // Each step is derived from real state so it can never disagree with the
-  // app: (1) a provider exists, (2) a model is available/selected, (3) at
-  // least one tool got the config applied. The checklist hides itself once
-  // all three hold, or permanently after an explicit dismiss (persisted).
-  let onboardingDismissed = $state(true);
-  // One-time first-apply acknowledgement (persisted). Defaults true so the
-  // extra dialog can never flash for set-up users before load() resolves;
-  // load() lowers it for genuine first-timers.
-  let applyConfirmed = $state(true);
-  let providersCard = $state<ReturnType<typeof ProvidersCard>>();
-  let toolsAnchorEl = $state<HTMLElement | null>(null);
-  let headingEl = $state<HTMLElement | null>(null);
-  const providerStepDone = $derived(!!activeProvider);
-  const modelStepDone = $derived(
-    tools.some((t) => !!t.selected_model) || (activeProvider?.models?.length ?? 0) > 0,
-  );
-  const applyStepDone = $derived(appliedCount > 0);
-  const showOnboarding = $derived(
-    !onboardingDismissed && !(providerStepDone && modelStepDone && applyStepDone),
-  );
-
-  // Optimistic dismiss: hide immediately, then persist. A failed persist only
-  // means the checklist returns on the next launch, so a toast is enough.
-  // The dismiss button unmounts with the checklist, so keyboard focus would
-  // silently drop to <body>; parking it on the main heading keeps the tab
-  // order predictable.
-  function dismissOnboarding(): void {
-    onboardingDismissed = true;
-    headingEl?.focus();
-    Service.DismissOnboarding().catch((e) => flash(errMsg(e)));
-  }
-
-  function showTools(): void {
-    toolsAnchorEl?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
   const canApplyAll = $derived(!!activeProvider && installedCount > 0 && busyIds.length === 0);
   const canRestoreAll = $derived(tools.some((t) => t.installed && t.status !== "default" && t.status !== "not_installed") && busyIds.length === 0);
   // Summarize a bulk apply/restore. On failure, name the failing tools and
@@ -415,28 +328,19 @@
     flash(`${verb} failed for ${names}${detail}`);
   }
 
-  // Apply-all keeps its usual confirm (it touches every tool), but on a
-  // first-ever apply the message also carries the backup/Restore explanation
-  // and counts as the one-time acknowledgement.
   function applyAll(): void {
-    const firstTime = !applyConfirmed;
     ask({
       title: "Apply to all installed tools?",
-      message: firstTime
-        ? "MintSwitch writes your provider settings to each installed tool's real config file. Every original is backed up first — Restore brings it back with one click."
-        : "MintSwitch will back up each existing configuration, then apply the effective provider and model to every installed tool.",
+      message: "MintSwitch will back up each existing configuration, then apply the effective provider and model to every installed tool.",
       confirmLabel: "Apply to all",
-      action: () => {
-        if (firstTime) markApplyConfirmed();
-        return withBusy("__all__", async () => {
-          try {
-            summarizeBulk(await Service.ApplyAll(), "Apply");
-          } catch (e) {
-            flash(errMsg(e));
-          }
-          await safeRefresh();
-        });
-      },
+      action: () => withBusy("__all__", async () => {
+        try {
+          summarizeBulk(await Service.ApplyAll(), "Apply");
+        } catch (e) {
+          flash(errMsg(e));
+        }
+        await safeRefresh();
+      }),
     });
   }
 
@@ -476,29 +380,15 @@
       </div>
 
       <div class="sidebar-scroll">
-        <ProvidersCard bind:this={providersCard} {providers} {tools} {saving}
+        <ProvidersCard {providers} {tools} {saving}
           onAdd={addProvider} onUpdate={updateProvider} onRemove={removeProvider}
           onSetActive={setActiveProvider} onToolProviderChange={changeToolProvider} />
         <section class="health-card" aria-labelledby="health-title">
           <div class="section-label" id="health-title">Workspace health</div>
-          <!-- Each stat is a keyboard-focusable tooltip trigger (hover or Tab)
-               explaining what the number means — tabindex is intentional. -->
           <div class="health-grid">
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-            <div class="health-stat" tabindex="0" aria-describedby="health-tip-installed">
-              <strong>{installedCount}</strong><span>Installed</span>
-              <span class="health-tip" role="tooltip" id="health-tip-installed">AI tools detected on this machine.</span>
-            </div>
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-            <div class="health-stat success" tabindex="0" aria-describedby="health-tip-applied">
-              <strong>{appliedCount}</strong><span>Applied</span>
-              <span class="health-tip" role="tooltip" id="health-tip-applied">Tools using a configuration applied by MintSwitch.</span>
-            </div>
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-            <div class="health-stat" class:warning={modifiedCount > 0} tabindex="0" aria-describedby="health-tip-modified">
-              <strong>{modifiedCount}</strong><span>Modified</span>
-              <span class="health-tip" role="tooltip" id="health-tip-modified">Tool configs changed outside MintSwitch since the last apply.</span>
-            </div>
+            <div class="health-stat"><strong>{installedCount}</strong><span>Installed</span></div>
+            <div class="health-stat success"><strong>{appliedCount}</strong><span>Applied</span></div>
+            <div class="health-stat" class:warning={modifiedCount > 0}><strong>{modifiedCount}</strong><span>Modified</span></div>
           </div>
         </section>
       </div>
@@ -523,7 +413,7 @@
 
     <main class="main-panel">
       <header class="main-header">
-        <div class="heading-copy"><div class="eyebrow">Workspace</div><h1 tabindex="-1" bind:this={headingEl}>Your AI tools</h1><p>Choose a model and keep every local tool in sync.</p></div>
+        <div class="heading-copy"><div class="eyebrow">Workspace</div><h1>Your AI tools</h1><p>Choose a model and keep every local tool in sync.</p></div>
         <div class="header-actions">
           <button class="icon-button" type="button" onclick={() => void redetect()} disabled={refreshing || loading} aria-label="Refresh detected tools" title="Refresh detected tools">
             <svg class:spinning={refreshing} viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3" /><path d="M20 4v7h-7" /></svg>
@@ -541,10 +431,6 @@
         {:else if loadError}
           <div class="state-card error" role="alert"><div><strong>We couldn't load your tools</strong><span>{loadError}</span></div><button class="btn-primary" type="button" onclick={load}>Try again</button></div>
         {:else}
-          {#if showOnboarding}
-            <OnboardingChecklist providerDone={providerStepDone} modelDone={modelStepDone} applyDone={applyStepDone}
-              onAddProvider={() => providersCard?.openAddProvider()} onShowTools={showTools} onDismiss={dismissOnboarding} />
-          {/if}
           {#if installLog}
             <div class="install-log" class:ok={installLog.ok} aria-label="Last command result">
               <span class="install-mark" aria-hidden="true">{installLog.ok ? "✓" : "!"}</span>
@@ -556,26 +442,13 @@
             </div>
           {/if}
           {#if tools.length === 0}
-            <div class="empty-state" bind:this={toolsAnchorEl}>
-              <div class="empty-icon" aria-hidden="true">⌘</div>
-              <h2>No tools detected</h2>
-              <p>Install one of these supported tools, then refresh this workspace.</p>
-              <ul class="supported-tools" aria-label="Supported tools">
-                {#each supportedTools as st (st.id)}
-                  <li><img src={`/logos/${st.id}.svg`} alt="" width="18" height="18" loading="lazy" /><span>{st.name}</span></li>
-                {/each}
-              </ul>
-              <button class="btn-primary" type="button" onclick={() => void redetect()} disabled={refreshing || loading}>
-                {refreshing ? "Refreshing…" : "Refresh"}
-              </button>
-            </div>
+            <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌘</div><h2>No tools detected</h2><p>Install a supported AI coding tool, then refresh this workspace.</p></div>
           {:else}
-            <div class="tool-grid" bind:this={toolsAnchorEl}>
+            <div class="tool-grid">
               {#each tools as t (t.id)}
                 <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")} {providers}
                   onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel}
-                  onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider}
-                  onEditProvider={(id) => providersCard?.openEditProvider(id)} />
+                  onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider} />
               {/each}
             </div>
           {/if}
@@ -591,16 +464,12 @@
 <style>
   .app-shell{height:100dvh;display:flex;flex-direction:column;background:var(--ink);overflow:hidden}.titlebar{flex:0 0 30px;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--border);background:var(--chrome);color:var(--muted);font-size:11px;font-weight:600;--wails-draggable:drag}.workspace{flex:1;min-height:0;display:grid;grid-template-columns:292px minmax(0,1fr)}
   .sidebar{min-height:0;display:flex;flex-direction:column;padding:16px 14px 12px;background:var(--sidebar);border-right:1px solid var(--border)}.brand-block{display:flex;align-items:center;gap:10px;padding:0 4px 16px}.brand-mark{width:38px;height:38px;display:grid;place-items:center;color:var(--accent);border-radius:11px;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 18%,transparent)}.brand-name{margin:0;font-size:16px;line-height:1.15;font-weight:750;letter-spacing:-.025em}.brand-tagline{margin:3px 0 0;color:var(--muted);font-size:11px}.sidebar-scroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:11px;padding:1px 2px 12px}.sidebar-scroll::-webkit-scrollbar,.content-scroll::-webkit-scrollbar{width:7px}.sidebar-scroll::-webkit-scrollbar-thumb,.content-scroll::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:99px;border:2px solid transparent;background-clip:padding-box}
-  .health-card{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card)}.section-label,.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.health-grid{position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}.health-stat{padding:10px 2px;text-align:center;border-radius:10px;background:var(--surface-2);cursor:help}.health-stat:focus-visible{outline:none;box-shadow:var(--focus)}.health-stat strong{display:block;font-size:18px;line-height:1}.health-stat span{display:block;margin-top:6px;color:var(--muted);font-size:11px}.health-stat.success strong{color:var(--ok)}.health-stat.warning strong{color:var(--warn)}
-  /* Tooltips span the card width (anchored to .health-grid, not the narrow
-     stat) so they never overflow the sidebar; shown on hover or keyboard focus. */
-  .health-stat .health-tip{position:absolute;left:0;right:0;bottom:calc(100% + 7px);z-index:5;margin:0;padding:7px 9px;border:1px solid var(--border-strong);border-radius:9px;background:var(--surface);box-shadow:var(--shadow-pop);color:var(--text);font-size:10.5px;font-weight:500;line-height:1.45;text-align:left;opacity:0;visibility:hidden;transition:opacity .12s;pointer-events:none}.health-stat:hover .health-tip,.health-stat:focus-visible .health-tip{opacity:1;visibility:visible}
+  .health-card{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card)}.section-label,.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.health-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}.health-stat{padding:10px 2px;text-align:center;border-radius:10px;background:var(--surface-2)}.health-stat strong{display:block;font-size:18px;line-height:1}.health-stat span{display:block;margin-top:6px;color:var(--muted);font-size:11px}.health-stat.success strong{color:var(--ok)}.health-stat.warning strong{color:var(--warn)}
   aside.sidebar :global(.promo-row.promo-row){margin:0 2px 12px}
   .sidebar-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 2px 0;border-top:1px solid var(--border)}.security-note{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11.5px}.security-note svg{color:var(--ok)}.icon-button{width:34px;min-height:34px;padding:0;display:inline-grid;place-items:center;flex:0 0 auto;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:9px;cursor:pointer;transition:.15s}.icon-button:hover:not(:disabled){color:var(--text);border-color:var(--border-strong);background:var(--surface-hover)}.icon-button:disabled{opacity:.45;cursor:default}
-  .main-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.main-header{flex:0 0 auto;min-height:94px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--border)}.heading-copy h1{margin:4px 0 3px;font-size:22px;line-height:1.15;font-weight:760;letter-spacing:-.035em}.heading-copy h1:focus{outline:none}.heading-copy p{margin:0;color:var(--muted);font-size:12px}.header-actions{display:flex;align-items:center;gap:7px}.header-actions .btn-primary,.header-actions .btn-ghost{min-height:34px}.bulk-apply{box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 24%,transparent)}.spinning{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+  .main-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.main-header{flex:0 0 auto;min-height:94px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--border)}.heading-copy h1{margin:4px 0 3px;font-size:22px;line-height:1.15;font-weight:760;letter-spacing:-.035em}.heading-copy p{margin:0;color:var(--muted);font-size:12px}.header-actions{display:flex;align-items:center;gap:7px}.header-actions .btn-primary,.header-actions .btn-ghost{min-height:34px}.bulk-apply{box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 24%,transparent)}.spinning{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
   .content-scroll{flex:1;min-height:0;overflow-y:auto;padding:16px 22px 24px}.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
   .state-card,.empty-state{min-height:180px;display:flex;align-items:center;justify-content:center;gap:13px;padding:24px;border:1px dashed var(--border-strong);border-radius:16px;background:var(--surface);color:var(--muted)}.state-card>div{display:flex;flex-direction:column;gap:3px}.state-card strong{color:var(--text);font-size:13px}.state-card span{font-size:11px}.loader{width:20px;height:20px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}.empty-state{flex-direction:column;text-align:center}.empty-state h2{margin:0;color:var(--text);font-size:16px}.empty-state p{margin:0;font-size:11px}.empty-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--surface-2);color:var(--accent)}
-  .supported-tools{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin:0;padding:0;list-style:none}.supported-tools li{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border);border-radius:99px;background:var(--surface-2);color:var(--text);font-size:11px;font-weight:600}.supported-tools img{display:block;width:18px;height:18px;border-radius:5px}.empty-state .btn-primary{margin-top:2px}
   .install-log{display:flex;align-items:flex-start;gap:9px;margin-bottom:12px;padding:11px;border:1px solid color-mix(in srgb,var(--danger) 25%,var(--border));border-radius:13px;background:color-mix(in srgb,var(--danger) 5%,var(--surface))}.install-log.ok{border-color:color-mix(in srgb,var(--ok) 25%,var(--border));background:color-mix(in srgb,var(--ok) 5%,var(--surface))}.install-mark{width:22px;height:22px;display:grid;place-items:center;border-radius:50%;color:var(--danger);font-weight:800}.install-log.ok .install-mark{color:var(--ok)}.install-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}.install-copy strong{font-size:11px}.install-copy code,.install-copy p{margin:0;color:var(--muted);font-size:10px;word-break:break-all}.install-copy pre{max-height:130px;overflow:auto;margin:5px 0 0;padding:7px;border-radius:8px;background:var(--surface-2);font-size:9.5px;white-space:pre-wrap}.toast{top:42px;right:16px;display:flex;align-items:center;gap:8px}.toast-dismiss{margin-left:2px;padding:0 2px;border:0;background:none;color:inherit;font-size:14px;line-height:1;cursor:pointer;opacity:.7}.toast-dismiss:hover{opacity:1}.toast-icon{width:19px;height:19px;display:grid;place-items:center;border-radius:50%;background:color-mix(in srgb,currentColor 12%,transparent);font-size:10px;font-weight:800}.toast.success{color:var(--ok)}.toast.error{color:var(--danger-strong)}
   @media(max-width:860px){.workspace{grid-template-columns:252px minmax(0,1fr)}.sidebar{padding-inline:11px}.main-header,.content-scroll{padding-inline:16px}.bulk-restore{display:none}.tool-grid{grid-template-columns:1fr}}@media(max-height:620px){.main-header{min-height:80px;padding-block:11px}.heading-copy p{display:none}.content-scroll{padding-top:13px}}
 </style>

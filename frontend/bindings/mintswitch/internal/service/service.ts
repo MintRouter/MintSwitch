@@ -42,41 +42,12 @@ export function ApplyAll(): $CancellablePromise<$models.ToolOpResult[] | null> {
 }
 
 /**
- * ApplyConfirmed reports whether the user already acknowledged the
- * first-apply explanation (which config file is written, backup + one-click
- * Restore). Settings files saved before the flag existed report false, so
- * the explanation is shown exactly once per install.
- */
-export function ApplyConfirmed(): $CancellablePromise<boolean> {
-    return $Call.ByID(665783293);
-}
-
-/**
  * ApplyOne applies the active profile to the single tool identified by toolID,
  * honoring the per-tool model selection. It first validates the saved profile
  * and returns an error for an unknown tool or an invalid/missing profile.
  */
 export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult> {
     return $Call.ByID(1465759944, toolID);
-}
-
-/**
- * ConfirmApply persists the user's acknowledgement of the first-apply
- * explanation so it is never shown again on this install. Like
- * DismissOnboarding it is deliberately one-way: the dialog is a first-use
- * aid and un-confirming has no UI.
- */
-export function ConfirmApply(): $CancellablePromise<void> {
-    return $Call.ByID(2945525316);
-}
-
-/**
- * DismissOnboarding persists the dismissal of the first-run checklist so it
- * never reappears after a restart. It is deliberately one-way: the checklist
- * is a first-run aid, and un-dismissing has no UI.
- */
-export function DismissOnboarding(): $CancellablePromise<void> {
-    return $Call.ByID(1273431029);
 }
 
 /**
@@ -136,16 +107,6 @@ export function ListProviders(): $CancellablePromise<$models.ProviderView[] | nu
  */
 export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
     return $Call.ByID(3280393555);
-}
-
-/**
- * OnboardingDismissed reports whether the user dismissed the first-run
- * "Get started" checklist. Settings files saved before the flag existed
- * report false, so existing users simply see the checklist until their
- * state completes it (or they dismiss it).
- */
-export function OnboardingDismissed(): $CancellablePromise<boolean> {
-    return $Call.ByID(3634241590);
 }
 
 /**
