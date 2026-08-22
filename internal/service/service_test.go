@@ -707,6 +707,42 @@ func TestDismissOnboardingPersists(t *testing.T) {
 	}
 }
 
+// TestConfirmApplyPersists: the flag defaults to false (old settings files
+// have no field), ConfirmApply persists true, and the flag survives a reload
+// through a fresh store on the same file.
+func TestConfirmApplyPersists(t *testing.T) {
+	svc := newTestService(t, &fakeAdapter{id: "alpha", name: "Alpha"})
+
+	confirmed, err := svc.ApplyConfirmed()
+	if err != nil {
+		t.Fatalf("ApplyConfirmed: %v", err)
+	}
+	if confirmed {
+		t.Fatal("ApplyConfirmed = true on a fresh store, want false")
+	}
+
+	if err := svc.ConfirmApply(); err != nil {
+		t.Fatalf("ConfirmApply: %v", err)
+	}
+	confirmed, err = svc.ApplyConfirmed()
+	if err != nil {
+		t.Fatalf("ApplyConfirmed after confirm: %v", err)
+	}
+	if !confirmed {
+		t.Fatal("ApplyConfirmed = false after ConfirmApply, want true")
+	}
+
+	// Simulate an app restart: a new store over the same file must still
+	// report the confirmation.
+	st, err := settings.NewStore(storeFrom(svc).Path).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !st.ApplyConfirmed {
+		t.Fatal("ApplyConfirmed not persisted across reload")
+	}
+}
+
 // TestSetToolProviderPersistsAndValidates: a managed provider persists, an
 // unknown one is rejected, "" clears the entry, and an unknown tool errors.
 func TestSetToolProviderPersistsAndValidates(t *testing.T) {
