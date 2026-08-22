@@ -203,6 +203,11 @@ func TestApplyNewFile(t *testing.T) {
 			t.Fatalf("%s must not be written without model names: %+v", k, env)
 		}
 	}
+	// Single-model mode pins via ANTHROPIC_MODEL only; ANTHROPIC_DEFAULT_MODEL
+	// belongs to "All models" mode.
+	if _, present := env[envDefaultModel]; present {
+		t.Fatalf("%s must not be written in single-model mode: %+v", envDefaultModel, env)
+	}
 	if env[envDefaultHaiku] != p.SmallFastModel {
 		t.Fatalf("haiku tier must default to small fast model: %+v", env)
 	}
@@ -222,9 +227,10 @@ func TestApplyNewFile(t *testing.T) {
 }
 
 // TestApplyAllModelsSetsDiscoveryEnv proves "All models" mode writes
-// CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1, a single-model re-apply
-// removes it again, and a mode switch is detected via the fingerprint until
-// re-apply.
+// CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 plus ANTHROPIC_DEFAULT_MODEL
+// (so a /model pick persists) and removes ANTHROPIC_MODEL; a single-model
+// re-apply reverts all three, and a mode switch is detected via the
+// fingerprint until re-apply.
 func TestApplyAllModelsSetsDiscoveryEnv(t *testing.T) {
 	a, _ := newAdapter(t)
 	// Binary resolvable so Status reaches the config-reading branch.
@@ -238,6 +244,12 @@ func TestApplyAllModelsSetsDiscoveryEnv(t *testing.T) {
 	env := envOf(t, readSettings(t, res.ChangedPath))
 	if env[envModelDiscovery] != "1" {
 		t.Fatalf("%s = %v, want \"1\" in all mode", envModelDiscovery, env[envModelDiscovery])
+	}
+	if env[envDefaultModel] != p.Model {
+		t.Fatalf("%s = %v, want %q in all mode", envDefaultModel, env[envDefaultModel], p.Model)
+	}
+	if _, present := env[envModel]; present {
+		t.Fatalf("%s must be removed in all mode so /model picks persist: %+v", envModel, env)
 	}
 	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
 		t.Fatalf("want Applied in all mode, got %v", st)
@@ -254,6 +266,12 @@ func TestApplyAllModelsSetsDiscoveryEnv(t *testing.T) {
 	env = envOf(t, readSettings(t, a.settingsPath()))
 	if _, present := env[envModelDiscovery]; present {
 		t.Fatalf("%s not removed on single-model re-apply: %+v", envModelDiscovery, env)
+	}
+	if _, present := env[envDefaultModel]; present {
+		t.Fatalf("%s not removed on single-model re-apply: %+v", envDefaultModel, env)
+	}
+	if env[envModel] != p.Model {
+		t.Fatalf("%s = %v, want %q after single-model re-apply", envModel, env[envModel], p.Model)
 	}
 }
 
@@ -357,8 +375,8 @@ func TestApplyTierModelNames(t *testing.T) {
 	p.OpusModel = "gw/opus-x"
 	p.FableModel = "gw/fable-x"
 	p.ModelNames = map[string]string{
-		"gw/opus-x":  "Opus X",
-		"gw/fable-x": "Fable X",
+		"gw/opus-x":      "Opus X",
+		"gw/fable-x":     "Fable X",
 		p.SmallFastModel: "Fast Haiku", // resolved haiku tier (via SmallFastModel)
 	}
 	res, err := a.Apply(p)
@@ -920,6 +938,26 @@ func TestLegacyFourKeyRemnantStillDetectedAndStripped(t *testing.T) {
 	}
 	if env["FOO"] != "bar" || m["theme"] != "dark" {
 		t.Fatalf("user keys must be preserved: %v", m)
+	}
+}
+
+// TestAllModelsOrphanRemnantDetected proves the orphan signature keeps up with
+// "All models" mode, whose remnant carries ANTHROPIC_DEFAULT_MODEL instead of
+// ANTHROPIC_MODEL: with the marker lost, Status must still report
+// ModifiedExternally so the UI offers Restore.
+func TestAllModelsOrphanRemnantDetected(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	p := sampleProfile()
+	p.ApplyAllModels = true
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := a.m.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+	if st, detail, _ := a.Status(p); st != core.StatusModifiedExternally || detail != orphanDetail {
+		t.Fatalf("all-models orphan status = %v %q, want ModifiedExternally + orphanDetail", st, detail)
 	}
 }
 

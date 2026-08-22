@@ -3,7 +3,8 @@
 // Claude Code (both the CLI and the VS Code extension, which share config) reads
 // environment overrides from the top-level "env" object of ~/.claude/settings.json.
 // The adapter injects the active profile's endpoint into that object as the
-// ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,
+// ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL (single-model
+// mode) or ANTHROPIC_DEFAULT_MODEL ("All models" mode),
 // ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL,
 // ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_FABLE_MODEL,
 // ANTHROPIC_SMALL_FAST_MODEL and CLAUDE_CODE_SUBAGENT_MODEL variables,
@@ -18,14 +19,20 @@
 //
 // Every model variable is always written so no Claude Code request can fall
 // back to an Anthropic default model, which fails on gateways that do not
-// serve it. ANTHROPIC_MODEL only pins the main session; the
-// opus/sonnet/haiku/fable tier aliases (used by subagents, plan mode and
-// background tasks) resolve via the ANTHROPIC_DEFAULT_*_MODEL variables, and a
-// subagent declaring a full model ID bypasses even those unless
-// CLAUDE_CODE_SUBAGENT_MODEL is set (that var forces every subagent onto the
-// main model — the accepted trade-off for gateway-only setups). Tier values
-// come from the profile's OpusModel / SonnetModel / HaikuModel / FableModel
-// when set and fall back to the main model otherwise; see resolveTiers.
+// serve it. The main-session pin depends on the apply mode: single-model mode
+// writes ANTHROPIC_MODEL, which reasserts the profile's model on every launch
+// (overriding any /model choice the user saved); "All models" mode writes
+// ANTHROPIC_DEFAULT_MODEL (Claude Code >= v2.1.236) instead, which only seeds
+// new sessions and lets a /model pick from the discovery-populated picker
+// persist across launches. Each mode removes the other mode's key so a mode
+// switch is fully reverted on re-apply. The opus/sonnet/haiku/fable tier
+// aliases (used by subagents, plan mode and background tasks) resolve via the
+// ANTHROPIC_DEFAULT_*_MODEL variables, and a subagent declaring a full model
+// ID bypasses even those unless CLAUDE_CODE_SUBAGENT_MODEL is set (that var
+// forces every subagent onto the main model — the accepted trade-off for
+// gateway-only setups). Tier values come from the profile's OpusModel /
+// SonnetModel / HaikuModel / FableModel when set and fall back to the main
+// model otherwise; see resolveTiers.
 //
 // Values that diverge from the profile as stored (Claude Code specifics;
 // other adapters keep the profile verbatim):
@@ -40,7 +47,7 @@
 //     versions, so it is written with the same resolved haiku value
 //     (HaikuModel, else SmallFastModel, else the main model).
 //
-// Schema reference (verified 2026-07-17): https://code.claude.com/docs/en/env-vars
+// Schema reference (verified 2026-08-22): https://code.claude.com/docs/en/env-vars
 // and https://code.claude.com/docs/en/model-config.
 package claudecode
 
@@ -59,10 +66,15 @@ const (
 	id   = "claude-code"
 	name = "Claude Code (CLI & VS Code extension)"
 
-	envKey            = "env"
-	envBaseURL        = "ANTHROPIC_BASE_URL"
-	envAuthToken      = "ANTHROPIC_AUTH_TOKEN"
-	envModel          = "ANTHROPIC_MODEL"
+	envKey       = "env"
+	envBaseURL   = "ANTHROPIC_BASE_URL"
+	envAuthToken = "ANTHROPIC_AUTH_TOKEN"
+	envModel     = "ANTHROPIC_MODEL"
+	// envDefaultModel (Claude Code >= v2.1.236) seeds the model new sessions
+	// start on without overriding a /model choice the user saved. Written in
+	// "All models" mode (where the picker is the point); removed in
+	// single-model mode, which pins via envModel instead.
+	envDefaultModel   = "ANTHROPIC_DEFAULT_MODEL"
 	envSmallFastModel = "ANTHROPIC_SMALL_FAST_MODEL"
 	envDefaultOpus    = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 	envDefaultSonnet  = "ANTHROPIC_DEFAULT_SONNET_MODEL"
@@ -85,7 +97,7 @@ const (
 // managedEnvKeys is every env variable Apply can write; stripManaged removes
 // exactly this set. Order matters only for readability.
 var managedEnvKeys = []string{
-	envBaseURL, envAuthToken, envModel,
+	envBaseURL, envAuthToken, envModel, envDefaultModel,
 	envDefaultOpus, envDefaultSonnet, envDefaultHaiku, envDefaultFable,
 	envDefaultOpusName, envDefaultSonnetName, envDefaultHaikuName, envDefaultFableName,
 	envSmallFastModel, envSubagentModel, envModelDiscovery,
@@ -234,7 +246,6 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	env := core.AsJSONObject(m[envKey])
 	env[envBaseURL] = stripV1Suffix(p.BaseURL)
 	env[envAuthToken] = p.APIKey
-	env[envModel] = p.Model
 	env[envDefaultOpus] = opus
 	env[envDefaultSonnet] = sonnet
 	env[envDefaultHaiku] = haiku
@@ -248,12 +259,20 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	setTierName(env, p, envDefaultSonnetName, sonnet)
 	setTierName(env, p, envDefaultHaikuName, haiku)
 	setTierName(env, p, envDefaultFableName, fable)
-	// "All models" mode enables gateway model discovery so the /model picker
-	// lists the gateway's claude-*/anthropic-* models; single-model mode
-	// removes the key so a mode switch back is fully reverted on re-apply.
+	// Main-session pin per apply mode. Single-model mode writes
+	// ANTHROPIC_MODEL, which reasserts the profile's model on every launch.
+	// "All models" mode writes ANTHROPIC_DEFAULT_MODEL instead — it only seeds
+	// new sessions, so a /model pick from the discovery-populated picker
+	// persists — and enables gateway model discovery so the picker lists the
+	// gateway's claude-*/anthropic-* models. Each branch removes the other
+	// mode's keys so a mode switch is fully reverted on re-apply.
 	if p.ApplyAllModels {
+		env[envDefaultModel] = p.Model
+		delete(env, envModel)
 		env[envModelDiscovery] = "1"
 	} else {
+		env[envModel] = p.Model
+		delete(env, envDefaultModel)
 		delete(env, envModelDiscovery)
 	}
 	m[envKey] = env
@@ -295,28 +314,30 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 
 // orphanRemnantAt reports whether the settings file at path still carries the
 // MintSwitch injection signature without requiring a marker: the "env" object
-// holding the four core managed keys (ANTHROPIC_BASE_URL,
-// ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL, ANTHROPIC_SMALL_FAST_MODEL). This is
-// a subset of what Apply writes today, kept at the legacy four keys so
-// remnants written by older MintSwitch versions (pre tier variables) are
-// still detected. It is deliberately stricter than
-// stripManaged's gate because a user could set ANTHROPIC_BASE_URL (or a
-// subset of these variables) for their own gateway: only the complete
-// signature is treated as a MintSwitch remnant, so a hand-written config
-// never shows Restore or gets stripped by mistake. A missing or corrupt file
-// is never a remnant.
+// holding ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_SMALL_FAST_MODEL
+// and a main-session pin — ANTHROPIC_MODEL (single-model mode and every older
+// MintSwitch version, pre tier variables included) or ANTHROPIC_DEFAULT_MODEL
+// ("All models" mode, which removes ANTHROPIC_MODEL). This is a subset of what
+// Apply writes today so older remnants are still detected. It is deliberately
+// stricter than stripManaged's gate because a user could set
+// ANTHROPIC_BASE_URL (or a subset of these variables) for their own gateway:
+// only the complete signature is treated as a MintSwitch remnant, so a
+// hand-written config never shows Restore or gets stripped by mistake. A
+// missing or corrupt file is never a remnant.
 func (a *Adapter) orphanRemnantAt(path string) bool {
 	m, err := core.ReadJSONObject(path)
 	if err != nil {
 		return false
 	}
 	env := core.AsJSONObject(m[envKey])
-	for _, k := range []string{envBaseURL, envAuthToken, envModel, envSmallFastModel} {
+	for _, k := range []string{envBaseURL, envAuthToken, envSmallFastModel} {
 		if _, ok := env[k]; !ok {
 			return false
 		}
 	}
-	return true
+	_, hasModel := env[envModel]
+	_, hasDefaultModel := env[envDefaultModel]
+	return hasModel || hasDefaultModel
 }
 
 // stripManaged removes the MintSwitch-managed env keys from settings.json,
