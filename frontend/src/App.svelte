@@ -95,15 +95,24 @@
     loading = true;
     loadError = "";
     try {
-      // The dismissed flag rides along with the initial load (it only ever
-      // changes through dismissOnboarding below, so refresh() never needs it).
-      const [, dismissed] = await Promise.all([refresh(), Service.OnboardingDismissed()]);
-      onboardingDismissed = dismissed;
+      await refresh();
     } catch (e) {
       loadError = errMsg(e);
-    } finally {
       loading = false;
+      return;
     }
+    // The settings flags ride along with the initial load but must never fail
+    // it: the tools/providers above already loaded fine. WHY the fallbacks: a
+    // failed read degrades to showing the first-run aids — the checklist
+    // self-hides once all steps are done, so a set-up user still never sees
+    // it, and an extra first-apply confirm costs one click at most.
+    const [dismissed, confirmed] = await Promise.allSettled([
+      Service.OnboardingDismissed(),
+      Service.ApplyConfirmed(),
+    ]);
+    onboardingDismissed = dismissed.status === "fulfilled" ? dismissed.value : false;
+    applyConfirmed = confirmed.status === "fulfilled" ? confirmed.value : false;
+    loading = false;
   }
 
   onMount(load);
@@ -192,21 +201,47 @@
     }
   }
 
+  // The apply itself; applyOne() runs it directly once the one-time
+  // first-apply explanation has been acknowledged.
+  function runApplyOne(id: string): Promise<void> {
+    return withBusy(id, async () => {
+      try {
+        const r = await Service.ApplyOne(id);
+        flash(r.message || "Applied.", "success");
+      } catch (e) {
+        flash(errMsg(e));
+      }
+      await safeRefresh();
+    });
+  }
+
+  // Persist the one-time first-apply acknowledgement optimistically (same
+  // pattern as dismissOnboarding): a failed persist only means the dialog
+  // shows once more on the next launch.
+  function markApplyConfirmed(): void {
+    applyConfirmed = true;
+    Service.ConfirmApply().catch((e) => flash(errMsg(e)));
+  }
+
+  // First apply on this install: explain exactly which file is written, that
+  // the original is backed up and that Restore is one click. Later applies
+  // (this one included, once acknowledged) run straight — the trust message
+  // only needs to be read once.
   function applyOne(id: string): void {
-    const name = tools.find((t) => t.id === id)?.name ?? id;
+    if (applyConfirmed) {
+      void runApplyOne(id);
+      return;
+    }
+    const t = tools.find((x) => x.id === id);
+    const files = (t?.config_paths ?? []).join("\n");
     ask({
-      title: `Apply profile to ${name}?`,
-      message: "This writes your profile to the tool's real config file (a backup is created first).",
+      title: `Apply configuration to ${t?.name ?? id}?`,
+      message: `MintSwitch writes your provider settings to:\n\n${files || "the tool's config file"}\n\nThe original is backed up first — Restore brings it back with one click. This is only asked once.`,
       confirmLabel: "Apply",
-      action: () => withBusy(id, async () => {
-        try {
-          const r = await Service.ApplyOne(id);
-          flash(r.message || "Applied.", "success");
-        } catch (e) {
-          flash(errMsg(e));
-        }
-        await safeRefresh();
-      }),
+      action: () => {
+        markApplyConfirmed();
+        return runApplyOne(id);
+      },
     });
   }
 
@@ -331,8 +366,13 @@
   // least one tool got the config applied. The checklist hides itself once
   // all three hold, or permanently after an explicit dismiss (persisted).
   let onboardingDismissed = $state(true);
+  // One-time first-apply acknowledgement (persisted). Defaults true so the
+  // extra dialog can never flash for set-up users before load() resolves;
+  // load() lowers it for genuine first-timers.
+  let applyConfirmed = $state(true);
   let providersCard = $state<ReturnType<typeof ProvidersCard>>();
   let toolsAnchorEl = $state<HTMLElement | null>(null);
+  let headingEl = $state<HTMLElement | null>(null);
   const providerStepDone = $derived(!!activeProvider);
   const modelStepDone = $derived(
     tools.some((t) => !!t.selected_model) || (activeProvider?.models?.length ?? 0) > 0,
@@ -344,8 +384,12 @@
 
   // Optimistic dismiss: hide immediately, then persist. A failed persist only
   // means the checklist returns on the next launch, so a toast is enough.
+  // The dismiss button unmounts with the checklist, so keyboard focus would
+  // silently drop to <body>; parking it on the main heading keeps the tab
+  // order predictable.
   function dismissOnboarding(): void {
     onboardingDismissed = true;
+    headingEl?.focus();
     Service.DismissOnboarding().catch((e) => flash(errMsg(e)));
   }
 
@@ -371,19 +415,28 @@
     flash(`${verb} failed for ${names}${detail}`);
   }
 
+  // Apply-all keeps its usual confirm (it touches every tool), but on a
+  // first-ever apply the message also carries the backup/Restore explanation
+  // and counts as the one-time acknowledgement.
   function applyAll(): void {
+    const firstTime = !applyConfirmed;
     ask({
       title: "Apply to all installed tools?",
-      message: "MintSwitch will back up each existing configuration, then apply the effective provider and model to every installed tool.",
+      message: firstTime
+        ? "MintSwitch writes your provider settings to each installed tool's real config file. Every original is backed up first — Restore brings it back with one click."
+        : "MintSwitch will back up each existing configuration, then apply the effective provider and model to every installed tool.",
       confirmLabel: "Apply to all",
-      action: () => withBusy("__all__", async () => {
-        try {
-          summarizeBulk(await Service.ApplyAll(), "Apply");
-        } catch (e) {
-          flash(errMsg(e));
-        }
-        await safeRefresh();
-      }),
+      action: () => {
+        if (firstTime) markApplyConfirmed();
+        return withBusy("__all__", async () => {
+          try {
+            summarizeBulk(await Service.ApplyAll(), "Apply");
+          } catch (e) {
+            flash(errMsg(e));
+          }
+          await safeRefresh();
+        });
+      },
     });
   }
 
@@ -470,7 +523,7 @@
 
     <main class="main-panel">
       <header class="main-header">
-        <div class="heading-copy"><div class="eyebrow">Workspace</div><h1>Your AI tools</h1><p>Choose a model and keep every local tool in sync.</p></div>
+        <div class="heading-copy"><div class="eyebrow">Workspace</div><h1 tabindex="-1" bind:this={headingEl}>Your AI tools</h1><p>Choose a model and keep every local tool in sync.</p></div>
         <div class="header-actions">
           <button class="icon-button" type="button" onclick={() => void redetect()} disabled={refreshing || loading} aria-label="Refresh detected tools" title="Refresh detected tools">
             <svg class:spinning={refreshing} viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3" /><path d="M20 4v7h-7" /></svg>
@@ -544,7 +597,7 @@
   .health-stat .health-tip{position:absolute;left:0;right:0;bottom:calc(100% + 7px);z-index:5;margin:0;padding:7px 9px;border:1px solid var(--border-strong);border-radius:9px;background:var(--surface);box-shadow:var(--shadow-pop);color:var(--text);font-size:10.5px;font-weight:500;line-height:1.45;text-align:left;opacity:0;visibility:hidden;transition:opacity .12s;pointer-events:none}.health-stat:hover .health-tip,.health-stat:focus-visible .health-tip{opacity:1;visibility:visible}
   aside.sidebar :global(.promo-row.promo-row){margin:0 2px 12px}
   .sidebar-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 2px 0;border-top:1px solid var(--border)}.security-note{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11.5px}.security-note svg{color:var(--ok)}.icon-button{width:34px;min-height:34px;padding:0;display:inline-grid;place-items:center;flex:0 0 auto;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:9px;cursor:pointer;transition:.15s}.icon-button:hover:not(:disabled){color:var(--text);border-color:var(--border-strong);background:var(--surface-hover)}.icon-button:disabled{opacity:.45;cursor:default}
-  .main-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.main-header{flex:0 0 auto;min-height:94px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--border)}.heading-copy h1{margin:4px 0 3px;font-size:22px;line-height:1.15;font-weight:760;letter-spacing:-.035em}.heading-copy p{margin:0;color:var(--muted);font-size:12px}.header-actions{display:flex;align-items:center;gap:7px}.header-actions .btn-primary,.header-actions .btn-ghost{min-height:34px}.bulk-apply{box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 24%,transparent)}.spinning{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+  .main-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.main-header{flex:0 0 auto;min-height:94px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--border)}.heading-copy h1{margin:4px 0 3px;font-size:22px;line-height:1.15;font-weight:760;letter-spacing:-.035em}.heading-copy h1:focus{outline:none}.heading-copy p{margin:0;color:var(--muted);font-size:12px}.header-actions{display:flex;align-items:center;gap:7px}.header-actions .btn-primary,.header-actions .btn-ghost{min-height:34px}.bulk-apply{box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 24%,transparent)}.spinning{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
   .content-scroll{flex:1;min-height:0;overflow-y:auto;padding:16px 22px 24px}.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
   .state-card,.empty-state{min-height:180px;display:flex;align-items:center;justify-content:center;gap:13px;padding:24px;border:1px dashed var(--border-strong);border-radius:16px;background:var(--surface);color:var(--muted)}.state-card>div{display:flex;flex-direction:column;gap:3px}.state-card strong{color:var(--text);font-size:13px}.state-card span{font-size:11px}.loader{width:20px;height:20px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}.empty-state{flex-direction:column;text-align:center}.empty-state h2{margin:0;color:var(--text);font-size:16px}.empty-state p{margin:0;font-size:11px}.empty-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--surface-2);color:var(--accent)}
   .supported-tools{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin:0;padding:0;list-style:none}.supported-tools li{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border);border-radius:99px;background:var(--surface-2);color:var(--text);font-size:11px;font-weight:600}.supported-tools img{display:block;width:18px;height:18px;border-radius:5px}.empty-state .btn-primary{margin-top:2px}
