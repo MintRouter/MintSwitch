@@ -2,7 +2,7 @@
 
 MintSwitch is a cross-platform **desktop-only** app for switching AI coding tools (Claude Code, Claude Desktop, Codex, OpenCode, and Pi) to a custom OpenAI-compatible endpoint. It supports per-tool or global apply, automatic backups, and one-click restore.
 
-A profile can contain multiple named API keys. One active key applies to all tools, with optional per-tool overrides in the Manage dialog. Keys are stored in the OS keychain (with a settings-file fallback), and key values are never displayed.
+A profile can contain multiple Providers, each with a user-chosen name, base URL, API key, its own model list, and a default model. One active Provider applies to all tools, with optional per-tool Provider overrides. API keys are stored in the OS keychain (with a settings-file fallback), and key values are never displayed.
 
 MintSwitch is built with Go and Wails. It does not provide or support an HTTP server, web deployment, or server container image.
 
@@ -18,7 +18,7 @@ The Go binary embeds `frontend/dist`, so the frontend must be built before direc
 
 ## Prerequisites
 
-- Go 1.26.5 or newer
+- Go 1.26.6 or newer
 - Node.js 22 and npm
 - Wails v3 CLI at the version used by `go.mod`
 - Task-compatible Wails task runner
