@@ -263,6 +263,17 @@
     openForm(null);
   }
 
+  // Exposed to App (via bind:this) so a tool card's "Add models" placeholder
+  // can jump straight into the Edit form of that tool's effective provider.
+  // An empty/unknown ID falls back to the Manage list so the shortcut never
+  // dead-ends. Manage opens first so Esc/Cancel and focus restore behave the
+  // same as every other path into the form.
+  export function openEditProvider(providerId: string): void {
+    if (!manageOpen) openManage();
+    const p = providers.find((q) => q.id === providerId);
+    if (p) openForm(p);
+  }
+
   function closeForm(): void {
     formOpen = false;
     formId = "";
@@ -624,7 +635,7 @@
   {:else}
     <button class="empty-provider" type="button" onclick={openManage}>
       <span class="empty-plus" aria-hidden="true">+</span>
-      <span><strong>Add your first provider</strong><small>Connect an OpenAI-compatible endpoint</small></span>
+      <span><strong>Add your first provider</strong><small>e.g. MintRouter.AI, OpenRouter, or any OpenAI-compatible API</small></span>
     </button>
   {/if}
   <p class="provider-count">{providersSummary}</p>

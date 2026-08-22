@@ -314,6 +314,17 @@
   const appliedCount = $derived(tools.filter((t) => t.status === "applied_by_mintswitch").length);
   const modifiedCount = $derived(tools.filter((t) => t.status === "modified_externally").length);
 
+  // Shown by the "No tools detected" empty state so a new user knows exactly
+  // which tools MintSwitch can manage. IDs match builtinLogoIds (ui.ts), so
+  // every entry has a bundled /logos/<id>.svg icon.
+  const supportedTools = [
+    { id: "claude-code", name: "Claude Code" },
+    { id: "claude-desktop", name: "Claude Desktop" },
+    { id: "codex", name: "Codex" },
+    { id: "opencode", name: "OpenCode" },
+    { id: "pi", name: "Pi" },
+  ];
+
   // ---- First-run onboarding checklist ----
   // Each step is derived from real state so it can never disagree with the
   // app: (1) a provider exists, (2) a model is available/selected, (3) at
@@ -417,10 +428,24 @@
           onSetActive={setActiveProvider} onToolProviderChange={changeToolProvider} />
         <section class="health-card" aria-labelledby="health-title">
           <div class="section-label" id="health-title">Workspace health</div>
+          <!-- Each stat is a keyboard-focusable tooltip trigger (hover or Tab)
+               explaining what the number means — tabindex is intentional. -->
           <div class="health-grid">
-            <div class="health-stat"><strong>{installedCount}</strong><span>Installed</span></div>
-            <div class="health-stat success"><strong>{appliedCount}</strong><span>Applied</span></div>
-            <div class="health-stat" class:warning={modifiedCount > 0}><strong>{modifiedCount}</strong><span>Modified</span></div>
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="health-stat" tabindex="0" aria-describedby="health-tip-installed">
+              <strong>{installedCount}</strong><span>Installed</span>
+              <span class="health-tip" role="tooltip" id="health-tip-installed">AI tools detected on this machine.</span>
+            </div>
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="health-stat success" tabindex="0" aria-describedby="health-tip-applied">
+              <strong>{appliedCount}</strong><span>Applied</span>
+              <span class="health-tip" role="tooltip" id="health-tip-applied">Tools using a configuration applied by MintSwitch.</span>
+            </div>
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="health-stat" class:warning={modifiedCount > 0} tabindex="0" aria-describedby="health-tip-modified">
+              <strong>{modifiedCount}</strong><span>Modified</span>
+              <span class="health-tip" role="tooltip" id="health-tip-modified">Tool configs changed outside MintSwitch since the last apply.</span>
+            </div>
           </div>
         </section>
       </div>
@@ -478,13 +503,26 @@
             </div>
           {/if}
           {#if tools.length === 0}
-            <div class="empty-state" bind:this={toolsAnchorEl}><div class="empty-icon" aria-hidden="true">⌘</div><h2>No tools detected</h2><p>Install a supported AI coding tool, then refresh this workspace.</p></div>
+            <div class="empty-state" bind:this={toolsAnchorEl}>
+              <div class="empty-icon" aria-hidden="true">⌘</div>
+              <h2>No tools detected</h2>
+              <p>Install one of these supported tools, then refresh this workspace.</p>
+              <ul class="supported-tools" aria-label="Supported tools">
+                {#each supportedTools as st (st.id)}
+                  <li><img src={`/logos/${st.id}.svg`} alt="" width="18" height="18" loading="lazy" /><span>{st.name}</span></li>
+                {/each}
+              </ul>
+              <button class="btn-primary" type="button" onclick={() => void redetect()} disabled={refreshing || loading}>
+                {refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
           {:else}
             <div class="tool-grid" bind:this={toolsAnchorEl}>
               {#each tools as t (t.id)}
                 <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")} {providers}
                   onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel}
-                  onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider} />
+                  onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider}
+                  onEditProvider={(id) => providersCard?.openEditProvider(id)} />
               {/each}
             </div>
           {/if}
@@ -500,12 +538,16 @@
 <style>
   .app-shell{height:100dvh;display:flex;flex-direction:column;background:var(--ink);overflow:hidden}.titlebar{flex:0 0 30px;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--border);background:var(--chrome);color:var(--muted);font-size:11px;font-weight:600;--wails-draggable:drag}.workspace{flex:1;min-height:0;display:grid;grid-template-columns:292px minmax(0,1fr)}
   .sidebar{min-height:0;display:flex;flex-direction:column;padding:16px 14px 12px;background:var(--sidebar);border-right:1px solid var(--border)}.brand-block{display:flex;align-items:center;gap:10px;padding:0 4px 16px}.brand-mark{width:38px;height:38px;display:grid;place-items:center;color:var(--accent);border-radius:11px;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 18%,transparent)}.brand-name{margin:0;font-size:16px;line-height:1.15;font-weight:750;letter-spacing:-.025em}.brand-tagline{margin:3px 0 0;color:var(--muted);font-size:11px}.sidebar-scroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:11px;padding:1px 2px 12px}.sidebar-scroll::-webkit-scrollbar,.content-scroll::-webkit-scrollbar{width:7px}.sidebar-scroll::-webkit-scrollbar-thumb,.content-scroll::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:99px;border:2px solid transparent;background-clip:padding-box}
-  .health-card{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card)}.section-label,.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.health-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}.health-stat{padding:10px 2px;text-align:center;border-radius:10px;background:var(--surface-2)}.health-stat strong{display:block;font-size:18px;line-height:1}.health-stat span{display:block;margin-top:6px;color:var(--muted);font-size:11px}.health-stat.success strong{color:var(--ok)}.health-stat.warning strong{color:var(--warn)}
+  .health-card{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card)}.section-label,.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.health-grid{position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}.health-stat{padding:10px 2px;text-align:center;border-radius:10px;background:var(--surface-2);cursor:help}.health-stat:focus-visible{outline:none;box-shadow:var(--focus)}.health-stat strong{display:block;font-size:18px;line-height:1}.health-stat span{display:block;margin-top:6px;color:var(--muted);font-size:11px}.health-stat.success strong{color:var(--ok)}.health-stat.warning strong{color:var(--warn)}
+  /* Tooltips span the card width (anchored to .health-grid, not the narrow
+     stat) so they never overflow the sidebar; shown on hover or keyboard focus. */
+  .health-stat .health-tip{position:absolute;left:0;right:0;bottom:calc(100% + 7px);z-index:5;margin:0;padding:7px 9px;border:1px solid var(--border-strong);border-radius:9px;background:var(--surface);box-shadow:var(--shadow-pop);color:var(--text);font-size:10.5px;font-weight:500;line-height:1.45;text-align:left;opacity:0;visibility:hidden;transition:opacity .12s;pointer-events:none}.health-stat:hover .health-tip,.health-stat:focus-visible .health-tip{opacity:1;visibility:visible}
   aside.sidebar :global(.promo-row.promo-row){margin:0 2px 12px}
   .sidebar-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 2px 0;border-top:1px solid var(--border)}.security-note{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11.5px}.security-note svg{color:var(--ok)}.icon-button{width:34px;min-height:34px;padding:0;display:inline-grid;place-items:center;flex:0 0 auto;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:9px;cursor:pointer;transition:.15s}.icon-button:hover:not(:disabled){color:var(--text);border-color:var(--border-strong);background:var(--surface-hover)}.icon-button:disabled{opacity:.45;cursor:default}
   .main-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.main-header{flex:0 0 auto;min-height:94px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--border)}.heading-copy h1{margin:4px 0 3px;font-size:22px;line-height:1.15;font-weight:760;letter-spacing:-.035em}.heading-copy p{margin:0;color:var(--muted);font-size:12px}.header-actions{display:flex;align-items:center;gap:7px}.header-actions .btn-primary,.header-actions .btn-ghost{min-height:34px}.bulk-apply{box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 24%,transparent)}.spinning{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
   .content-scroll{flex:1;min-height:0;overflow-y:auto;padding:16px 22px 24px}.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
   .state-card,.empty-state{min-height:180px;display:flex;align-items:center;justify-content:center;gap:13px;padding:24px;border:1px dashed var(--border-strong);border-radius:16px;background:var(--surface);color:var(--muted)}.state-card>div{display:flex;flex-direction:column;gap:3px}.state-card strong{color:var(--text);font-size:13px}.state-card span{font-size:11px}.loader{width:20px;height:20px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}.empty-state{flex-direction:column;text-align:center}.empty-state h2{margin:0;color:var(--text);font-size:16px}.empty-state p{margin:0;font-size:11px}.empty-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--surface-2);color:var(--accent)}
+  .supported-tools{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin:0;padding:0;list-style:none}.supported-tools li{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border);border-radius:99px;background:var(--surface-2);color:var(--text);font-size:11px;font-weight:600}.supported-tools img{display:block;width:18px;height:18px;border-radius:5px}.empty-state .btn-primary{margin-top:2px}
   .install-log{display:flex;align-items:flex-start;gap:9px;margin-bottom:12px;padding:11px;border:1px solid color-mix(in srgb,var(--danger) 25%,var(--border));border-radius:13px;background:color-mix(in srgb,var(--danger) 5%,var(--surface))}.install-log.ok{border-color:color-mix(in srgb,var(--ok) 25%,var(--border));background:color-mix(in srgb,var(--ok) 5%,var(--surface))}.install-mark{width:22px;height:22px;display:grid;place-items:center;border-radius:50%;color:var(--danger);font-weight:800}.install-log.ok .install-mark{color:var(--ok)}.install-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}.install-copy strong{font-size:11px}.install-copy code,.install-copy p{margin:0;color:var(--muted);font-size:10px;word-break:break-all}.install-copy pre{max-height:130px;overflow:auto;margin:5px 0 0;padding:7px;border-radius:8px;background:var(--surface-2);font-size:9.5px;white-space:pre-wrap}.toast{top:42px;right:16px;display:flex;align-items:center;gap:8px}.toast-dismiss{margin-left:2px;padding:0 2px;border:0;background:none;color:inherit;font-size:14px;line-height:1;cursor:pointer;opacity:.7}.toast-dismiss:hover{opacity:1}.toast-icon{width:19px;height:19px;display:grid;place-items:center;border-radius:50%;background:color-mix(in srgb,currentColor 12%,transparent);font-size:10px;font-weight:800}.toast.success{color:var(--ok)}.toast.error{color:var(--danger-strong)}
   @media(max-width:860px){.workspace{grid-template-columns:252px minmax(0,1fr)}.sidebar{padding-inline:11px}.main-header,.content-scroll{padding-inline:16px}.bulk-restore{display:none}.tool-grid{grid-template-columns:1fr}}@media(max-height:620px){.main-header{min-height:80px;padding-block:11px}.heading-copy p{display:none}.content-scroll{padding-top:13px}}
 </style>
