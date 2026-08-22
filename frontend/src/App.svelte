@@ -16,6 +16,9 @@
 
   let tools = $state<ToolView[]>([]);
   let providers = $state<ProviderView[]>([]);
+  // ProvidersCard instance so tool cards' "Add provider…" CTA can open its
+  // Add-provider form directly.
+  let providersCard = $state<{ openAddProvider: () => void } | null>(null);
   let loading = $state(true);
   let loadError = $state("");
   // Count of in-flight provider mutations; `saving` derives from it so two
@@ -380,7 +383,7 @@
       </div>
 
       <div class="sidebar-scroll">
-        <ProvidersCard {providers} {tools} {saving}
+        <ProvidersCard bind:this={providersCard} {providers} {tools} {saving}
           onAdd={addProvider} onUpdate={updateProvider} onRemove={removeProvider}
           onSetActive={setActiveProvider} onToolProviderChange={changeToolProvider} />
         <section class="health-card" aria-labelledby="health-title">
@@ -448,7 +451,8 @@
               {#each tools as t (t.id)}
                 <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")} {providers}
                   onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel}
-                  onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider} />
+                  onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider}
+                  onAddProvider={() => providersCard?.openAddProvider()} />
               {/each}
             </div>
           {/if}

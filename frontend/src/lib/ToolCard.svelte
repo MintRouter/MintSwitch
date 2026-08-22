@@ -14,11 +14,12 @@
     onModelChange: (toolID: string, model: string) => void;
     onApplyModeChange: (toolID: string, mode: string) => void;
     onProviderUpdate: (p: Provider) => Promise<string | null>;
+    onAddProvider: () => void;
   }
   let {
     tool, busy, providers,
     onApply, onRestore, onInstall, onUninstall, onModelChange, onApplyModeChange,
-    onProviderUpdate,
+    onProviderUpdate, onAddProvider,
   }: Props = $props();
 
   // The provider in effect for this tool (per-tool override or the active
@@ -289,6 +290,10 @@
     {#if !tool.installed && tool.installable}
       <button class="btn-soft primary-action" type="button" onclick={() => onInstall(tool.id)} disabled={busy}>
         {busy ? "Installing…" : "Install tool"}
+      </button>
+    {:else if tool.installed && !hasProvider}
+      <button class="btn-soft primary-action" type="button" onclick={onAddProvider} disabled={busy}>
+        Add provider…
       </button>
     {:else}
       <button class="btn-soft primary-action" type="button" onclick={() => onApply(tool.id)} disabled={!canApply}

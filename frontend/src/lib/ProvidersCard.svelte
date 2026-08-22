@@ -69,6 +69,14 @@
     if (target?.isConnected) queueMicrotask(() => target.focus());
   }
 
+  // Exported for tool cards' "Add provider…" CTA: jumps straight to the Add
+  // form (skipping the Manage list view). openManage() still captures the
+  // caller's focused element, so closing the dialog restores focus to it.
+  export function openAddProvider(): void {
+    openManage();
+    openForm(null);
+  }
+
   // Removing a provider permanently deletes its stored key, so it always goes
   // through an explicit confirmation dialog first. On failure the dialog
   // STAYS OPEN with the error inline — closing it would read as "removed".
