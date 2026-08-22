@@ -136,6 +136,7 @@
   let formId = $state("");
   let formDialogEl = $state<HTMLDivElement | null>(null);
   let formNameEl = $state<HTMLInputElement | null>(null);
+  let formKeyEl = $state<HTMLInputElement | null>(null);
   let formName = $state("");
   let formNote = $state("");
   let formBaseUrl = $state("");
@@ -182,6 +183,32 @@
   // Confirmation shown when Esc/Cancel would discard a dirty form.
   let discardOpen = $state(false);
 
+  // ---- Preset chips (Add only) ----
+  // Logo chips for common OpenAI-compatible endpoints: picking one prefills
+  // name + base URL and moves focus to the API key. A preset only overwrites
+  // a field that is blank or still holds another preset's prefill — the same
+  // rule for every chip (including Custom, whose prefill is blank) so
+  // hand-typed input is never thrown away. Never shown on Edit.
+  const presets = [
+    { id: "mintrouter", label: "MintRouter.AI", name: "MintRouter.AI", baseUrl: "https://api.mintrouter.ai/v1" },
+    { id: "openrouter", label: "OpenRouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
+    { id: "openai", label: "OpenAI", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
+    { id: "custom", label: "Custom", name: "", baseUrl: "" },
+  ];
+  let selectedPreset = $state("");
+
+  function applyPreset(id: string): void {
+    const p = presets.find((q) => q.id === id);
+    if (!p) return;
+    selectedPreset = id;
+    const nameUntouched = !formName.trim() || presets.some((q) => q.name !== "" && formName === q.name);
+    const urlUntouched = !formBaseUrl.trim() || presets.some((q) => q.baseUrl !== "" && formBaseUrl === q.baseUrl);
+    if (nameUntouched) formName = p.name;
+    if (urlUntouched) formBaseUrl = p.baseUrl;
+    if (id === "custom") formNameEl?.focus();
+    else formKeyEl?.focus();
+  }
+
   function openForm(p: ProviderView | null): void {
     formId = p?.id ?? "";
     formName = p?.name ?? "";
@@ -205,6 +232,9 @@
     dropdownOpen = false;
     activeIndex = -1;
     discardOpen = false;
+    selectedPreset = "";
+    autoFetchDone = new Set();
+    cancelAutoFetch();
     formInitial = formSnapshot();
     formOpen = true;
     // Edit opens with a stored endpoint + key: fetching here sends a blank
@@ -219,6 +249,8 @@
     formId = "";
     formKey = "";
     discardOpen = false;
+    cancelAutoFetch();
+    autoFetchDone = new Set();
     fetchSeq++;
     fetching = false;
     closeDropdown();
@@ -232,11 +264,11 @@
   }
 
   // ---- Fetching the endpoint's advertised models ----
-  // Runs only on an explicit user action — the "Fetch models" button, or
-  // opening Edit (stored endpoint + stored key) — via the read-only
-  // FetchEndpointModels binding: a typed key travels only for that one
-  // request and is never stored or echoed back. Failures degrade to a quiet
-  // notice — manual entry and Save keep working regardless.
+  // Runs on an explicit user action — the "Fetch models" button, or opening
+  // Edit (stored endpoint + stored key) — or on the one-shot auto-fetch below,
+  // via the read-only FetchEndpointModels binding: a typed key travels only
+  // for that one request and is never stored or echoed back. Failures degrade
+  // to a quiet notice — manual entry and Save keep working regardless.
   let fetching = $state(false);
   let fetchAttempted = $state(false);
   let fetchError = $state("");
@@ -255,6 +287,10 @@
   async function fetchModels(): Promise<void> {
     if (!canFetch || fetching) return;
     const seq = ++fetchSeq;
+    // Any fetch with a typed key marks its URL+key pair as attempted, so the
+    // one-shot auto-fetch never repeats a pair that already ran (auto or
+    // manual) — editing either field arms it again.
+    if (formKey.trim()) autoFetchDone.add(`${formBase.url}\u0000${formKey}`);
     fetching = true;
     fetchError = "";
     try {
@@ -295,6 +331,36 @@
       fetchAttempted = true;
       fetching = false;
     }
+  }
+
+  // ---- Auto-fetch on a typed key ----
+  // Once the endpoint URL is valid and a key has been TYPED (never the stored
+  // key — that path stays behind storedKeyUsable and explicit actions), models
+  // fetch on key blur or ~600ms after typing pauses. Each URL+key pair
+  // auto-fetches at most once (autoFetchDone) so a failing endpoint never
+  // loops; the Fetch button remains the manual retry. Plain variables, not
+  // $state — only touched inside handlers.
+  let autoFetchDone = new Set<string>();
+  let autoFetchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelAutoFetch(): void {
+    if (autoFetchTimer != null) {
+      clearTimeout(autoFetchTimer);
+      autoFetchTimer = null;
+    }
+  }
+
+  function tryAutoFetch(): void {
+    cancelAutoFetch();
+    if (!formOpen || fetching) return;
+    if (!formKey.trim() || !isHttpUrl(formBase.url)) return;
+    if (autoFetchDone.has(`${formBase.url}\u0000${formKey}`)) return;
+    void fetchModels();
+  }
+
+  function scheduleAutoFetch(): void {
+    cancelAutoFetch();
+    autoFetchTimer = setTimeout(tryAutoFetch, 600);
   }
 
   // ---- Models combobox (chips-in-field + checkbox dropdown) ----
@@ -638,6 +704,55 @@
       tabindex="-1" bind:this={formDialogEl}>
       <h2 class="title" id="pv-form-title">{isEdit ? `Edit ${editing?.name ?? "provider"}` : "Add a provider"}</h2>
       <div class="add-body">
+        {#if !isEdit}
+          <!-- Preset logo chips: one press prefills name + endpoint and jumps
+               to the API key. The base URL lives in the tooltip, not in the
+               layout. -->
+          <div class="preset-row" role="group" aria-label="Provider presets">
+            {#each presets as p (p.id)}
+              <button class="preset-chip" type="button" aria-pressed={selectedPreset === p.id}
+                class:selected={selectedPreset === p.id} title={p.baseUrl || undefined}
+                onclick={() => applyPreset(p.id)}>
+                {#if p.id === "mintrouter"}
+                  <svg viewBox="4 4 40 40" aria-hidden="true">
+                    <g fill="none" stroke-width="5" stroke-linecap="round">
+                      <path stroke="#0d9488" d="M20 24C27 24 27 36 34 36H38"/>
+                      <path stroke="#135bec" d="M8.5 24H20C27 24 27 12 34 12H38"/>
+                    </g>
+                    <circle fill="#135bec" cx="8.5" cy="24" r="4.5"/>
+                    <circle fill="#135bec" cx="38" cy="12" r="4.5"/>
+                    <circle fill="#0d9488" cx="38" cy="36" r="4.5"/>
+                  </svg>
+                {:else if p.id === "openrouter"}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2 12h4c4 0 5-5.5 9-5.5h3"/>
+                    <path d="m15.5 3.5 4.5 3-4.5 3"/>
+                    <path d="M2 12h4c4 0 5 5.5 9 5.5h3"/>
+                    <path d="m15.5 14.5 4.5 3-4.5 3"/>
+                  </svg>
+                {:else if p.id === "openai"}
+                  <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.2" aria-hidden="true">
+                    <g transform="rotate(0 24 24)"><ellipse cx="24" cy="16.5" rx="4.6" ry="8.2"/></g>
+                    <g transform="rotate(60 24 24)"><ellipse cx="24" cy="16.5" rx="4.6" ry="8.2"/></g>
+                    <g transform="rotate(120 24 24)"><ellipse cx="24" cy="16.5" rx="4.6" ry="8.2"/></g>
+                    <g transform="rotate(180 24 24)"><ellipse cx="24" cy="16.5" rx="4.6" ry="8.2"/></g>
+                    <g transform="rotate(240 24 24)"><ellipse cx="24" cy="16.5" rx="4.6" ry="8.2"/></g>
+                    <g transform="rotate(300 24 24)"><ellipse cx="24" cy="16.5" rx="4.6" ry="8.2"/></g>
+                  </svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" aria-hidden="true">
+                    <path d="M4 8h8M18 8h2M4 16h2M12 16h8"/>
+                    <circle cx="15" cy="8" r="2.6"/>
+                    <circle cx="9" cy="16" r="2.6"/>
+                  </svg>
+                {/if}
+                {p.label}
+              </button>
+            {/each}
+          </div>
+        {/if}
         <div class="add-field">
           <label class="add-label" for="pv-form-name">Provider name</label>
           <input class="field-input" id="pv-form-name" type="text" bind:value={formName}
@@ -652,7 +767,8 @@
         <div class="add-field">
           <label class="add-label" for="pv-form-base">API endpoint</label>
           <input class="field-input" id="pv-form-base" type="url" bind:value={formBaseUrl}
-            placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false" />
+            placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
+            onblur={tryAutoFetch} />
         </div>
         {#if formBase.upgraded}
           <p class="field-notice">
@@ -661,9 +777,13 @@
         {/if}
         <div class="add-field">
           <label class="add-label" for="pv-form-key">API key</label>
+          <!-- Typing (debounced) or leaving the field triggers the one-shot
+               auto-fetch; the URL field only triggers on blur so a typed key
+               never travels to a half-typed endpoint. -->
           <input class="field-input" id="pv-form-key" type="password" bind:value={formKey}
+            bind:this={formKeyEl}
             placeholder={isEdit ? "Unchanged unless typed" : "Enter the API key"}
-            autocomplete="off" />
+            autocomplete="off" oninput={scheduleAutoFetch} onblur={tryAutoFetch} />
         </div>
 
         <div class="add-field">
@@ -929,6 +1049,34 @@
   }
   .add-field .field-input { width: 100%; }
   .note-input { resize: vertical; min-height: 2.4rem; font-family: inherit; }
+
+  /* Preset logo chips (Add only): one 30px row of pill buttons, logo + label,
+     base URL in the tooltip. */
+  .preset-row { display: flex; flex-wrap: nowrap; gap: 6px; min-height: 0; overflow-x: auto; }
+  .preset-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    height: 30px;
+    padding: 0 0.65rem;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  }
+  .preset-chip svg { flex: 0 0 auto; width: 15px; height: 15px; }
+  .preset-chip:hover { border-color: var(--border-strong); }
+  .preset-chip:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+  .preset-chip.selected {
+    color: var(--accent-soft-text);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
 
   /* Manage dialog header row: the list label left, quiet-accent Add action
      right — the single entry point into the unified Add/Edit form. */
