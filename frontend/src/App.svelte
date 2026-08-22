@@ -199,8 +199,8 @@
       confirmLabel: "Apply",
       action: () => withBusy(id, async () => {
         try {
-          const r = await Service.ApplyOne(id);
-          flash(r.message || "Applied.", "success");
+          await Service.ApplyOne(id);
+          flash(APPLIED_TOAST, "success");
         } catch (e) {
           flash(errMsg(e));
         }
@@ -314,14 +314,17 @@
   const modifiedCount = $derived(tools.filter((t) => t.status === "modified_externally").length);
   const canApplyAll = $derived(!!activeProvider && installedCount > 0 && busyIds.length === 0);
   const canRestoreAll = $derived(tools.some((t) => t.installed && t.status !== "default" && t.status !== "not_installed") && busyIds.length === 0);
+  // One-line trust message after a successful apply (single or bulk): says the
+  // original config is backed up and restorable, instead of a bare "Applied.".
+  const APPLIED_TOAST = "Applied — original config backed up · Restore anytime";
   // Summarize a bulk apply/restore. On failure, name the failing tools and
   // include the first error (truncated) so the toast is actionable instead of
-  // just a count.
-  function summarizeBulk(results: ToolOpResult[] | null, verb: string): void {
+  // just a count. successMsg overrides the default all-ok message.
+  function summarizeBulk(results: ToolOpResult[] | null, verb: string, successMsg?: string): void {
     const list = results ?? [];
     const failed = list.filter((r) => !r.ok);
     if (!failed.length) {
-      flash(`${verb} completed for ${list.length} tool${list.length === 1 ? "" : "s"}.`, "success");
+      flash(successMsg ?? `${verb} completed for ${list.length} tool${list.length === 1 ? "" : "s"}.`, "success");
       return;
     }
     const toolName = (id: string) => tools.find((t) => t.id === id)?.name ?? id;
@@ -338,7 +341,7 @@
       confirmLabel: "Apply to all",
       action: () => withBusy("__all__", async () => {
         try {
-          summarizeBulk(await Service.ApplyAll(), "Apply");
+          summarizeBulk(await Service.ApplyAll(), "Apply", APPLIED_TOAST);
         } catch (e) {
           flash(errMsg(e));
         }
