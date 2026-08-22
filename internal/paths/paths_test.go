@@ -50,6 +50,19 @@ func TestResolverConfigDir(t *testing.T) {
 	}
 }
 
+func TestResolverLocalAppDataDir(t *testing.T) {
+	home := t.TempDir()
+	local := t.TempDir()
+	r := &Resolver{Home: home}
+	if got, want := r.LocalAppDataDir(), filepath.Join(home, "AppData", "Local"); got != want {
+		t.Errorf("LocalAppDataDir fallback = %q, want %q", got, want)
+	}
+	r.LocalAppData = local
+	if got := r.LocalAppDataDir(); got != local {
+		t.Errorf("LocalAppDataDir = %q, want %q", got, local)
+	}
+}
+
 func TestNewResolverUsesXDGEnv(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)

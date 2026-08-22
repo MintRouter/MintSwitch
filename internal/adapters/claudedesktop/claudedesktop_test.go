@@ -422,6 +422,74 @@ func TestStripV1Suffix(t *testing.T) {
 	}
 }
 
+// TestBaseDirPerOS pins the 3P data directory per OS: the macOS path must
+// never change (existing users' backups and markers were recorded against
+// it) and Windows uses %LOCALAPPDATA%\Claude-3p per the data-storage docs,
+// falling back to Home\AppData\Local when LOCALAPPDATA is unset.
+func TestBaseDirPerOS(t *testing.T) {
+	a, r, _ := newAdapter(t)
+	a.goos = "darwin"
+	if got, want := a.baseDir(), filepath.Join(r.Home, "Library", "Application Support", "Claude-3p"); got != want {
+		t.Fatalf("darwin baseDir = %q, want %q", got, want)
+	}
+	a.goos = "windows"
+	if got, want := a.baseDir(), filepath.Join(r.Home, "AppData", "Local", "Claude-3p"); got != want {
+		t.Fatalf("windows baseDir fallback = %q, want %q", got, want)
+	}
+	local := t.TempDir()
+	r.LocalAppData = local
+	if got, want := a.baseDir(), filepath.Join(local, "Claude-3p"); got != want {
+		t.Fatalf("windows baseDir = %q, want %q", got, want)
+	}
+}
+
+// TestDetectWindows proves the Windows probe locations key off %LOCALAPPDATA%
+// and that Detect reports installed — with the config path under the Windows
+// 3P data dir — once one of them exists.
+func TestDetectWindows(t *testing.T) {
+	for _, dir := range []string{
+		filepath.Join("AnthropicClaude"),
+		filepath.Join("Programs", "Claude"),
+	} {
+		t.Run(dir, func(t *testing.T) {
+			home := t.TempDir()
+			r := &paths.Resolver{
+				Home:         home,
+				DataDir:      filepath.Join(home, "data"),
+				LocalAppData: filepath.Join(home, "AppData", "Local"),
+			}
+			a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
+			a.goos = "windows"
+			a.appDirs = defaultAppDirs(r, "windows")
+			if installed, _ := a.Detect(); installed {
+				t.Fatal("expected not installed without app dir")
+			}
+			installApp(t, filepath.Join(r.LocalAppData, dir))
+			installed, path := a.Detect()
+			if !installed {
+				t.Fatalf("expected installed via %s", dir)
+			}
+			if want := filepath.Join(r.LocalAppData, "Claude-3p", "claude_desktop_config.json"); path != want {
+				t.Fatalf("Detect path = %q, want %q", path, want)
+			}
+		})
+	}
+}
+
+// TestDetectLinuxFalse proves Detect stays not-installed on Linux: the app
+// has no Linux build, so the probed dirs are the macOS-shaped ones, which do
+// not exist there.
+func TestDetectLinuxFalse(t *testing.T) {
+	home := t.TempDir()
+	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
+	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
+	a.goos = "linux"
+	a.appDirs = []string{r.Join("Applications", "Claude.app")}
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("expected not installed on linux")
+	}
+}
+
 func mustWriteJSON(t *testing.T, path string, m map[string]any) {
 	t.Helper()
 	if err := core.WriteJSONObjectAtomic(path, m); err != nil {

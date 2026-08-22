@@ -2,7 +2,8 @@
 // Desktop app's third-party gateway ("3P") deployment mode.
 //
 // Claude Desktop reads its deployment mode from claude_desktop_config.json
-// under ~/Library/Application Support/Claude-3p/ and, in 3P mode, loads the
+// under its 3P data directory — ~/Library/Application Support/Claude-3p on
+// macOS, %LOCALAPPDATA%\Claude-3p on Windows — and, in 3P mode, loads the
 // gateway provider description from configLibrary/<uuid>.json referenced by
 // configLibrary/_meta.json (appliedId + entries). The adapter manages exactly
 // those three files:
@@ -28,9 +29,15 @@
 // before anything is written.
 //
 // File shapes verified against a working hand-written 3P configuration
-// (2026-08). Claude Desktop is detected via its macOS app bundle at
-// /Applications/Claude.app or ~/Applications/Claude.app; there is no npm
-// install path for it.
+// (2026-08). Platform support and data locations verified against
+// claude.com/docs/third-party/claude-desktop (data-storage) on 2026-08-22:
+// 3P mode ships for macOS and Windows only; earlier Windows releases stored
+// data under %APPDATA%\Claude-3p and the app migrates it to %LOCALAPPDATA%
+// itself, so %LOCALAPPDATA% is the canonical path; Linux is not supported by
+// the app, so Detect reports not-installed there. Claude Desktop is detected
+// via its macOS app bundle at /Applications/Claude.app or
+// ~/Applications/Claude.app, or on Windows via its per-user install under
+// %LOCALAPPDATA%; there is no npm install path for it.
 package claudedesktop
 
 import (
@@ -40,6 +47,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"mintswitch/internal/backup"
@@ -78,8 +86,11 @@ type Adapter struct {
 	r *paths.Resolver
 	e *backup.Engine
 	m *markers.Store
-	// appDirs are the app-bundle paths probed by Detect; overridable in tests.
+	// appDirs are the app install paths probed by Detect; overridable in tests.
 	appDirs []string
+	// goos selects the OS-specific baseDir branch; overridable in tests so the
+	// Windows path is exercisable from any host OS. Defaults to runtime.GOOS.
+	goos string
 }
 
 // New returns an Adapter that resolves paths via r, backs up via e, and
@@ -87,10 +98,29 @@ type Adapter struct {
 func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
 	return &Adapter{
 		r: r, e: e, m: m,
-		appDirs: []string{
-			"/Applications/Claude.app",
-			r.Join("Applications", "Claude.app"),
-		},
+		appDirs: defaultAppDirs(r, runtime.GOOS),
+		goos:    runtime.GOOS,
+	}
+}
+
+// defaultAppDirs returns the install locations Detect probes on the given
+// OS: the macOS app bundle in /Applications or ~/Applications, or the
+// Windows per-user installs under %LOCALAPPDATA% (the installer's
+// AnthropicClaude directory, plus the conventional Programs\Claude location;
+// this is detection only, so probing an extra safe path is harmless). Linux
+// gets the macOS list, which never exists there, so Detect stays false: the
+// app has no Linux build (see the package doc).
+func defaultAppDirs(r *paths.Resolver, goos string) []string {
+	if goos == "windows" {
+		local := r.LocalAppDataDir()
+		return []string{
+			filepath.Join(local, "AnthropicClaude"),
+			filepath.Join(local, "Programs", "Claude"),
+		}
+	}
+	return []string{
+		"/Applications/Claude.app",
+		r.Join("Applications", "Claude.app"),
 	}
 }
 
@@ -100,12 +130,17 @@ func (a *Adapter) ID() string { return id }
 // Name returns the display name.
 func (a *Adapter) Name() string { return name }
 
-// baseDir returns Claude Desktop's 3P data directory
-// (~/Library/Application Support/Claude-3p). It is derived from Home rather
-// than the native config dir so tests pointing Home at a temp dir stay
-// isolated; on macOS — the only OS the app's 3P mode targets — the two are
-// the same directory.
+// baseDir returns Claude Desktop's 3P data directory:
+// %LOCALAPPDATA%\Claude-3p on Windows (earlier releases used %APPDATA% and
+// the app migrates itself, so the local dir is canonical) and
+// ~/Library/Application Support/Claude-3p elsewhere. The macOS path is
+// derived from Home rather than the native config dir so tests pointing Home
+// at a temp dir stay isolated, and it must never change: existing users'
+// backups and markers were recorded against it.
 func (a *Adapter) baseDir() string {
+	if a.goos == "windows" {
+		return filepath.Join(a.r.LocalAppDataDir(), "Claude-3p")
+	}
 	return a.r.Join("Library", "Application Support", "Claude-3p")
 }
 
@@ -139,10 +174,12 @@ func (a *Adapter) ConfigPaths() []string {
 	return out
 }
 
-// Detect reports whether the Claude Desktop app is installed, defined as its
-// app bundle existing at /Applications/Claude.app or ~/Applications/Claude.app.
-// The active path is always claude_desktop_config.json and is returned even
-// when not installed, since Status/Apply rely on it.
+// Detect reports whether the Claude Desktop app is installed, defined as one
+// of the OS-specific install directories existing (see defaultAppDirs): the
+// macOS app bundle in /Applications or ~/Applications, or the Windows
+// per-user install under %LOCALAPPDATA%. The active path is always
+// claude_desktop_config.json and is returned even when not installed, since
+// Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
 	for _, dir := range a.appDirs {
 		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {

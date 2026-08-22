@@ -28,6 +28,11 @@ type Resolver struct {
 	// macOS, $XDG_CONFIG_HOME or ~/.config on Linux. Tools that follow the
 	// native convention on Windows resolve their config under it.
 	NativeConfigDir string
+	// LocalAppData, when non-empty, is Windows' per-user local (non-roaming)
+	// app-data root. NewResolver seeds it from the LOCALAPPDATA environment
+	// variable (empty on other OSes); tools that keep machine-local data on
+	// Windows resolve it via [Resolver.LocalAppDataDir].
+	LocalAppData string
 	// CodexHome, when non-empty, overrides the Codex home directory used by
 	// [Resolver.CodexDir]. NewResolver seeds it from $CODEX_HOME.
 	CodexHome string
@@ -59,6 +64,7 @@ func NewResolver() (*Resolver, error) {
 		DataDir:         filepath.Join(cfg, dataDirName),
 		ConfigHome:      os.Getenv("XDG_CONFIG_HOME"),
 		NativeConfigDir: cfg,
+		LocalAppData:    os.Getenv("LOCALAPPDATA"),
 		CodexHome:       os.Getenv("CODEX_HOME"),
 		ClaudeConfigDir: os.Getenv("CLAUDE_CONFIG_DIR"),
 		SystemBinDirs:   []string{"/opt/homebrew/bin", "/usr/local/bin"},
@@ -84,6 +90,17 @@ func (r *Resolver) ConfigDir() string {
 // r.ConfigJoin("opencode", "opencode.json").
 func (r *Resolver) ConfigJoin(elem ...string) string {
 	return filepath.Join(append([]string{r.ConfigDir()}, elem...)...)
+}
+
+// LocalAppDataDir returns Windows' per-user local (non-roaming) app-data
+// root: LocalAppData (%LOCALAPPDATA%) when set, otherwise the Windows
+// default Home\AppData\Local. The fallback derives from Home rather than the
+// environment so tests pointing Home at a temp dir stay isolated.
+func (r *Resolver) LocalAppDataDir() string {
+	if r.LocalAppData != "" {
+		return r.LocalAppData
+	}
+	return filepath.Join(r.Home, "AppData", "Local")
 }
 
 // CodexDir returns the Codex home directory: CodexHome ($CODEX_HOME) when set,
