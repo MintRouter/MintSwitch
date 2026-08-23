@@ -131,11 +131,11 @@ func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
 // Programs\Claude location) and the MSIX package data dir under
 // %LOCALAPPDATA%\Packages (the binary itself sits in the protected
 // WindowsApps dir and cannot be stat'ed from user space); this is detection
-// only, so probing an extra safe path is harmless. A defensive Claude_* glob
-// under Packages (directories only) also counts, in case Anthropic ever
-// re-signs the package and the publisher-hash suffix changes. Linux gets the
-// macOS list, which never exists there, so Detect stays false: the app has
-// no Linux build (see the package doc).
+// only, so probing an extra safe path is harmless. The MSIX dir comes from
+// msixPackageDir — the same helper baseDir uses — plus the static exact
+// family path so a package installed after New is still picked up by
+// Detect's stat. Linux gets the macOS list, which never exists there, so
+// Detect stays false: the app has no Linux build (see the package doc).
 func defaultAppDirs(r *paths.Resolver, goos string) []string {
 	if goos == "windows" {
 		local := r.LocalAppDataDir()
@@ -144,12 +144,8 @@ func defaultAppDirs(r *paths.Resolver, goos string) []string {
 			filepath.Join(local, "Programs", "Claude"),
 			filepath.Join(r.PackagesDir(), msixPackageFamily),
 		}
-		if matches, err := filepath.Glob(filepath.Join(r.PackagesDir(), "Claude_*")); err == nil {
-			for _, m := range matches {
-				if fi, err := os.Stat(m); err == nil && fi.IsDir() {
-					dirs = append(dirs, m)
-				}
-			}
+		if pkg := msixPackageDir(r); pkg != "" {
+			dirs = append(dirs, pkg)
 		}
 		return dirs
 	}
@@ -159,6 +155,29 @@ func defaultAppDirs(r *paths.Resolver, goos string) []string {
 	}
 }
 
+// msixPackageDir returns the MSIX package data dir under
+// %LOCALAPPDATA%\Packages that the installed Claude Desktop actually uses,
+// or "" when none exists. The exact msixPackageFamily dir wins; otherwise
+// the first Claude_* directory in lexical order (filepath.Glob returns
+// sorted matches, so the pick is deterministic) covers a re-signed package
+// with a different publisher-hash suffix. Detect and baseDir must agree on
+// this one dir: if Detect matched a re-signed package but baseDir fell back
+// to %LOCALAPPDATA%\Claude-3p, Apply would silently write files the
+// virtualized app never reads.
+func msixPackageDir(r *paths.Resolver) string {
+	exact := filepath.Join(r.PackagesDir(), msixPackageFamily)
+	if fi, err := os.Stat(exact); err == nil && fi.IsDir() {
+		return exact
+	}
+	matches, _ := filepath.Glob(filepath.Join(r.PackagesDir(), "Claude_*"))
+	for _, m := range matches {
+		if fi, err := os.Stat(m); err == nil && fi.IsDir() {
+			return m
+		}
+	}
+	return ""
+}
+
 // ID returns the stable adapter identifier.
 func (a *Adapter) ID() string { return id }
 
@@ -166,13 +185,13 @@ func (a *Adapter) ID() string { return id }
 func (a *Adapter) Name() string { return name }
 
 // baseDir returns Claude Desktop's 3P data directory. On Windows the MSIX
-// package's LocalCache\Local\Claude-3p wins whenever the package data dir
-// exists — even on a machine that also has a leftover Squirrel install:
-// MSIX AppData virtualization redirects the running app's
+// package's LocalCache\Local\Claude-3p wins whenever msixPackageDir finds a
+// package data dir — even on a machine that also has a leftover Squirrel
+// install: MSIX AppData virtualization redirects the running app's
 // %LOCALAPPDATA%\Claude-3p access into LocalCache, and the app ignores
 // files at the real path (they drift apart — anthropics/claude-code
 // #26073), so the LocalCache path is the one the app actually reads.
-// Without the package dir, %LOCALAPPDATA%\Claude-3p stays canonical
+// Without a package dir, %LOCALAPPDATA%\Claude-3p stays canonical
 // (earlier releases used %APPDATA% and the app migrates itself).
 // ~/Library/Application Support/Claude-3p elsewhere; the macOS path is
 // derived from Home rather than the native config dir so tests pointing Home
@@ -180,8 +199,7 @@ func (a *Adapter) Name() string { return name }
 // backups and markers were recorded against it.
 func (a *Adapter) baseDir() string {
 	if a.goos == "windows" {
-		pkg := filepath.Join(a.r.PackagesDir(), msixPackageFamily)
-		if fi, err := os.Stat(pkg); err == nil && fi.IsDir() {
+		if pkg := msixPackageDir(a.r); pkg != "" {
 			return filepath.Join(pkg, "LocalCache", "Local", "Claude-3p")
 		}
 		return filepath.Join(a.r.LocalAppDataDir(), "Claude-3p")

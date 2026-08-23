@@ -501,8 +501,10 @@ func TestDetectWindows(t *testing.T) {
 // TestDetectWindowsMSIXGlob proves the defensive Claude_* glob under Packages
 // detects a re-signed package (different publisher-hash suffix) while
 // unrelated entries — dirs without the Claude_ prefix, or plain files — never
-// match; and that without the exact family dir, baseDir keeps the legacy
-// %LOCALAPPDATA%\Claude-3p fallback.
+// match; and that Detect and baseDir agree on the same glob-found dir (first
+// in lexical order when several exist), so Apply never writes to the legacy
+// path a virtualized app would ignore. The exact family dir still wins over
+// any glob match.
 func TestDetectWindowsMSIXGlob(t *testing.T) {
 	home := t.TempDir()
 	r := &paths.Resolver{
@@ -522,14 +524,23 @@ func TestDetectWindowsMSIXGlob(t *testing.T) {
 	if installed, _ := a.Detect(); installed {
 		t.Fatal("unrelated Packages entries must not detect")
 	}
+	installApp(t, filepath.Join(pkgs, "Claude_otherhash2"))
 	installApp(t, filepath.Join(pkgs, "Claude_otherhash1"))
 	a.appDirs = defaultAppDirs(r, "windows")
 	installed, path := a.Detect()
 	if !installed {
 		t.Fatal("expected installed via Claude_* glob under Packages")
 	}
-	if want := filepath.Join(r.LocalAppData, "Claude-3p", "claude_desktop_config.json"); path != want {
+	wantBase := filepath.Join(pkgs, "Claude_otherhash1", "LocalCache", "Local", "Claude-3p")
+	if got := a.baseDir(); got != wantBase {
+		t.Fatalf("baseDir = %q, want %q", got, wantBase)
+	}
+	if want := filepath.Join(wantBase, "claude_desktop_config.json"); path != want {
 		t.Fatalf("Detect path = %q, want %q", path, want)
+	}
+	installApp(t, filepath.Join(pkgs, "Claude_pzs8sxrjxfjjc"))
+	if got, want := a.baseDir(), filepath.Join(pkgs, "Claude_pzs8sxrjxfjjc", "LocalCache", "Local", "Claude-3p"); got != want {
+		t.Fatalf("baseDir with exact family dir = %q, want %q", got, want)
 	}
 }
 
