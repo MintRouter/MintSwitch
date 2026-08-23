@@ -28,6 +28,11 @@ const catalogKey = "model_catalog_json"
 //go:embed catalog_base_instructions.md
 var catalogBaseInstructions string
 
+// defaultContextWindow is the context_window written for a model whose
+// provider advertised none: 272k, the window of the gpt-5.x family Codex
+// itself defaults to.
+const defaultContextWindow = 272_000
+
 // catalogObject builds the mintswitch-models.json contents: a Codex
 // ModelsResponse ({"models": [...]}) with one entry per applied model.
 // Field shapes verified against codex-rs/protocol/src/openai_models.rs
@@ -35,13 +40,19 @@ var catalogBaseInstructions string
 // codex-rs/models-manager/src/model_info.rs (2026-08): the required fields
 // are written explicitly, visibility "list" puts the model in the /model
 // picker, and priority preserves the profile's model order (lower sorts
-// first). display_name comes from the profile's ModelNames when set.
+// first). display_name comes from the profile's ModelNames when set, and
+// context_window from the profile's ModelContextWindows (falling back to
+// defaultContextWindow).
 func catalogObject(p core.Profile) map[string]any {
 	models := make([]any, 0)
 	for i, m := range p.ApplyModels() {
 		display := m
 		if label := p.ModelNames[m]; label != "" {
 			display = label
+		}
+		window := defaultContextWindow
+		if w := p.ModelContextWindows[m]; w > 0 {
+			window = w
 		}
 		models = append(models, map[string]any{
 			"slug":                         m,
@@ -58,7 +69,7 @@ func catalogObject(p core.Profile) map[string]any {
 			"apply_patch_tool_type":        nil,
 			"truncation_policy":            map[string]any{"mode": "bytes", "limit": 10_000},
 			"supports_parallel_tool_calls": false,
-			"context_window":               272_000,
+			"context_window":               window,
 			"experimental_supported_tools": []any{},
 			"base_instructions":            catalogBaseInstructions,
 		})

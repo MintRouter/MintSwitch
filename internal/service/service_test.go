@@ -365,6 +365,25 @@ func TestAddProviderNormalizesModels(t *testing.T) {
 	}
 }
 
+// TestAddProviderNormalizesModelContextWindows: only positive windows for
+// members of Models persist; non-members and non-positive values are dropped.
+func TestAddProviderNormalizesModelContextWindows(t *testing.T) {
+	svc := newTestService(t)
+	p := validProvider()
+	p.Model = "sel"
+	p.Models = []string{"a", "b"}
+	p.ModelContextWindows = map[string]int{"a": 128_000, "b": 0, "sel": -5, "ghost": 200_000}
+	addProvider(t, svc, p)
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	got := views[0].ModelContextWindows
+	if len(got) != 1 || got["a"] != 128_000 {
+		t.Fatalf("ModelContextWindows = %v, want map[a:128000]", got)
+	}
+}
+
 // TestRemoveProvider: removing the active provider promotes the first
 // remaining one and prunes per-tool overrides pointing at the removed one;
 // removing the last provider leaves an empty state.
@@ -1434,6 +1453,45 @@ func TestFetchEndpointModelsDisplayNames(t *testing.T) {
 	for i := range want {
 		if options[i] != want[i] {
 			t.Fatalf("options[%d] = %+v, want %+v", i, options[i], want[i])
+		}
+	}
+}
+
+// TestParseModelOptionsContextWindows pins the context-window extraction:
+// the first positive integer among context_window, context_length and
+// max_context_length wins; non-positive, non-numeric and absent values yield
+// 0 without failing the parse of the rest of the list.
+func TestParseModelOptionsContextWindows(t *testing.T) {
+	body := []byte(`{"data":[
+		{"id":"cw","context_window":272000},
+		{"id":"cl","context_length":1048576},
+		{"id":"mcl","max_context_length":131072},
+		{"id":"precedence","context_window":100,"context_length":200,"max_context_length":300},
+		{"id":"skip-zero","context_window":0,"context_length":128000},
+		{"id":"skip-negative","context_window":-1},
+		{"id":"skip-string","context_window":"lots","max_context_length":64000},
+		{"id":"none"}
+	]}`)
+	options, ok := parseModelOptions(body)
+	if !ok {
+		t.Fatal("parseModelOptions: not recognized")
+	}
+	want := map[string]int{
+		"cw":            272_000,
+		"cl":            1_048_576,
+		"mcl":           131_072,
+		"precedence":    100,
+		"skip-zero":     128_000,
+		"skip-negative": 0,
+		"skip-string":   64_000,
+		"none":          0,
+	}
+	if len(options) != len(want) {
+		t.Fatalf("options = %+v, want %d entries", options, len(want))
+	}
+	for _, o := range options {
+		if o.ContextWindow != want[o.ID] {
+			t.Fatalf("ContextWindow[%s] = %d, want %d", o.ID, o.ContextWindow, want[o.ID])
 		}
 	}
 }

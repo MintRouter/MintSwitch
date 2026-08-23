@@ -143,6 +143,10 @@
   let formKey = $state("");
   let fModels = $state<string[]>([]);
   let fModelNames = $state<Record<string, string>>({});
+  // Context windows (tokens) per selected model. Never edited by hand: seeded
+  // from the stored provider on open and from fetch results, then passed
+  // through on Save so the backend can persist them.
+  let fModelContextWindows = $state<Record<string, number>>({});
   let fModel = $state("");
   let modelInput = $state("");
   let modelInputEl = $state<HTMLInputElement | null>(null);
@@ -178,7 +182,7 @@
   // dirty on its own). Used to guard Esc/Cancel against losing typed input.
   let formInitial = $state("");
   const formSnapshot = () =>
-    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModel]);
+    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModelContextWindows, fModel]);
   const formDirty = $derived(formOpen && (!!formKey || formSnapshot() !== formInitial));
   // Confirmation shown when Esc/Cancel would discard a dirty form.
   let discardOpen = $state(false);
@@ -259,6 +263,11 @@
       if (name) seeded[id] = name;
     }
     fModelNames = seeded;
+    const seededWindows: Record<string, number> = {};
+    for (const [id, w] of Object.entries(p?.model_context_windows ?? {})) {
+      if (w && w > 0) seededWindows[id] = w;
+    }
+    fModelContextWindows = seededWindows;
     fModel = p?.model ?? "";
     modelInput = "";
     formError = "";
@@ -267,6 +276,7 @@
     fetchError = "";
     fetchedModels = [];
     fetchedNames = {};
+    fetchedWindows = {};
     dropdownOpen = false;
     activeIndex = -1;
     discardOpen = false;
@@ -320,6 +330,10 @@
   // Edit — the initial snapshot is retaken so an auto-fetch never dirties the
   // form by itself; Save still persists the seeded names.
   let fetchedNames = $state<Record<string, string>>({});
+  // Context windows the endpoint advertised alongside the fetched IDs. Same
+  // seeding lifecycle as fetchedNames, except a fresh fetch value always wins
+  // over a stored one (there is no user-set value to protect).
+  let fetchedWindows = $state<Record<string, number>>({});
   // Monotonic token so a stale (slow) response can never clobber the state of
   // a newer fetch or a reopened form.
   let fetchSeq = 0;
@@ -342,12 +356,19 @@
         if (o.display_name) names[o.id] = o.display_name;
       }
       fetchedNames = names;
-      // Seed advertised names for models already selected (chips added before
-      // this fetch, or stored on the provider being edited). A user-set name
-      // always wins. If the form was pristine, re-snapshot so the seeding
-      // alone does not trigger the discard-confirmation flow.
+      const windows: Record<string, number> = {};
+      for (const o of options) {
+        if (o.context_window && o.context_window > 0) windows[o.id] = o.context_window;
+      }
+      fetchedWindows = windows;
+      // Seed advertised names and context windows for models already selected
+      // (chips added before this fetch, or stored on the provider being
+      // edited). A user-set name always wins; a fetched context window always
+      // wins (it is never user-edited). If the form was pristine, re-snapshot
+      // so the seeding alone does not trigger the discard-confirmation flow.
       const pristine = formSnapshot() === formInitial;
       const merged = { ...fModelNames };
+      const mergedWindows = { ...fModelContextWindows };
       let seededAny = false;
       for (const m of fModels) {
         const n = names[m];
@@ -355,9 +376,15 @@
           merged[m] = n;
           seededAny = true;
         }
+        const w = windows[m];
+        if (w && mergedWindows[m] !== w) {
+          mergedWindows[m] = w;
+          seededAny = true;
+        }
       }
       if (seededAny) {
         fModelNames = merged;
+        fModelContextWindows = mergedWindows;
         if (pristine) formInitial = formSnapshot();
       }
       fetchAttempted = true;
@@ -480,7 +507,8 @@
   // Add one model ID (trimmed, deduped); the first model added becomes the
   // default automatically. Adding also seeds the endpoint's display name into
   // fModelNames (never overwriting a name the user already has) so the chip —
-  // and the saved ModelNames — get the friendly label.
+  // and the saved ModelNames — get the friendly label, plus the advertised
+  // context window into fModelContextWindows.
   function addModelId(id: string): void {
     const v = id.trim();
     if (!v) return;
@@ -489,6 +517,8 @@
       if (!fModel) fModel = v;
       const name = fetchedNames[v];
       if (name && !fModelNames[v]) fModelNames = { ...fModelNames, [v]: name };
+      const w = fetchedWindows[v];
+      if (w && fModelContextWindows[v] !== w) fModelContextWindows = { ...fModelContextWindows, [v]: w };
     }
   }
 
@@ -515,14 +545,20 @@
     if (modelInput.trim()) addTypedModel();
   }
 
-  // Remove a chip (and its display name); if it was the default, fall back to
-  // the first remaining model so the default is never orphaned.
+  // Remove a chip (and its display name and context window); if it was the
+  // default, fall back to the first remaining model so the default is never
+  // orphaned.
   function removeModel(m: string): void {
     fModels = fModels.filter((x) => x !== m);
     if (m in fModelNames) {
       const next = { ...fModelNames };
       delete next[m];
       fModelNames = next;
+    }
+    if (m in fModelContextWindows) {
+      const next = { ...fModelContextWindows };
+      delete next[m];
+      fModelContextWindows = next;
     }
     if (fModel === m) fModel = fModels[0] ?? "";
   }
@@ -545,6 +581,7 @@
       base_url: formBase.url,
       models: fModels,
       model_names: fModelNames,
+      model_context_windows: fModelContextWindows,
       model: fModel,
       small_fast_model: editing?.small_fast_model ?? "",
       opus_model: editing?.opus_model ?? "",

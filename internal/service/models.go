@@ -36,11 +36,15 @@ type UninstallPlan struct {
 }
 
 // ModelOption is one advertised model returned by the models fetch: its
-// canonical ID plus the optional human-friendly display name the endpoint
-// advertises. Never secret — safe to return to the frontend.
+// canonical ID plus the optional human-friendly display name and context
+// window the endpoint advertises. Never secret — safe to return to the
+// frontend.
 type ModelOption struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name,omitempty"`
+	// ContextWindow is the model's advertised context window in tokens; 0
+	// means the endpoint did not advertise one.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // FetchProviderModels queries the stored provider's OpenAI-compatible
@@ -180,11 +184,46 @@ func httpStatusHint(code int) string {
 // object shape ({"id": ...}, with "name"/"model" as fallbacks) as well as a
 // bare string element. DisplayName ("display_name", with "name" as fallback
 // when it wasn't consumed as the ID) is the optional human-friendly label.
+// The context-window fields (standard OpenAI /models has none, but many
+// providers advertise one under varying names) are RawMessage so a quirky
+// non-numeric value is simply ignored instead of failing the whole parse.
 type modelEntry struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Model       string `json:"model"`
-	DisplayName string `json:"display_name"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	Model            string          `json:"model"`
+	DisplayName      string          `json:"display_name"`
+	ContextWindow    json.RawMessage `json:"context_window"`
+	ContextLength    json.RawMessage `json:"context_length"`
+	MaxContextLength json.RawMessage `json:"max_context_length"`
+}
+
+// contextWindowOf returns the entry's advertised context window: the first
+// positive integer among context_window, context_length and
+// max_context_length. Non-numeric and non-positive values are skipped; 0
+// means the entry advertises none.
+func contextWindowOf(e modelEntry) int {
+	for _, raw := range []json.RawMessage{e.ContextWindow, e.ContextLength, e.MaxContextLength} {
+		if n := positiveInt(raw); n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// positiveInt decodes raw as a JSON number and returns it as a positive int,
+// or 0 for absent, non-numeric or non-positive values.
+func positiveInt(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return 0
+	}
+	if n := int(f); n > 0 {
+		return n
+	}
+	return 0
 }
 
 func (m *modelEntry) UnmarshalJSON(b []byte) error {
@@ -226,8 +265,9 @@ func parseModelOptions(body []byte) (options []ModelOption, ok bool) {
 
 // optionsOf collects the non-empty identifier of each entry (ID, else Model,
 // else Name), trimmed and de-duplicated, plus its optional display name
-// ("display_name", else "name" when Name wasn't consumed as the ID). Display
-// names equal to the ID are dropped as noise. Nothing secret is preserved.
+// ("display_name", else "name" when Name wasn't consumed as the ID) and
+// advertised context window. Display names equal to the ID are dropped as
+// noise. Nothing secret is preserved.
 func optionsOf(entries []modelEntry) []ModelOption {
 	options := make([]ModelOption, 0, len(entries))
 	seen := make(map[string]bool, len(entries))
@@ -252,7 +292,7 @@ func optionsOf(entries []modelEntry) []ModelOption {
 		if display == id {
 			display = ""
 		}
-		options = append(options, ModelOption{ID: id, DisplayName: display})
+		options = append(options, ModelOption{ID: id, DisplayName: display, ContextWindow: contextWindowOf(e)})
 	}
 	return options
 }

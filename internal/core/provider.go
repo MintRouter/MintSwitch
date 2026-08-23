@@ -37,6 +37,10 @@ type Provider struct {
 	// ModelNames optionally maps a member of Models to a human-friendly
 	// display name shown by the UI.
 	ModelNames map[string]string `json:"model_names,omitempty"`
+	// ModelContextWindows optionally maps a member of Models to the context
+	// window (in tokens) the endpoint's /models listing advertised for it.
+	// Adapters fall back to a tool-specific default for missing entries.
+	ModelContextWindows map[string]int `json:"model_context_windows,omitempty"`
 	// Model is the provider's default model identifier. Required.
 	Model string `json:"model"`
 	// SmallFastModel is an optional secondary model used by some tools for
@@ -56,17 +60,18 @@ type Provider struct {
 // consume, labeled with the provider's display name.
 func (pr Provider) Profile() Profile {
 	return Profile{
-		Label:          pr.Name,
-		APIKey:         pr.APIKey,
-		BaseURL:        pr.BaseURL,
-		Models:         pr.Models,
-		ModelNames:     pr.ModelNames,
-		Model:          pr.Model,
-		SmallFastModel: pr.SmallFastModel,
-		OpusModel:      pr.OpusModel,
-		SonnetModel:    pr.SonnetModel,
-		HaikuModel:     pr.HaikuModel,
-		FableModel:     pr.FableModel,
+		Label:               pr.Name,
+		APIKey:              pr.APIKey,
+		BaseURL:             pr.BaseURL,
+		Models:              pr.Models,
+		ModelNames:          pr.ModelNames,
+		ModelContextWindows: pr.ModelContextWindows,
+		Model:               pr.Model,
+		SmallFastModel:      pr.SmallFastModel,
+		OpusModel:           pr.OpusModel,
+		SonnetModel:         pr.SonnetModel,
+		HaikuModel:          pr.HaikuModel,
+		FableModel:          pr.FableModel,
 	}
 }
 

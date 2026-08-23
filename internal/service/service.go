@@ -156,9 +156,12 @@ type ProviderView struct {
 	Models  []string `json:"models"`
 	// ModelNames maps a member of Models to its optional display name, used only
 	// for UI labels. Missing entries fall back to the model ID.
-	ModelNames     map[string]string `json:"model_names"`
-	Model          string            `json:"model"`
-	SmallFastModel string            `json:"small_fast_model"`
+	ModelNames map[string]string `json:"model_names"`
+	// ModelContextWindows maps a member of Models to its advertised context
+	// window in tokens, passed through so the Edit form can re-save it.
+	ModelContextWindows map[string]int    `json:"model_context_windows"`
+	Model               string            `json:"model"`
+	SmallFastModel      string            `json:"small_fast_model"`
 	// OpusModel, SonnetModel, HaikuModel and FableModel are the provider's
 	// optional Claude Code tier pins; empty means the tier follows the default
 	// Model.
@@ -191,20 +194,21 @@ func providerView(p core.Provider, active bool) ProviderView {
 		models = []string{p.Model}
 	}
 	return ProviderView{
-		ID:             p.ID,
-		Name:           p.Name,
-		Note:           p.Note,
-		BaseURL:        p.BaseURL,
-		Models:         models,
-		ModelNames:     p.ModelNames,
-		Model:          p.Model,
-		SmallFastModel: p.SmallFastModel,
-		OpusModel:      p.OpusModel,
-		SonnetModel:    p.SonnetModel,
-		HaikuModel:     p.HaikuModel,
-		FableModel:     p.FableModel,
-		HasKey:         strings.TrimSpace(p.APIKey) != "",
-		Active:         active,
+		ID:                  p.ID,
+		Name:                p.Name,
+		Note:                p.Note,
+		BaseURL:             p.BaseURL,
+		Models:              models,
+		ModelNames:          p.ModelNames,
+		ModelContextWindows: p.ModelContextWindows,
+		Model:               p.Model,
+		SmallFastModel:      p.SmallFastModel,
+		OpusModel:           p.OpusModel,
+		SonnetModel:         p.SonnetModel,
+		HaikuModel:          p.HaikuModel,
+		FableModel:          p.FableModel,
+		HasKey:              strings.TrimSpace(p.APIKey) != "",
+		Active:              active,
 	}
 }
 
@@ -546,6 +550,7 @@ func normalizeProvider(p *core.Provider) {
 	p.FableModel = strings.TrimSpace(p.FableModel)
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
+	p.ModelContextWindows = normalizeModelContextWindows(p.ModelContextWindows, p.Models)
 }
 
 // newProviderID returns a fresh provider ID not present in taken.
@@ -677,6 +682,31 @@ func normalizeModels(models []string, selected string) []string {
 	}
 	if selected != "" && !seen[selected] {
 		out = append([]string{selected}, out...)
+	}
+	return out
+}
+
+// normalizeModelContextWindows keeps only entries whose (trimmed) model ID is
+// a member of models and whose value is a positive token count, so stale or
+// nonsense windows never persist. It returns nil when nothing remains.
+func normalizeModelContextWindows(windows map[string]int, models []string) map[string]int {
+	if len(windows) == 0 {
+		return nil
+	}
+	member := make(map[string]bool, len(models))
+	for _, m := range models {
+		member[m] = true
+	}
+	out := make(map[string]int, len(windows))
+	for id, w := range windows {
+		id = strings.TrimSpace(id)
+		if w <= 0 || !member[id] {
+			continue
+		}
+		out[id] = w
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

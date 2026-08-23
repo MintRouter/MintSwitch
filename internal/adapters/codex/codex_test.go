@@ -239,7 +239,8 @@ func TestApplyNewFiles(t *testing.T) {
 
 // TestApplyAllModelsWritesCatalog proves "All models" mode writes the
 // mintswitch-models.json catalog (one entry per profile model, each carrying
-// base_instructions) and points config.toml's model_catalog_json at it; a
+// base_instructions and its advertised context window, falling back to
+// defaultContextWindow) and points config.toml's model_catalog_json at it; a
 // re-apply in single-model mode removes both again; and a mode switch is
 // detected via the fingerprint until re-apply.
 func TestApplyAllModelsWritesCatalog(t *testing.T) {
@@ -247,6 +248,7 @@ func TestApplyAllModelsWritesCatalog(t *testing.T) {
 	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
 	p := sampleProfile()
 	p.Models = []string{"gpt-5.5", "gpt-5.5-mini"}
+	p.ModelContextWindows = map[string]int{"gpt-5.5": 1_048_576}
 	p.ApplyAllModels = true
 	if _, err := a.Apply(p); err != nil {
 		t.Fatal(err)
@@ -268,6 +270,7 @@ func TestApplyAllModelsWritesCatalog(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("catalog models = %v, want 2 entries", entries)
 	}
+	wantWindows := []float64{1_048_576, defaultContextWindow}
 	for i, id := range []string{"gpt-5.5", "gpt-5.5-mini"} {
 		entry := entries[i].(map[string]any)
 		if entry["slug"] != id {
@@ -275,6 +278,9 @@ func TestApplyAllModelsWritesCatalog(t *testing.T) {
 		}
 		if instr, _ := entry["base_instructions"].(string); instr == "" {
 			t.Fatalf("entry %d missing base_instructions", i)
+		}
+		if w, _ := entry["context_window"].(float64); w != wantWindows[i] {
+			t.Fatalf("entry %d context_window = %v, want %v", i, entry["context_window"], wantWindows[i])
 		}
 	}
 	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {

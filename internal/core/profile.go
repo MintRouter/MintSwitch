@@ -78,6 +78,13 @@ type Profile struct {
 	// may use these names only for display fields (e.g. Claude Desktop's
 	// labelOverride). Missing entries fall back to the ID.
 	ModelNames map[string]string `json:"model_names,omitempty"`
+	// ModelContextWindows optionally maps a member of Models to the context
+	// window (in tokens) the endpoint advertised for it. Only the codex
+	// adapter reads it (for its model catalog); missing entries fall back to
+	// the adapter's default. It is deliberately NOT part of [Fingerprint]:
+	// the hash is shared by every adapter, so folding it in would flip
+	// already-applied tools to ModifiedExternally over data only codex uses.
+	ModelContextWindows map[string]int `json:"model_context_windows,omitempty"`
 	// Model is the currently selected model identifier and the default value
 	// adapters write to tool configs. Required.
 	Model string `json:"model"`
