@@ -658,10 +658,7 @@
 
 <section class="providers" aria-labelledby="providers-h">
   <div class="providers-head">
-    <div>
-      <span class="micro-label">Routing profile</span>
-      <h2 id="providers-h">Active provider</h2>
-    </div>
+    <h2 id="providers-h">Active provider</h2>
     <button class="manage-button" type="button" onclick={openManage}>Manage</button>
   </div>
 
@@ -698,7 +695,6 @@
       <h2 class="title" id="pv-manage-title">Providers</h2>
       <div class="add-body">
         <div class="list-head">
-          <span class="micro-label">Providers</span>
           <button class="btn-ghost sm" type="button" bind:this={addBtnEl}
             onclick={() => openForm(null)}>Add provider</button>
         </div>
@@ -1018,8 +1014,7 @@
      12px is the floor for body copy so the panel stays readable at a glance. */
   .providers{display:flex;flex-direction:column;gap:14px;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card)}
   .providers-head{display:flex;align-items:flex-end;justify-content:space-between;gap:8px}
-  .providers-head .micro-label{font-size:11px}
-  .providers-head h2{margin:5px 0 0;color:var(--text);font-size:15.5px;line-height:1.2;font-weight:720;letter-spacing:-.01em}
+  .providers-head h2{margin:0;color:var(--text);font-size:15.5px;line-height:1.2;font-weight:720;letter-spacing:-.01em}
   .manage-button{padding:5px 4px;color:var(--accent-soft-text);background:transparent;border:0;cursor:pointer;font-size:12.5px;font-weight:650}.manage-button:hover{color:var(--accent)}
   .active-provider{display:flex;align-items:center;gap:11px;padding:12px;border:1px solid color-mix(in srgb,var(--accent) 18%,var(--border));border-radius:12px;background:linear-gradient(135deg,var(--accent-soft),color-mix(in srgb,var(--accent-soft) 35%,var(--surface)))}
   .provider-avatar{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;border-radius:10px;color:var(--accent-text);background:var(--accent);font-size:16px;font-weight:750;box-shadow:0 3px 9px color-mix(in srgb,var(--accent) 22%,transparent)}
@@ -1157,12 +1152,12 @@
     border-color: var(--accent);
   }
 
-  /* Manage dialog header row: the list label left, quiet-accent Add action
-     right — the single entry point into the unified Add/Edit form. */
+  /* Manage dialog header row: quiet-accent Add action kept on the right —
+     the single entry point into the unified Add/Edit form. */
   .list-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: var(--s-2);
   }
   .list-head .btn-ghost {
