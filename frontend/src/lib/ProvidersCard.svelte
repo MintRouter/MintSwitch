@@ -3,6 +3,7 @@
   import type { ProviderView, ToolView } from "../../bindings/mintswitch/internal/service";
   import type { Provider } from "../../bindings/mintswitch/internal/core";
   import { errMsg, isHttpUrl, normalizeBaseUrl } from "./ui";
+  import { t } from "./i18n.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
   interface Props {
@@ -28,9 +29,10 @@
   // display name), shown on the card for the active provider.
   function modelsSummary(p: ProviderView): string {
     const models = p.models ?? [];
-    if (models.length === 0) return "No models yet";
+    if (models.length === 0) return t("providers.noModels");
     const name = (p.model_names ?? {})[p.model] || p.model;
-    return `${models.length} model${models.length > 1 ? "s" : ""}${p.model ? ` · default ${name}` : ""}`;
+    return t("providers.modelsCount", { count: models.length }) +
+      (p.model ? t("providers.defaultSuffix", { name }) : "");
   }
 
   // ---- Manage dialog (provider list) ----
@@ -651,28 +653,28 @@
 
 <section class="providers" aria-labelledby="providers-h">
   <div class="providers-head">
-    <h2 id="providers-h">Active provider</h2>
-    <button class="manage-button" type="button" onclick={openManage}>Manage</button>
+    <h2 id="providers-h">{t("providers.activeProvider")}</h2>
+    <button class="manage-button" type="button" onclick={openManage}>{t("providers.manage")}</button>
   </div>
 
   {#if active}
     <div class="active-provider">
       <div class="provider-avatar" aria-hidden="true">{active.name.trim().charAt(0).toUpperCase()}</div>
       <div class="active-copy">
-        <div class="active-title"><strong>{active.name}</strong><span><i aria-hidden="true"></i>Live</span></div>
+        <div class="active-title"><strong>{active.name}</strong><span><i aria-hidden="true"></i>{t("providers.live")}</span></div>
         {#if active.note}<p>{active.note}</p>{/if}
       </div>
       <svg class="chevron" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
     </div>
     <div class="provider-details">
-      <div class="detail-row"><span>Endpoint</span><strong title={active.base_url}>{active.base_url.replace(/^https?:\/\//, "")}</strong></div>
-      <div class="detail-row"><span>Models</span><strong>{modelsSummary(active)}</strong></div>
-      <div class="detail-row"><span>API key</span><strong class="secure"><i aria-hidden="true"></i>{active.has_key ? "Secured" : "Missing"}</strong></div>
+      <div class="detail-row"><span>{t("providers.endpoint")}</span><strong title={active.base_url}>{active.base_url.replace(/^https?:\/\//, "")}</strong></div>
+      <div class="detail-row"><span>{t("providers.models")}</span><strong>{modelsSummary(active)}</strong></div>
+      <div class="detail-row"><span>{t("providers.apiKey")}</span><strong class="secure"><i aria-hidden="true"></i>{active.has_key ? t("providers.secured") : t("providers.missing")}</strong></div>
     </div>
   {:else}
     <button class="empty-provider" type="button" onclick={openManage}>
       <span class="empty-plus" aria-hidden="true">+</span>
-      <span><strong>Add your first provider</strong><small>Connect an OpenAI-compatible endpoint</small></span>
+      <span><strong>{t("providers.addFirst")}</strong><small>{t("providers.addFirstHint")}</small></span>
     </button>
   {/if}
 </section>
@@ -684,24 +686,24 @@
     onclick={(e) => e.target === e.currentTarget && closeManage()}>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pv-manage-title"
       tabindex="-1" bind:this={manageDialogEl}>
-      <h2 class="title" id="pv-manage-title">Providers</h2>
+      <h2 class="title" id="pv-manage-title">{t("providers.dialogTitle")}</h2>
       <div class="add-body">
         <div class="list-head">
           <button class="btn-ghost sm" type="button" bind:this={addBtnEl}
-            onclick={() => openForm(null)}>Add provider</button>
+            onclick={() => openForm(null)}>{t("providers.add")}</button>
         </div>
 
         {#if providers.length}
-          <div class="provider-list" role="group" aria-label="Providers">
+          <div class="provider-list" role="group" aria-label={t("providers.dialogTitle")}>
             {#each providers as p (p.id)}
               <div class="provider-row" class:selected={p.active}>
                 <div class="provider-line">
                   <button class="provider-select" type="button" aria-pressed={p.active}
                     disabled={saving} onclick={() => void setActive(p.id)}
-                    title={p.active ? `${p.name} is the active provider` : `Set ${p.name} as the active provider`}>
+                    title={p.active ? t("providers.isActiveTitle", { name: p.name }) : t("providers.setActiveTitle", { name: p.name })}>
                     <span class="provider-name">
                       {p.name}
-                      {#if p.active}<span class="badge tone-success">Active</span>{/if}
+                      {#if p.active}<span class="badge tone-success">{t("providers.activeBadge")}</span>{/if}
                     </span>
                     {#if p.note}
                       <span class="provider-note">{p.note}</span>
@@ -711,33 +713,33 @@
                   <div class="provider-actions">
                     <button class="btn-ghost sm" type="button" disabled={saving}
                       onclick={() => openForm(p)}>
-                      Edit
+                      {t("providers.edit")}
                     </button>
                     <button class="provider-remove" type="button" disabled={saving}
                       onclick={() => (removeTarget = p)}
-                      aria-label={`Remove ${p.name}`} title={`Remove ${p.name}`}>×</button>
+                      aria-label={t("providers.removeTitle", { name: p.name })} title={t("providers.removeTitle", { name: p.name })}>×</button>
                   </div>
                 </div>
               </div>
             {/each}
           </div>
         {:else}
-          <p class="field-hint">No providers yet — add your first one above.</p>
+          <p class="field-hint">{t("providers.noneYet")}</p>
         {/if}
 
         {#if providers.length && installedTools.length}
           <div class="field">
-            <span class="micro-label">Per-tool provider</span>
-            <p class="field-hint">Each tool follows the active provider unless you pick a specific one.</p>
+            <span class="micro-label">{t("providers.perTool")}</span>
+            <p class="field-hint">{t("providers.perToolHint")}</p>
             <div class="tool-providers">
-              {#each installedTools as t (t.id)}
+              {#each installedTools as tv (tv.id)}
                 <div class="tool-provider-row">
-                  <label class="tool-provider-name" for={`pv-tool-${t.id}`}>{t.name}</label>
-                  <select class="tool-provider-select" id={`pv-tool-${t.id}`}
-                    value={t.provider_overridden ? t.selected_provider_id : ""}
-                    onchange={(e) => void changeToolProvider(t, e)}>
-                    <option value="">Active provider (default)</option>
-                    {#each t.providers ?? [] as pr (pr.id)}
+                  <label class="tool-provider-name" for={`pv-tool-${tv.id}`}>{tv.name}</label>
+                  <select class="tool-provider-select" id={`pv-tool-${tv.id}`}
+                    value={tv.provider_overridden ? tv.selected_provider_id : ""}
+                    onchange={(e) => void changeToolProvider(tv, e)}>
+                    <option value="">{t("providers.activeDefaultOption")}</option>
+                    {#each tv.providers ?? [] as pr (pr.id)}
                       <option value={pr.id}>{pr.name}</option>
                     {/each}
                   </select>
@@ -748,14 +750,14 @@
         {/if}
 
         {#if dialogError}
-          <p class="field-error" role="alert">Couldn't save: {dialogError}</p>
+          <p class="field-error" role="alert">{t("providers.saveFailed", { error: dialogError })}</p>
         {/if}
         {#if toolProviderError}
-          <p class="field-error" role="alert">Couldn't save: {toolProviderError}</p>
+          <p class="field-error" role="alert">{t("providers.saveFailed", { error: toolProviderError })}</p>
         {/if}
       </div>
       <div class="actions">
-        <button class="btn-primary" type="button" onclick={closeManage}>Done</button>
+        <button class="btn-primary" type="button" onclick={closeManage}>{t("providers.done")}</button>
       </div>
     </div>
   </div>
@@ -767,13 +769,13 @@
   <div class="backdrop" role="presentation">
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pv-form-title"
       tabindex="-1" bind:this={formDialogEl}>
-      <h2 class="title" id="pv-form-title">{isEdit ? `Edit ${editing?.name ?? "provider"}` : "Add a provider"}</h2>
+      <h2 class="title" id="pv-form-title">{isEdit ? t("form.editTitle", { name: editing?.name ?? t("form.providerFallback") }) : t("form.addTitle")}</h2>
       <div class="add-body">
         {#if !isEdit}
           <!-- Preset logo chips: one press prefills name + endpoint and jumps
                to the API key. The base URL lives in the tooltip, not in the
                layout. -->
-          <div class="preset-row" role="group" aria-label="Provider presets">
+          <div class="preset-row" role="group" aria-label={t("form.presets")}>
             {#each presets as p (p.id)}
               <button class="preset-chip" type="button" aria-pressed={selectedPreset === p.id}
                 class:selected={selectedPreset === p.id} title={p.baseUrl || undefined}
@@ -813,35 +815,35 @@
                     <circle cx="9" cy="16" r="2.6"/>
                   </svg>
                 {/if}
-                {p.label}
+                {p.id === "custom" ? t("preset.custom") : p.label}
               </button>
             {/each}
           </div>
         {/if}
         <div class="add-field">
-          <label class="add-label" for="pv-form-name">Provider name</label>
+          <label class="add-label" for="pv-form-name">{t("form.name")}</label>
           <input class="field-input" id="pv-form-name" type="text" bind:value={formName}
             bind:this={formNameEl}
             placeholder="MintRouter.AI" autocomplete="off" spellcheck="false" />
         </div>
         <div class="add-field">
-          <label class="add-label" for="pv-form-note">Note <span class="opt">Optional</span></label>
+          <label class="add-label" for="pv-form-note">{t("form.note")} <span class="opt">{t("form.optional")}</span></label>
           <textarea class="field-input note-input" id="pv-form-note" bind:value={formNote}
-            placeholder="e.g. team account, EU endpoint" rows="2" autocomplete="off"></textarea>
+            placeholder={t("form.notePlaceholder")} rows="2" autocomplete="off"></textarea>
         </div>
         <div class="add-field">
-          <label class="add-label" for="pv-form-base">API endpoint</label>
+          <label class="add-label" for="pv-form-base">{t("form.endpoint")}</label>
           <input class="field-input" id="pv-form-base" type="url" bind:value={formBaseUrl}
             placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
             onblur={onAutoFetchBlur} />
         </div>
         {#if formBase.upgraded}
           <p class="field-notice">
-            Will be saved as <code>{formBase.url}</code> — http endpoints can drop the API key on redirect.
+            {t("form.noticeBefore")}<code>{formBase.url}</code>{t("form.noticeAfter")}
           </p>
         {/if}
         <div class="add-field">
-          <label class="add-label" for="pv-form-key">API key</label>
+          <label class="add-label" for="pv-form-key">{t("form.apiKey")}</label>
           <!-- Typing (debounced) or leaving the field triggers the one-shot
                auto-fetch; the URL field only triggers on blur so a typed key
                never travels to a half-typed endpoint. Blur caused by pressing
@@ -849,23 +851,23 @@
                the auto-fetch after the chip's URL is in place. -->
           <input class="field-input" id="pv-form-key" type="password" bind:value={formKey}
             bind:this={formKeyEl}
-            placeholder={isEdit ? "Unchanged unless typed" : "Enter the API key"}
+            placeholder={isEdit ? t("form.keyPlaceholderEdit") : t("form.keyPlaceholderAdd")}
             autocomplete="off" oninput={scheduleAutoFetch} onblur={onAutoFetchBlur} />
         </div>
 
         <div class="add-field">
           <div class="models-head">
-            <label class="add-label" for="pv-form-model-input">Models</label>
+            <label class="add-label" for="pv-form-model-input">{t("form.models")}</label>
             <!-- The button stays mounted while fetching (disabled, relabelled)
                  so keyboard focus is never dropped mid-fetch. -->
             <button class="btn-ghost sm" type="button" onclick={() => void fetchModels()}
               disabled={!canFetch || fetching} aria-live="polite"
               title={canFetch
-                ? "List the models the endpoint's /models route advertises"
+                ? t("form.fetchTitle")
                 : isEdit && !!editing?.has_key && isHttpUrl(formBase.url)
-                  ? "Endpoint changed — enter the API key for the new endpoint first"
-                  : "Enter the API endpoint and key first"}>
-              {fetching ? "Fetching models…" : fetchAttempted || fetchError ? "Refetch models" : "Fetch models"}
+                  ? t("form.fetchNeedsKey")
+                  : t("form.fetchNeedsBoth")}>
+              {fetching ? t("form.fetching") : fetchAttempted || fetchError ? t("form.refetch") : t("form.fetch")}
             </button>
           </div>
           <div class="combo" bind:this={comboEl}>
@@ -874,17 +876,17 @@
                 <span class="chip" class:default={m === fModel}>
                   <button class="chip-label" type="button" aria-pressed={m === fModel}
                     onclick={() => setDefault(m)}
-                    title={m === fModel ? `${displayName(m)} is the default model` : `Set ${displayName(m)} as default`}>
+                    title={m === fModel ? t("form.isDefaultTitle", { name: displayName(m) }) : t("form.setDefaultTitle", { name: displayName(m) })}>
                     {displayName(m)}
-                    {#if m === fModel}<span class="chip-default-tag">default</span>{/if}
+                    {#if m === fModel}<span class="chip-default-tag">{t("form.defaultTag")}</span>{/if}
                   </button>
                   <button class="chip-remove" type="button" onclick={() => removeModel(m)}
-                    aria-label={`Remove ${displayName(m)}`} title={`Remove ${displayName(m)}`}>×</button>
+                    aria-label={t("form.removeModel", { name: displayName(m) })} title={t("form.removeModel", { name: displayName(m) })}>×</button>
                 </span>
               {/each}
               <input class="combo-input" id="pv-form-model-input" type="text" bind:value={modelInput}
                 bind:this={modelInputEl}
-                placeholder={fModels.length ? "Search or add models" : "Search models or type an ID"}
+                placeholder={fModels.length ? t("form.searchOrAdd") : t("form.searchOrType")}
                 autocomplete="off" spellcheck="false"
                 role="combobox" aria-expanded={dropdownOpen} aria-controls="pv-model-listbox"
                 aria-autocomplete="list"
@@ -897,24 +899,24 @@
               </svg>
             </div>
             {#if dropdownOpen}
-              <div class="combo-pop" id="pv-model-listbox" role="listbox" aria-label="Available models"
+              <div class="combo-pop" id="pv-model-listbox" role="listbox" aria-label={t("form.availableModels")}
                 aria-multiselectable="true">
                 {#if fetching}
                   <div class="combo-note" role="status">
-                    <span class="combo-spinner" aria-hidden="true"></span>Fetching models…
+                    <span class="combo-spinner" aria-hidden="true"></span>{t("form.fetching")}
                   </div>
                 {:else if filteredModels.length === 0}
                   <div class="combo-note">
                     {modelQuery
-                      ? `No matches — press Enter to add “${modelInput.trim()}”`
-                      : "No models from endpoint — type to add manually"}
+                      ? t("form.noMatches", { input: modelInput.trim() })
+                      : t("form.noModelsFromEndpoint")}
                   </div>
                 {:else}
                   <button class="combo-option combo-all" type="button" role="option"
                     id="pv-model-opt-all" tabindex="-1" aria-selected={allFilteredSelected}
                     class:checked={allFilteredSelected}
                     onmousedown={(e) => e.preventDefault()} onclick={toggleAllFiltered}
-                    title={allFilteredSelected ? "Unselect all listed models" : "Select all listed models"}>
+                    title={allFilteredSelected ? t("form.unselectAllTitle") : t("form.selectAllTitle")}>
                     <span class="combo-check" aria-hidden="true">
                       {#if allFilteredSelected}
                         <svg viewBox="0 0 10 8" fill="none">
@@ -925,8 +927,8 @@
                     </span>
                     <span class="combo-id">
                       {modelQuery
-                        ? `Select all matches (${filteredModels.length})`
-                        : `Select all (${filteredModels.length})`}
+                        ? t("form.selectAllMatches", { count: filteredModels.length })
+                        : t("form.selectAll", { count: filteredModels.length })}
                     </span>
                   </button>
                   {#each filteredModels as m, i (m)}
@@ -934,7 +936,7 @@
                       tabindex="-1" aria-selected={fModels.includes(m)}
                       class:checked={fModels.includes(m)} class:active={i === activeIndex}
                       onmousedown={(e) => e.preventDefault()} onclick={() => toggleModel(m)}
-                      title={fModels.includes(m) ? `Remove ${m}` : `Add ${m}`}>
+                      title={fModels.includes(m) ? t("form.removeOption", { name: m }) : t("form.addOption", { name: m })}>
                       <span class="combo-check" aria-hidden="true">
                         {#if fModels.includes(m)}
                           <svg viewBox="0 0 10 8" fill="none">
@@ -955,25 +957,25 @@
           </div>
           {#if fetchError}
             <p class="models-error" role="status">
-              <strong>Model list unavailable.</strong>
-              <span>{fetchError} You can add model IDs manually.</span>
+              <strong>{t("form.fetchFailed")}</strong>
+              <span>{t("form.fetchFailedHint", { error: fetchError })}</span>
             </p>
           {/if}
           {#if fModels.length && !fModels.includes(fModel)}
-            <p class="field-hint">Pick a default model by clicking one of the chips above.</p>
+            <p class="field-hint">{t("form.pickDefault")}</p>
           {:else if !fModels.length}
-            <p class="field-hint">At least one model is required; the first one added becomes the default.</p>
+            <p class="field-hint">{t("form.needModel")}</p>
           {/if}
         </div>
 
         {#if formError}
-          <p class="field-error" role="alert">Couldn't save: {formError}</p>
+          <p class="field-error" role="alert">{t("providers.saveFailed", { error: formError })}</p>
         {/if}
       </div>
       <div class="actions">
-        <button class="btn-ghost" type="button" onclick={requestCloseForm}>Cancel</button>
+        <button class="btn-ghost" type="button" onclick={requestCloseForm}>{t("dialog.cancel")}</button>
         <button class="btn-primary" type="button" onclick={() => void saveForm()}
-          disabled={!canSave || saving}>{isEdit ? "Save changes" : "Add provider"}</button>
+          disabled={!canSave || saving}>{isEdit ? t("form.saveChanges") : t("form.addProvider")}</button>
       </div>
     </div>
   </div>
@@ -983,20 +985,20 @@
      close by itself; while one is open, onDialogKeydown yields Esc/Tab to it. -->
 <ConfirmDialog
   open={removeTarget != null}
-  title={`Remove ${removeTarget?.name ?? "provider"}?`}
-  message={`This permanently deletes “${removeTarget?.name ?? ""}” and its stored API key. This cannot be undone.`}
-  confirmLabel={removeError ? "Try again" : "Remove provider"}
+  title={t("remove.title", { name: removeTarget?.name ?? t("form.providerFallback") })}
+  message={t("remove.message", { name: removeTarget?.name ?? "" })}
+  confirmLabel={removeError ? t("remove.tryAgain") : t("remove.confirm")}
   danger
   busy={removeBusy || saving}
-  error={removeError ? `Couldn't remove: ${removeError}` : ""}
+  error={removeError ? t("remove.failed", { error: removeError }) : ""}
   onConfirm={() => void confirmRemove()}
   onCancel={() => { removeTarget = null; removeError = ""; }} />
 
 <ConfirmDialog
   open={discardOpen}
-  title="Discard unsaved changes?"
-  message="This provider form has unsaved changes. Closing it will discard them."
-  confirmLabel="Discard changes"
+  title={t("discard.title")}
+  message={t("discard.message")}
+  confirmLabel={t("discard.confirm")}
   danger
   onConfirm={closeForm}
   onCancel={() => (discardOpen = false)} />

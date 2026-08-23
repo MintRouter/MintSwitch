@@ -9,10 +9,12 @@
   } from "../bindings/mintswitch/internal/service";
   import type { Provider } from "../bindings/mintswitch/internal/core";
   import { errMsg, npmCommand } from "./lib/ui";
+  import { t } from "./lib/i18n.svelte";
   import ProvidersCard from "./lib/ProvidersCard.svelte";
   import ToolCard from "./lib/ToolCard.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import PromoBanner from "./lib/PromoBanner.svelte";
+  import LocaleSwitcher from "./lib/LocaleSwitcher.svelte";
 
   let tools = $state<ToolView[]>([]);
   let providers = $state<ProviderView[]>([]);
@@ -35,7 +37,7 @@
   let confirm = $state<{
     open: boolean; title: string; message: string; confirmLabel: string;
     danger: boolean; busy: boolean; action: () => Promise<void>;
-  }>({ open: false, title: "", message: "", confirmLabel: "Confirm", danger: false, busy: false, action: async () => {} });
+  }>({ open: false, title: "", message: "", confirmLabel: "", danger: false, busy: false, action: async () => {} });
 
   // Theme is applied to <html data-theme> by an inline head script before first
   // paint (no flash). Mirror that into reactive state so the toggle stays in sync.
@@ -181,7 +183,7 @@
   async function withBusy(id: string, fn: () => Promise<void>): Promise<void> {
     busyIds = [...busyIds, id];
     const timer = setTimeout(() => {
-      flash("This operation is taking longer than expected. It is still running; the tool stays locked until it finishes.");
+      flash(t("toast.longOp"));
     }, BUSY_TIMEOUT_MS);
     try {
       await fn();
@@ -192,15 +194,15 @@
   }
 
   function applyOne(id: string): void {
-    const name = tools.find((t) => t.id === id)?.name ?? id;
+    const name = tools.find((x) => x.id === id)?.name ?? id;
     ask({
-      title: `Apply profile to ${name}?`,
-      message: "This writes your profile to the tool's real config file (a backup is created first).",
-      confirmLabel: "Apply",
+      title: t("confirm.applyOne.title", { name }),
+      message: t("confirm.applyOne.message"),
+      confirmLabel: t("confirm.applyOne.confirm"),
       action: () => withBusy(id, async () => {
         try {
           await Service.ApplyOne(id);
-          flash(APPLIED_TOAST, "success");
+          flash(t("toast.applied"), "success");
         } catch (e) {
           flash(errMsg(e));
         }
@@ -210,15 +212,15 @@
   }
 
   function restoreOne(id: string): void {
-    const name = tools.find((t) => t.id === id)?.name ?? id;
+    const name = tools.find((x) => x.id === id)?.name ?? id;
     ask({
-      title: `Restore ${name} to default?`,
-      message: "This reverts the tool's config to its pre-apply state from the backup.",
-      confirmLabel: "Restore", danger: true,
+      title: t("confirm.restoreOne.title", { name }),
+      message: t("confirm.restoreOne.message"),
+      confirmLabel: t("confirm.restoreOne.confirm"), danger: true,
       action: () => withBusy(id, async () => {
         try {
           const r = await Service.RestoreOne(id);
-          flash(r.message || "Restored.", "success");
+          flash(r.message || t("toast.restored"), "success");
         } catch (e) {
           flash(errMsg(e));
         }
@@ -228,17 +230,17 @@
   }
 
   function installOne(id: string): void {
-    const name = tools.find((t) => t.id === id)?.name ?? id;
+    const name = tools.find((x) => x.id === id)?.name ?? id;
     const cmd = npmCommand("install", id);
     ask({
-      title: `Install ${name}?`,
-      message: `This runs the following command to install ${name} globally with npm:\n\n${cmd}`,
-      confirmLabel: "Install",
+      title: t("confirm.installOne.title", { name }),
+      message: t("confirm.installOne.message", { name, cmd }),
+      confirmLabel: t("confirm.installOne.confirm"),
       action: () => withBusy(id, async () => {
         try {
           const r = await Service.Install(id);
           installLog = r;
-          if (!r.ok) flash(r.error || `Couldn't install ${name}.`);
+          if (!r.ok) flash(r.error || t("toast.installFailed", { name }));
         } catch (e) {
           flash(errMsg(e));
         }
@@ -248,17 +250,17 @@
   }
 
   function uninstallOne(id: string): void {
-    const name = tools.find((t) => t.id === id)?.name ?? id;
+    const name = tools.find((x) => x.id === id)?.name ?? id;
     const cmd = npmCommand("uninstall", id);
     ask({
-      title: `Uninstall ${name}?`,
-      message: `This runs the following command to remove ${name} globally with npm:\n\n${cmd}`,
-      confirmLabel: "Uninstall", danger: true,
+      title: t("confirm.uninstallOne.title", { name }),
+      message: t("confirm.uninstallOne.message", { name, cmd }),
+      confirmLabel: t("confirm.uninstallOne.confirm"), danger: true,
       action: () => withBusy(id, async () => {
         try {
           const r = await Service.Uninstall(id);
           installLog = r;
-          if (!r.ok) flash(r.error || `Couldn't uninstall ${name}.`);
+          if (!r.ok) flash(r.error || t("toast.uninstallFailed", { name }));
         } catch (e) {
           flash(errMsg(e));
         }
@@ -314,34 +316,32 @@
   const modifiedCount = $derived(tools.filter((t) => t.status === "modified_externally").length);
   const canApplyAll = $derived(!!activeProvider && installedCount > 0 && busyIds.length === 0);
   const canRestoreAll = $derived(tools.some((t) => t.installed && t.status !== "default" && t.status !== "not_installed") && busyIds.length === 0);
-  // One-line trust message after a successful apply (single or bulk): says the
-  // original config is backed up and restorable, instead of a bare "Applied.".
-  const APPLIED_TOAST = "Applied — original config backed up · Restore anytime";
   // Summarize a bulk apply/restore. On failure, name the failing tools and
   // include the first error (truncated) so the toast is actionable instead of
-  // just a count. successMsg overrides the default all-ok message.
+  // just a count. verb is the pre-translated action name; successMsg overrides
+  // the default all-ok message.
   function summarizeBulk(results: ToolOpResult[] | null, verb: string, successMsg?: string): void {
     const list = results ?? [];
     const failed = list.filter((r) => !r.ok);
     if (!failed.length) {
-      flash(successMsg ?? `${verb} completed for ${list.length} tool${list.length === 1 ? "" : "s"}.`, "success");
+      flash(successMsg ?? t("bulk.success", { verb, count: list.length }), "success");
       return;
     }
-    const toolName = (id: string) => tools.find((t) => t.id === id)?.name ?? id;
+    const toolName = (id: string) => tools.find((x) => x.id === id)?.name ?? id;
     const names = failed.map((r) => toolName(r.id)).join(", ");
     const firstError = failed.find((r) => r.error)?.error ?? "";
     const detail = firstError ? `: ${firstError.length > 140 ? `${firstError.slice(0, 140)}…` : firstError}` : ".";
-    flash(`${verb} failed for ${names}${detail}`);
+    flash(t("bulk.failed", { verb, names, detail }));
   }
 
   function applyAll(): void {
     ask({
-      title: "Apply to all installed tools?",
-      message: "MintSwitch will back up each existing configuration, then apply the effective provider and model to every installed tool.",
-      confirmLabel: "Apply to all",
+      title: t("confirm.applyAll.title"),
+      message: t("confirm.applyAll.message"),
+      confirmLabel: t("confirm.applyAll.confirm"),
       action: () => withBusy("__all__", async () => {
         try {
-          summarizeBulk(await Service.ApplyAll(), "Apply", APPLIED_TOAST);
+          summarizeBulk(await Service.ApplyAll(), t("bulk.applyVerb"), t("toast.applied"));
         } catch (e) {
           flash(errMsg(e));
         }
@@ -352,12 +352,12 @@
 
   function restoreAll(): void {
     ask({
-      title: "Restore all tool configurations?",
-      message: "Every configuration managed by MintSwitch will be restored from its pre-apply backup.",
-      confirmLabel: "Restore all", danger: true,
+      title: t("confirm.restoreAll.title"),
+      message: t("confirm.restoreAll.message"),
+      confirmLabel: t("confirm.restoreAll.confirm"), danger: true,
       action: () => withBusy("__all__", async () => {
         try {
-          summarizeBulk(await Service.RestoreAll(), "Restore");
+          summarizeBulk(await Service.RestoreAll(), t("bulk.restoreVerb"));
         } catch (e) {
           flash(errMsg(e));
         }
@@ -373,7 +373,7 @@
 <div class="app-shell">
   <div class="titlebar" aria-hidden="true">MintSwitch</div>
   <div class="workspace">
-    <aside class="sidebar" aria-label="MintSwitch settings">
+    <aside class="sidebar" aria-label={t("app.sidebarLabel")}>
       <div class="brand-block">
         <div class="brand-mark" aria-hidden="true">
           <svg viewBox="4 4 40 40" width="22" height="22" fill="none">
@@ -390,11 +390,11 @@
           onAdd={addProvider} onUpdate={updateProvider} onRemove={removeProvider}
           onSetActive={setActiveProvider} onToolProviderChange={changeToolProvider} />
         <section class="health-card" aria-labelledby="health-title">
-          <div class="section-label" id="health-title">Workspace health</div>
+          <div class="section-label" id="health-title">{t("health.title")}</div>
           <div class="health-grid">
-            <div class="health-stat"><strong>{installedCount}</strong><span>Installed</span></div>
-            <div class="health-stat success"><strong>{appliedCount}</strong><span>Applied</span></div>
-            <div class="health-stat" class:warning={modifiedCount > 0}><strong>{modifiedCount}</strong><span>Modified</span></div>
+            <div class="health-stat"><strong>{installedCount}</strong><span>{t("health.installed")}</span></div>
+            <div class="health-stat success"><strong>{appliedCount}</strong><span>{t("health.applied")}</span></div>
+            <div class="health-stat" class:warning={modifiedCount > 0}><strong>{modifiedCount}</strong><span>{t("health.modified")}</span></div>
           </div>
         </section>
       </div>
@@ -402,8 +402,9 @@
       <PromoBanner />
 
       <div class="sidebar-footer">
+        <LocaleSwitcher />
         <button class="icon-button" type="button" onclick={toggleTheme} aria-pressed={theme === "dark"}
-          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>
+          aria-label={theme === "dark" ? t("theme.toLight") : t("theme.toDark")}>
           {#if theme === "dark"}
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></svg>
           {:else}
@@ -415,36 +416,36 @@
 
     <main class="main-panel">
       <header class="main-header">
-        <h1>Your AI tools</h1>
+        <h1>{t("app.heading")}</h1>
         <div class="header-actions">
-          <button class="icon-button" type="button" onclick={() => void redetect()} disabled={refreshing || loading} aria-label="Refresh detected tools" title="Refresh detected tools">
+          <button class="icon-button" type="button" onclick={() => void redetect()} disabled={refreshing || loading} aria-label={t("app.refresh")} title={t("app.refresh")}>
             <svg class:spinning={refreshing} viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3" /><path d="M20 4v7h-7" /></svg>
           </button>
-          <button class="btn-ghost bulk-restore" type="button" onclick={restoreAll} disabled={!canRestoreAll}>Restore all</button>
+          <button class="btn-ghost bulk-restore" type="button" onclick={restoreAll} disabled={!canRestoreAll}>{t("app.restoreAll")}</button>
           <button class="btn-primary bulk-apply" type="button" onclick={applyAll} disabled={!canApplyAll}>
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>Apply to all
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>{t("app.applyAll")}
           </button>
         </div>
       </header>
 
       <div class="content-scroll">
         {#if loading}
-          <div class="state-card" role="status" aria-live="polite"><span class="loader" aria-hidden="true"></span><div><strong>Detecting tools</strong><span>Reading local configuration…</span></div></div>
+          <div class="state-card" role="status" aria-live="polite"><span class="loader" aria-hidden="true"></span><div><strong>{t("state.detecting")}</strong><span>{t("state.reading")}</span></div></div>
         {:else if loadError}
-          <div class="state-card error" role="alert"><div><strong>We couldn't load your tools</strong><span>{loadError}</span></div><button class="btn-primary" type="button" onclick={load}>Try again</button></div>
+          <div class="state-card error" role="alert"><div><strong>{t("state.loadFailed")}</strong><span>{loadError}</span></div><button class="btn-primary" type="button" onclick={load}>{t("state.tryAgain")}</button></div>
         {:else}
           {#if installLog}
-            <div class="install-log" class:ok={installLog.ok} aria-label="Last command result">
+            <div class="install-log" class:ok={installLog.ok} aria-label={t("install.lastResult")}>
               <span class="install-mark" aria-hidden="true">{installLog.ok ? "✓" : "!"}</span>
-              <div class="install-copy"><strong>{installLog.ok ? "Command completed" : "Command needs attention"}</strong><code>{installLog.command}</code>
+              <div class="install-copy"><strong>{installLog.ok ? t("install.completed") : t("install.needsAttention")}</strong><code>{installLog.command}</code>
                 {#if !installLog.ok && installLog.error}<p role="alert">{installLog.error}</p>{/if}
-                {#if installLog.output}<pre aria-label="Command output">{installLog.output}</pre>{/if}
+                {#if installLog.output}<pre aria-label={t("install.output")}>{installLog.output}</pre>{/if}
               </div>
-              <button class="icon-button" type="button" onclick={() => (installLog = null)} aria-label="Dismiss result">×</button>
+              <button class="icon-button" type="button" onclick={() => (installLog = null)} aria-label={t("install.dismiss")}>×</button>
             </div>
           {/if}
           {#if tools.length === 0}
-            <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌘</div><h2>No tools detected</h2><p>Install a supported AI coding tool, then refresh this workspace.</p></div>
+            <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌘</div><h2>{t("empty.title")}</h2><p>{t("empty.body")}</p></div>
           {:else}
             <div class="tool-grid">
               {#each tools as t (t.id)}
@@ -461,7 +462,7 @@
   </div>
 </div>
 
-{#if toast}<div class="toast" class:success={toast.tone === "success"} class:error={toast.tone === "error"} role={toast.tone === "error" ? "alert" : "status"}><span class="toast-icon" aria-hidden="true">{toast.tone === "success" ? "✓" : "!"}</span>{toast.msg}<button class="toast-dismiss" type="button" onclick={() => (toast = null)} aria-label="Dismiss notification">×</button></div>{/if}
+{#if toast}<div class="toast" class:success={toast.tone === "success"} class:error={toast.tone === "error"} role={toast.tone === "error" ? "alert" : "status"}><span class="toast-icon" aria-hidden="true">{toast.tone === "success" ? "✓" : "!"}</span>{toast.msg}<button class="toast-dismiss" type="button" onclick={() => (toast = null)} aria-label={t("toast.dismiss")}>×</button></div>{/if}
 <ConfirmDialog open={confirm.open} title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} busy={confirm.busy} onConfirm={runConfirm} onCancel={() => (confirm = { ...confirm, open: false })} />
 
 <style>

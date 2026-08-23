@@ -2,6 +2,7 @@
   import type { ToolView, ProviderView } from "../../bindings/mintswitch/internal/service";
   import type { Provider } from "../../bindings/mintswitch/internal/core";
   import { statusMeta, toolLogoSrc } from "./ui";
+  import { t } from "./i18n.svelte";
 
   interface Props {
     tool: ToolView;
@@ -52,14 +53,14 @@
   // the success tone — plain "Installed" stays neutral so a card never shows
   // two different greens meaning different things.
   const statusLine = $derived.by(() => {
-    if (!tool.installed) return { label: "Not installed", tone: "neutral", full: meta.label };
+    if (!tool.installed) return { label: t("tool.statusNotInstalled"), tone: "neutral", full: meta.label };
     if (tool.status === "applied_by_mintswitch") {
-      return { label: "Applied", tone: "success", full: meta.label };
+      return { label: t("tool.statusApplied"), tone: "success", full: meta.label };
     }
     if (tool.status === "modified_externally") {
-      return { label: "Modified", tone: "warning", full: meta.label };
+      return { label: t("tool.statusModified"), tone: "warning", full: meta.label };
     }
-    return { label: "Installed", tone: "neutral", full: meta.label };
+    return { label: t("tool.statusInstalled"), tone: "neutral", full: meta.label };
   });
   // Apply needs an installed tool and a configured provider (the backend
   // fails fast without one). Restore only makes sense once we've changed
@@ -258,7 +259,7 @@
     </div>
     <div class="tool-titles">
       <h3 class="tool-name" id={`tool-${tool.id}`}>{nameParts.name}</h3>
-      <p class="tool-subtitle">{nameParts.subtitle || (tool.installed ? "Local application" : "Available integration")}</p>
+      <p class="tool-subtitle">{nameParts.subtitle || (tool.installed ? t("tool.subtitleLocal") : t("tool.subtitleAvailable"))}</p>
     </div>
     <div class={`tool-status tone-${statusLine.tone}`} aria-label={statusLine.full}>
       <span class="dot" aria-hidden="true"></span><span>{statusLine.label}</span>
@@ -268,7 +269,7 @@
   {#if tool.status === "modified_externally"}
     <div class="status-notice" role="status">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4m0 4h.01"/><path d="M10.3 3.7 2.4 17.4A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.6L13.7 3.7a2 2 0 0 0-3.4 0Z"/></svg>
-      Configuration differs from the last apply
+      {t("tool.configDiffers")}
     </div>
   {/if}
 
@@ -276,67 +277,67 @@
     {#if hasModelRow}
       <div class="model-control">
         <div class="model-head">
-          <label class="control-label" for={`model-${tool.id}`}>{applyMode === "all" ? "Default model" : "Model"}</label>
+          <label class="control-label" for={`model-${tool.id}`}>{applyMode === "all" ? t("tool.defaultModel") : t("tool.model")}</label>
           <div class="mode-controls">
-            <div class="mode-toggle" role="group" aria-label={`Apply mode for ${nameParts.name}`}>
-              <button type="button" class="mode-btn" class:active={applyMode === "one"} aria-pressed={applyMode === "one"} disabled={busy} onclick={() => selectMode("one")}>1 model</button>
-              <button type="button" class="mode-btn" class:active={applyMode === "all"} aria-pressed={applyMode === "all"} disabled={busy} onclick={() => selectMode("all")}>All models</button>
+            <div class="mode-toggle" role="group" aria-label={t("tool.applyModeFor", { name: nameParts.name })}>
+              <button type="button" class="mode-btn" class:active={applyMode === "one"} aria-pressed={applyMode === "one"} disabled={busy} onclick={() => selectMode("one")}>{t("tool.modeOne")}</button>
+              <button type="button" class="mode-btn" class:active={applyMode === "all"} aria-pressed={applyMode === "all"} disabled={busy} onclick={() => selectMode("all")}>{t("tool.modeAll")}</button>
             </div>
             {#if applyMode === "all" && claudeOnlyAll}
               <span class="info-wrap" bind:this={infoWrapEl}>
-                <button type="button" class="info-btn" aria-label="About All models mode"
+                <button type="button" class="info-btn" aria-label={t("tool.aboutAllMode")}
                   aria-expanded={infoOpen} aria-controls={`allinfo-${tool.id}`}
                   onclick={() => (infoOpen = !infoOpen)}>
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8.5h.01"/></svg>
                 </button>
-                <span class="info-tip" id={`allinfo-${tool.id}`} class:open={infoOpen}>All mode adds Claude models only (Anthropic limit).</span>
+                <span class="info-tip" id={`allinfo-${tool.id}`} class:open={infoOpen}>{t("tool.allModeInfo")}</span>
               </span>
             {/if}
           </div>
         </div>
-        <select class="tool-model-select" id={`model-${tool.id}`} aria-label={`${applyMode === "all" ? "Default model" : "Model"} for ${nameParts.name}`} value={selectedModel} disabled={busy} onchange={onSelectModel}>
-          <option value="">Use provider default</option>
+        <select class="tool-model-select" id={`model-${tool.id}`} aria-label={t("tool.modelAriaLabel", { label: applyMode === "all" ? t("tool.defaultModel") : t("tool.model"), name: nameParts.name })} value={selectedModel} disabled={busy} onchange={onSelectModel}>
+          <option value="">{t("tool.useProviderDefault")}</option>
           {#each models as m (m)}<option value={m}>{modelNames[m] || m}</option>{/each}
         </select>
       </div>
     {:else}
-      <div class="model-control placeholder" aria-hidden="true"><span>Model</span><div>{tool.installed ? "Add models to your provider" : "Install to configure"}</div></div>
+      <div class="model-control placeholder" aria-hidden="true"><span>{t("tool.model")}</span><div>{tool.installed ? t("tool.addModels") : t("tool.installToConfigure")}</div></div>
     {/if}
 
     <div class="provider-row">
       <div class="provider-copy">
-        <span class="provider-label">Provider</span>
-        <strong>{tool.provider_name || "Not configured"}</strong>
+        <span class="provider-label">{t("tool.provider")}</span>
+        <strong>{tool.provider_name || t("tool.notConfigured")}</strong>
       </div>
-      {#if tool.provider_overridden}<span class="override-pill">Override</span>{/if}
+      {#if tool.provider_overridden}<span class="override-pill">{t("tool.override")}</span>{/if}
     </div>
   </div>
 
   <div class="tool-actions">
     {#if !tool.installed && tool.installable}
       <button class="btn-soft primary-action" type="button" onclick={() => onInstall(tool.id)} disabled={busy}>
-        {busy ? "Installing…" : "Install tool"}
+        {busy ? t("tool.installing") : t("tool.installTool")}
       </button>
     {:else if tool.installed && !hasProvider}
       <button class="btn-soft primary-action" type="button" onclick={onAddProvider} disabled={busy}>
-        Add provider…
+        {t("tool.addProviderCta")}
       </button>
     {:else}
       <button class="btn-soft primary-action" type="button" onclick={() => onApply(tool.id)} disabled={!canApply}
-        title={!tool.installed ? "Tool is not installed" : !hasProvider ? "Add a provider first" : undefined}>
-        {busy ? "Working…" : "Apply configuration"}
+        title={!tool.installed ? t("tool.notInstalledTitle") : !hasProvider ? t("tool.addProviderFirst") : undefined}>
+        {busy ? t("tool.working") : t("tool.applyConfig")}
       </button>
     {/if}
     <div class="secondary-actions">
-      <button class="text-action" type="button" onclick={() => onRestore(tool.id)} disabled={!canRestore}>Restore</button>
+      <button class="text-action" type="button" onclick={() => onRestore(tool.id)} disabled={!canRestore}>{t("tool.restore")}</button>
       {#if showTiers}
         <button class="text-action" type="button" onclick={openTiers} disabled={busy}
-          title="Pin the models used for Claude Code's opus / sonnet / haiku / fable tiers">Tiers</button>
+          title={t("tool.tiersTitle")}>{t("tool.tiers")}</button>
       {/if}
       {#if tool.installed && tool.installable}
-        <button class="text-action danger" type="button" onclick={() => onUninstall(tool.id)} disabled={busy}>Uninstall</button>
+        <button class="text-action danger" type="button" onclick={() => onUninstall(tool.id)} disabled={busy}>{t("tool.uninstall")}</button>
       {:else if !tool.installed && !tool.installable}
-        <span class="manual-note">Manual installation</span>
+        <span class="manual-note">{t("tool.manualInstall")}</span>
       {/if}
     </div>
   </div>
@@ -349,11 +350,9 @@
     onclick={(e) => e.target === e.currentTarget && closeTiers()}>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby={`tiers-title-${tool.id}`}
       tabindex="-1" bind:this={tiersDialogEl}>
-      <h2 class="dialog-title" id={`tiers-title-${tool.id}`}>Model tiers — {nameParts.name}</h2>
+      <h2 class="dialog-title" id={`tiers-title-${tool.id}`}>{t("tiers.title", { name: nameParts.name })}</h2>
       <p class="dialog-hint">
-        Pin the models Claude Code uses for its opus / sonnet / haiku / fable aliases and
-        background (small/fast) tasks on <strong>{effectiveProvider?.name}</strong>.
-        Empty tiers follow the default model. Re-apply the configuration for changes to take effect.
+        {t("tiers.hintBefore")}<strong>{effectiveProvider?.name}</strong>{t("tiers.hintAfter")}
       </p>
       <div class="tiers-grid">
         {#each tierRows as tier (tier.id)}
@@ -361,7 +360,7 @@
             <span class="tier-label">{tier.label}</span>
             <select class="tier-select" id={`tc-tier-${tool.id}-${tier.id}`} value={tier.get()}
               disabled={tiersSaving} onchange={(e) => tier.set(e.currentTarget.value)}>
-              <option value="">Use default model</option>
+              <option value="">{t("tiers.useDefault")}</option>
               {#each tierModels as m (m)}
                 <option value={m}>{tierName(m)}</option>
               {/each}
@@ -373,12 +372,12 @@
         {/each}
       </div>
       {#if tiersError}
-        <p class="tiers-error" role="alert">Couldn't save: {tiersError}</p>
+        <p class="tiers-error" role="alert">{t("tiers.saveFailed", { error: tiersError })}</p>
       {/if}
       <div class="dialog-actions">
-        <button class="btn-ghost" type="button" onclick={closeTiers} disabled={tiersSaving}>Cancel</button>
+        <button class="btn-ghost" type="button" onclick={closeTiers} disabled={tiersSaving}>{t("dialog.cancel")}</button>
         <button class="btn-primary" type="button" onclick={() => void saveTiers()} disabled={tiersSaving}>
-          {tiersSaving ? "Saving…" : "Save tiers"}
+          {tiersSaving ? t("tiers.saving") : t("tiers.save")}
         </button>
       </div>
     </div>

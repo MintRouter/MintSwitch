@@ -3,10 +3,13 @@
   // Native <dialog> semantics are emulated with role="dialog"/aria-modal so the
   // styling matches the app; focus is moved in on open, Escape and backdrop
   // close, and Tab is trapped within the dialog.
+  import { t } from "./i18n.svelte";
+
   interface Props {
     open: boolean;
     title: string;
     message: string;
+    /** Empty falls back to the localized generic "Confirm". */
     confirmLabel?: string;
     danger?: boolean;
     busy?: boolean;
@@ -20,7 +23,7 @@
     open,
     title,
     message,
-    confirmLabel = "Confirm",
+    confirmLabel = "",
     danger = false,
     busy = false,
     error = "",
@@ -102,7 +105,7 @@
       {/if}
       <div class="actions">
         <button class="btn-ghost" type="button" bind:this={cancelBtn} onclick={onCancel} disabled={busy}>
-          Cancel
+          {t("dialog.cancel")}
         </button>
         <button
           class="btn-primary"
@@ -112,7 +115,7 @@
           onclick={onConfirm}
           disabled={busy}
         >
-          {busy ? "Working…" : confirmLabel}
+          {busy ? t("dialog.working") : confirmLabel || t("dialog.confirm")}
         </button>
       </div>
     </div>

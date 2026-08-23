@@ -1,5 +1,7 @@
-// Small presentational helpers shared across the MintSwitch UI. Pure functions,
-// no Svelte/DOM dependencies, so they are trivially typecheckable and reusable.
+// Small presentational helpers shared across the MintSwitch UI. Labels resolve
+// through the i18n layer at call time, so callers reading them inside a
+// template or $derived stay reactive to locale changes.
+import { t } from "./i18n.svelte";
 
 /** Visual tone keys map to the status-badge colour classes in the components. */
 export type Tone = "neutral" | "info" | "success" | "warning";
@@ -18,15 +20,15 @@ export interface StatusMeta {
 export function statusMeta(status: string): StatusMeta {
   switch (status) {
     case "applied_by_mintswitch":
-      return { label: "Applied by MintSwitch", tone: "success" };
+      return { label: t("status.appliedByMintswitch"), tone: "success" };
     case "modified_externally":
-      return { label: "Modified externally", tone: "warning" };
+      return { label: t("status.modifiedExternally"), tone: "warning" };
     case "default":
-      return { label: "Default config", tone: "info" };
+      return { label: t("status.defaultConfig"), tone: "info" };
     case "not_installed":
-      return { label: "Not installed", tone: "neutral" };
+      return { label: t("status.notInstalled"), tone: "neutral" };
     default:
-      return { label: status || "Unknown", tone: "neutral" };
+      return { label: status || t("status.unknown"), tone: "neutral" };
   }
 }
 
@@ -36,7 +38,7 @@ export function statusMeta(status: string): StatusMeta {
  * side never includes the API key), so we only normalise the shape here.
  */
 export function errMsg(e: unknown): string {
-  const fallback = "Something went wrong. Please try again.";
+  const fallback = t("error.generic");
 
   // Wails may wrap a Go error in RuntimeError and serialise that wrapper into
   // Error.message. Unwrap both regular Error objects and JSON-shaped messages

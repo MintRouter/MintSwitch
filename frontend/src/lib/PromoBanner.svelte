@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Browser } from "@wailsio/runtime";
+  import { t } from "./i18n.svelte";
 
   interface Props {
     /** Topbar variant: a tall 40px two-line banner sized to its content. */
@@ -30,7 +31,7 @@
     class="promo-main"
     type="button"
     onclick={() => openUrl(SITE_URL)}
-    aria-label="Open the MintRouter.AI website"
+    aria-label={t("promo.site")}
   >
     <img class="promo-logo" src="favicon.svg" alt="" aria-hidden="true" />
     <span class="promo-lines">
@@ -46,7 +47,7 @@
     class="promo-telegram"
     type="button"
     onclick={() => openUrl(TELEGRAM_URL)}
-    aria-label="Open the MintRouter.AI Telegram community"
+    aria-label={t("promo.telegram")}
     title="Telegram"
   >
     <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"
