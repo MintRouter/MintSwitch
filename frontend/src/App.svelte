@@ -40,20 +40,48 @@
   }>({ open: false, title: "", message: "", confirmLabel: "", danger: false, busy: false, action: async () => {} });
 
   // Theme is applied to <html data-theme> by an inline head script before first
-  // paint (no flash). Mirror that into reactive state so the toggle stays in sync.
-  let theme = $state<"light" | "dark">(
-    typeof document !== "undefined" &&
-      document.documentElement.getAttribute("data-theme") === "dark"
-      ? "dark"
-      : "light",
-  );
+  // paint (no flash). The stored preference adds a third "system" mode that
+  // follows the OS via matchMedia; a missing key (or any legacy value other
+  // than light/dark) means "system".
+  type ThemePref = "light" | "dark" | "system";
 
-  function toggleTheme(): void {
-    const next = theme === "dark" ? "light" : "dark";
-    theme = next;
-    document.documentElement.setAttribute("data-theme", next);
+  function readThemePref(): ThemePref {
     try {
-      localStorage.setItem("mintswitch-theme", next);
+      const stored = localStorage.getItem("mintswitch-theme");
+      if (stored === "light" || stored === "dark") return stored;
+    } catch (e) {
+      /* private mode / storage disabled — fall through to system */
+    }
+    return "system";
+  }
+
+  let themePref = $state<ThemePref>(readThemePref());
+
+  const darkQuery =
+    typeof window !== "undefined" && window.matchMedia
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : null;
+
+  function applyTheme(): void {
+    const applied =
+      themePref === "system" ? (darkQuery?.matches ? "dark" : "light") : themePref;
+    document.documentElement.setAttribute("data-theme", applied);
+  }
+  applyTheme();
+
+  // React in real time when the OS scheme changes while in System mode.
+  function onSchemeChange(): void {
+    if (themePref === "system") applyTheme();
+  }
+  darkQuery?.addEventListener("change", onSchemeChange);
+  onDestroy(() => darkQuery?.removeEventListener("change", onSchemeChange));
+
+  function cycleTheme(): void {
+    themePref =
+      themePref === "light" ? "dark" : themePref === "dark" ? "system" : "light";
+    applyTheme();
+    try {
+      localStorage.setItem("mintswitch-theme", themePref);
     } catch (e) {
       /* private mode / storage disabled — keep the in-memory choice */
     }
@@ -403,12 +431,14 @@
 
       <div class="sidebar-footer">
         <LocaleSwitcher />
-        <button class="icon-button" type="button" onclick={toggleTheme} aria-pressed={theme === "dark"}
-          aria-label={theme === "dark" ? t("theme.toLight") : t("theme.toDark")}>
-          {#if theme === "dark"}
+        <button class="icon-button" type="button" onclick={cycleTheme}
+          aria-label={themePref === "light" ? t("theme.toDark") : themePref === "dark" ? t("theme.toSystem") : t("theme.toLight")}>
+          {#if themePref === "light"}
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></svg>
-          {:else}
+          {:else if themePref === "dark"}
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" /></svg>
+          {:else}
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
           {/if}
         </button>
       </div>

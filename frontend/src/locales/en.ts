@@ -9,6 +9,7 @@ export const en: Record<string, string> = {
   "app.applyAll": "Apply to all",
   "theme.toLight": "Switch to light theme",
   "theme.toDark": "Switch to dark theme",
+  "theme.toSystem": "Switch to system theme",
   // Workspace health
   "health.title": "Workspace health",
   "health.installed": "Installed",

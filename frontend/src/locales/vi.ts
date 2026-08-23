@@ -9,6 +9,7 @@ export const vi: Record<string, string> = {
   "app.applyAll": "Áp dụng tất cả",
   "theme.toLight": "Chuyển sang giao diện sáng",
   "theme.toDark": "Chuyển sang giao diện tối",
+  "theme.toSystem": "Chuyển sang giao diện theo hệ thống",
   // Workspace health
   "health.title": "Tình trạng workspace",
   "health.installed": "Đã cài",

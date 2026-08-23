@@ -9,6 +9,7 @@ export const zh: Record<string, string> = {
   "app.applyAll": "全部应用",
   "theme.toLight": "切换到浅色主题",
   "theme.toDark": "切换到深色主题",
+  "theme.toSystem": "切换到跟随系统主题",
   // Workspace health
   "health.title": "工作区状态",
   "health.installed": "已安装",
