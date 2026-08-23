@@ -103,6 +103,13 @@ func (r *Resolver) LocalAppDataDir() string {
 	return filepath.Join(r.Home, "AppData", "Local")
 }
 
+// PackagesDir returns Windows' per-user MSIX/Store package data root
+// (%LOCALAPPDATA%\Packages), derived via [Resolver.LocalAppDataDir] so tests
+// pointing LocalAppData or Home at temp dirs stay isolated.
+func (r *Resolver) PackagesDir() string {
+	return filepath.Join(r.LocalAppDataDir(), "Packages")
+}
+
 // CodexDir returns the Codex home directory: CodexHome ($CODEX_HOME) when set,
 // otherwise Home/.codex (the documented default on every OS).
 func (r *Resolver) CodexDir() string {

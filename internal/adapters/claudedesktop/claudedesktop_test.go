@@ -425,7 +425,10 @@ func TestStripV1Suffix(t *testing.T) {
 // TestBaseDirPerOS pins the 3P data directory per OS: the macOS path must
 // never change (existing users' backups and markers were recorded against
 // it) and Windows uses %LOCALAPPDATA%\Claude-3p per the data-storage docs,
-// falling back to Home\AppData\Local when LOCALAPPDATA is unset.
+// falling back to Home\AppData\Local when LOCALAPPDATA is unset — unless the
+// MSIX package data dir exists, in which case the virtualized
+// LocalCache\Local\Claude-3p path wins even when the legacy dir also exists
+// (the running MSIX app ignores files at the real path).
 func TestBaseDirPerOS(t *testing.T) {
 	a, r, _ := newAdapter(t)
 	a.goos = "darwin"
@@ -441,17 +444,32 @@ func TestBaseDirPerOS(t *testing.T) {
 	if got, want := a.baseDir(), filepath.Join(local, "Claude-3p"); got != want {
 		t.Fatalf("windows baseDir = %q, want %q", got, want)
 	}
+	installApp(t, filepath.Join(local, "Claude-3p"))
+	pkg := filepath.Join(local, "Packages", "Claude_pzs8sxrjxfjjc")
+	installApp(t, pkg)
+	if got, want := a.baseDir(), filepath.Join(pkg, "LocalCache", "Local", "Claude-3p"); got != want {
+		t.Fatalf("windows MSIX baseDir = %q, want %q", got, want)
+	}
+	a.goos = "darwin"
+	if got, want := a.baseDir(), filepath.Join(r.Home, "Library", "Application Support", "Claude-3p"); got != want {
+		t.Fatalf("darwin baseDir with MSIX dir present = %q, want %q", got, want)
+	}
 }
 
 // TestDetectWindows proves the Windows probe locations key off %LOCALAPPDATA%
-// and that Detect reports installed — with the config path under the Windows
-// 3P data dir — once one of them exists.
+// and that Detect reports installed once one of them exists — with the config
+// path under the legacy %LOCALAPPDATA%\Claude-3p dir for Squirrel installs,
+// or under the package's LocalCache\Local\Claude-3p for MSIX installs.
 func TestDetectWindows(t *testing.T) {
-	for _, dir := range []string{
-		filepath.Join("AnthropicClaude"),
-		filepath.Join("Programs", "Claude"),
+	for _, tc := range []struct {
+		dir  string
+		msix bool
+	}{
+		{filepath.Join("AnthropicClaude"), false},
+		{filepath.Join("Programs", "Claude"), false},
+		{filepath.Join("Packages", "Claude_pzs8sxrjxfjjc"), true},
 	} {
-		t.Run(dir, func(t *testing.T) {
+		t.Run(tc.dir, func(t *testing.T) {
 			home := t.TempDir()
 			r := &paths.Resolver{
 				Home:         home,
@@ -464,15 +482,54 @@ func TestDetectWindows(t *testing.T) {
 			if installed, _ := a.Detect(); installed {
 				t.Fatal("expected not installed without app dir")
 			}
-			installApp(t, filepath.Join(r.LocalAppData, dir))
+			installApp(t, filepath.Join(r.LocalAppData, tc.dir))
 			installed, path := a.Detect()
 			if !installed {
-				t.Fatalf("expected installed via %s", dir)
+				t.Fatalf("expected installed via %s", tc.dir)
 			}
-			if want := filepath.Join(r.LocalAppData, "Claude-3p", "claude_desktop_config.json"); path != want {
+			want := filepath.Join(r.LocalAppData, "Claude-3p", "claude_desktop_config.json")
+			if tc.msix {
+				want = filepath.Join(r.LocalAppData, tc.dir, "LocalCache", "Local", "Claude-3p", "claude_desktop_config.json")
+			}
+			if path != want {
 				t.Fatalf("Detect path = %q, want %q", path, want)
 			}
 		})
+	}
+}
+
+// TestDetectWindowsMSIXGlob proves the defensive Claude_* glob under Packages
+// detects a re-signed package (different publisher-hash suffix) while
+// unrelated entries — dirs without the Claude_ prefix, or plain files — never
+// match; and that without the exact family dir, baseDir keeps the legacy
+// %LOCALAPPDATA%\Claude-3p fallback.
+func TestDetectWindowsMSIXGlob(t *testing.T) {
+	home := t.TempDir()
+	r := &paths.Resolver{
+		Home:         home,
+		DataDir:      filepath.Join(home, "data"),
+		LocalAppData: filepath.Join(home, "AppData", "Local"),
+	}
+	pkgs := filepath.Join(r.LocalAppData, "Packages")
+	installApp(t, filepath.Join(pkgs, "NotClaude_xyz"))
+	installApp(t, filepath.Join(pkgs, "ClaudiusMaximus_abc"))
+	if err := os.WriteFile(filepath.Join(pkgs, "Claude_notadir"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
+	a.goos = "windows"
+	a.appDirs = defaultAppDirs(r, "windows")
+	if installed, _ := a.Detect(); installed {
+		t.Fatal("unrelated Packages entries must not detect")
+	}
+	installApp(t, filepath.Join(pkgs, "Claude_otherhash1"))
+	a.appDirs = defaultAppDirs(r, "windows")
+	installed, path := a.Detect()
+	if !installed {
+		t.Fatal("expected installed via Claude_* glob under Packages")
+	}
+	if want := filepath.Join(r.LocalAppData, "Claude-3p", "claude_desktop_config.json"); path != want {
+		t.Fatalf("Detect path = %q, want %q", path, want)
 	}
 }
 

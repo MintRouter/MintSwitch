@@ -61,6 +61,9 @@ func TestResolverLocalAppDataDir(t *testing.T) {
 	if got := r.LocalAppDataDir(); got != local {
 		t.Errorf("LocalAppDataDir = %q, want %q", got, local)
 	}
+	if got, want := r.PackagesDir(), filepath.Join(local, "Packages"); got != want {
+		t.Errorf("PackagesDir = %q, want %q", got, want)
+	}
 }
 
 func TestNewResolverUsesXDGEnv(t *testing.T) {

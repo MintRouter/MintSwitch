@@ -3,7 +3,8 @@
 //
 // Claude Desktop reads its deployment mode from claude_desktop_config.json
 // under its 3P data directory — ~/Library/Application Support/Claude-3p on
-// macOS, %LOCALAPPDATA%\Claude-3p on Windows — and, in 3P mode, loads the
+// macOS, %LOCALAPPDATA%\Claude-3p on Windows (or the MSIX package's
+// LocalCache\Local\Claude-3p; see below) — and, in 3P mode, loads the
 // gateway provider description from configLibrary/<uuid>.json referenced by
 // configLibrary/_meta.json (appliedId + entries). The adapter manages exactly
 // those three files:
@@ -30,13 +31,26 @@
 //
 // File shapes verified against a working hand-written 3P configuration
 // (2026-08). Platform support and data locations verified against
-// claude.com/docs/third-party/claude-desktop (data-storage) on 2026-08-22:
-// 3P mode ships for macOS and Windows only; earlier Windows releases stored
-// data under %APPDATA%\Claude-3p and the app migrates it to %LOCALAPPDATA%
-// itself, so %LOCALAPPDATA% is the canonical path; Linux is not supported by
-// the app, so Detect reports not-installed there. Claude Desktop is detected
+// claude.com/docs/third-party/claude-desktop (data-storage) on 2026-08-22,
+// with the Windows MSIX specifics confirmed against anthropics/claude-code
+// issues #36079, #59692, #25600 and #26073 (2026-08): 3P mode ships for
+// macOS and Windows only. On Windows the app now distributes as an MSIX
+// package (claude.ai installer, Microsoft Store, winget) whose binary lives
+// under the protected C:\Program Files\WindowsApps — not statable from
+// user space — and whose stable package family is Claude_pzs8sxrjxfjjc; the
+// reliable user-space footprint is the package data directory
+// %LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc. MSIX AppData virtualization
+// redirects the app's %LOCALAPPDATA%\Claude-3p access into that package's
+// LocalCache\Local\Claude-3p (files written at the real path are ignored by
+// the app and drift apart — issue #26073), so baseDir prefers the LocalCache
+// path whenever the package dir exists. Pre-MSIX (Squirrel) installs keep
+// %LOCALAPPDATA%\Claude-3p: earlier Windows releases stored data under
+// %APPDATA%\Claude-3p and the app migrates it to %LOCALAPPDATA% itself, so
+// that stays the canonical non-MSIX path. Linux is not supported by the
+// app, so Detect reports not-installed there. Claude Desktop is detected
 // via its macOS app bundle at /Applications/Claude.app or
-// ~/Applications/Claude.app, or on Windows via its per-user install under
+// ~/Applications/Claude.app, or on Windows via the MSIX package data dir
+// under %LOCALAPPDATA%\Packages or the legacy per-user installs under
 // %LOCALAPPDATA%; there is no npm install path for it.
 package claudedesktop
 
@@ -71,6 +85,13 @@ const (
 
 	deploymentModeKey = "deploymentMode"
 	deploymentMode3P  = "3p"
+
+	// msixPackageFamily is the folder name of Claude Desktop's MSIX package
+	// family under %LOCALAPPDATA%\Packages (Store/winget/new-installer
+	// builds). The pzs8sxrjxfjjc publisher-hash suffix derives from the
+	// publisher identity, not the version, so it is stable across releases
+	// (see the package doc for sources).
+	msixPackageFamily = "Claude_pzs8sxrjxfjjc"
 )
 
 // orphanDetail explains the orphan-remnant state: the 3P config files still
@@ -104,19 +125,33 @@ func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
 }
 
 // defaultAppDirs returns the install locations Detect probes on the given
-// OS: the macOS app bundle in /Applications or ~/Applications, or the
-// Windows per-user installs under %LOCALAPPDATA% (the installer's
-// AnthropicClaude directory, plus the conventional Programs\Claude location;
-// this is detection only, so probing an extra safe path is harmless). Linux
-// gets the macOS list, which never exists there, so Detect stays false: the
-// app has no Linux build (see the package doc).
+// OS: the macOS app bundle in /Applications or ~/Applications, or on Windows
+// the legacy Squirrel per-user installs under %LOCALAPPDATA% (the
+// installer's AnthropicClaude directory, plus the conventional
+// Programs\Claude location) and the MSIX package data dir under
+// %LOCALAPPDATA%\Packages (the binary itself sits in the protected
+// WindowsApps dir and cannot be stat'ed from user space); this is detection
+// only, so probing an extra safe path is harmless. A defensive Claude_* glob
+// under Packages (directories only) also counts, in case Anthropic ever
+// re-signs the package and the publisher-hash suffix changes. Linux gets the
+// macOS list, which never exists there, so Detect stays false: the app has
+// no Linux build (see the package doc).
 func defaultAppDirs(r *paths.Resolver, goos string) []string {
 	if goos == "windows" {
 		local := r.LocalAppDataDir()
-		return []string{
+		dirs := []string{
 			filepath.Join(local, "AnthropicClaude"),
 			filepath.Join(local, "Programs", "Claude"),
+			filepath.Join(r.PackagesDir(), msixPackageFamily),
 		}
+		if matches, err := filepath.Glob(filepath.Join(r.PackagesDir(), "Claude_*")); err == nil {
+			for _, m := range matches {
+				if fi, err := os.Stat(m); err == nil && fi.IsDir() {
+					dirs = append(dirs, m)
+				}
+			}
+		}
+		return dirs
 	}
 	return []string{
 		"/Applications/Claude.app",
@@ -130,15 +165,25 @@ func (a *Adapter) ID() string { return id }
 // Name returns the display name.
 func (a *Adapter) Name() string { return name }
 
-// baseDir returns Claude Desktop's 3P data directory:
-// %LOCALAPPDATA%\Claude-3p on Windows (earlier releases used %APPDATA% and
-// the app migrates itself, so the local dir is canonical) and
-// ~/Library/Application Support/Claude-3p elsewhere. The macOS path is
+// baseDir returns Claude Desktop's 3P data directory. On Windows the MSIX
+// package's LocalCache\Local\Claude-3p wins whenever the package data dir
+// exists — even on a machine that also has a leftover Squirrel install:
+// MSIX AppData virtualization redirects the running app's
+// %LOCALAPPDATA%\Claude-3p access into LocalCache, and the app ignores
+// files at the real path (they drift apart — anthropics/claude-code
+// #26073), so the LocalCache path is the one the app actually reads.
+// Without the package dir, %LOCALAPPDATA%\Claude-3p stays canonical
+// (earlier releases used %APPDATA% and the app migrates itself).
+// ~/Library/Application Support/Claude-3p elsewhere; the macOS path is
 // derived from Home rather than the native config dir so tests pointing Home
 // at a temp dir stay isolated, and it must never change: existing users'
 // backups and markers were recorded against it.
 func (a *Adapter) baseDir() string {
 	if a.goos == "windows" {
+		pkg := filepath.Join(a.r.PackagesDir(), msixPackageFamily)
+		if fi, err := os.Stat(pkg); err == nil && fi.IsDir() {
+			return filepath.Join(pkg, "LocalCache", "Local", "Claude-3p")
+		}
 		return filepath.Join(a.r.LocalAppDataDir(), "Claude-3p")
 	}
 	return a.r.Join("Library", "Application Support", "Claude-3p")
