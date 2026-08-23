@@ -17,12 +17,19 @@ export interface InstallResult {
 
 /**
  * ModelOption is one advertised model returned by the models fetch: its
- * canonical ID plus the optional human-friendly display name the endpoint
- * advertises. Never secret — safe to return to the frontend.
+ * canonical ID plus the optional human-friendly display name and context
+ * window the endpoint advertises. Never secret — safe to return to the
+ * frontend.
  */
 export interface ModelOption {
     "id": string;
     "display_name"?: string;
+
+    /**
+     * ContextWindow is the model's advertised context window in tokens; 0
+     * means the endpoint did not advertise one.
+     */
+    "context_window"?: number;
 }
 
 /**
@@ -53,6 +60,12 @@ export interface ProviderView {
      * for UI labels. Missing entries fall back to the model ID.
      */
     "model_names": { [_ in string]?: string } | null;
+
+    /**
+     * ModelContextWindows maps a member of Models to its advertised context
+     * window in tokens, passed through so the Edit form can re-save it.
+     */
+    "model_context_windows": { [_ in string]?: number } | null;
     "model": string;
     "small_fast_model": string;
 

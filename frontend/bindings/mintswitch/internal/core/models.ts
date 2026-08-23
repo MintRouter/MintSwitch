@@ -72,6 +72,13 @@ export interface Provider {
     "model_names"?: { [_ in string]?: string } | null;
 
     /**
+     * ModelContextWindows optionally maps a member of Models to the context
+     * window (in tokens) the endpoint's /models listing advertised for it.
+     * Adapters fall back to a tool-specific default for missing entries.
+     */
+    "model_context_windows"?: { [_ in string]?: number } | null;
+
+    /**
      * Model is the provider's default model identifier. Required.
      */
     "model": string;
