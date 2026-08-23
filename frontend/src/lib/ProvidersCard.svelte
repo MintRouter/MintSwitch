@@ -186,9 +186,10 @@
   // ---- Preset chips (Add only) ----
   // Logo chips for common OpenAI-compatible endpoints: picking one prefills
   // name + base URL and moves focus to the API key. A preset only overwrites
-  // a field that is blank or still holds another preset's prefill — the same
-  // rule for every chip (including Custom, whose prefill is blank) so
-  // hand-typed input is never thrown away. Never shown on Edit.
+  // a field that is blank or still holds exactly what a chip prefilled earlier
+  // in this form session — the same rule for every chip (including Custom,
+  // whose prefill is blank) so hand-typed input is never thrown away, even
+  // when it happens to match a preset string. Never shown on Edit.
   const presets = [
     { id: "mintrouter", label: "MintRouter.AI", name: "MintRouter.AI", baseUrl: "https://api.mintrouter.ai/v1" },
     { id: "openrouter", label: "OpenRouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
@@ -196,17 +197,54 @@
     { id: "custom", label: "Custom", name: "", baseUrl: "" },
   ];
   let selectedPreset = $state("");
+  // What the last chip actually wrote into each field (reset when the form
+  // opens). Plain variables, not $state — only touched inside handlers.
+  let prefilledName = "";
+  let prefilledUrl = "";
+
+  // Pressing a chip while the key (or URL) field is focused fires that
+  // field's blur BEFORE the click applies the new URL — unguarded, the blur
+  // auto-fetch would send the typed key to the pre-click URL. pointerdown
+  // drops any pending debounce and raises this flag so onAutoFetchBlur skips
+  // the stale fetch; the flag clears on pointerup/pointercancel (click, when
+  // it completes, fires after pointerup), and applyPreset re-arms the
+  // auto-fetch against the URL the chip actually applied.
+  let presetPointerDown = false;
+
+  function onPresetPointerdown(): void {
+    cancelAutoFetch();
+    presetPointerDown = true;
+    const reset = () => {
+      presetPointerDown = false;
+      window.removeEventListener("pointerup", reset, true);
+      window.removeEventListener("pointercancel", reset, true);
+    };
+    window.addEventListener("pointerup", reset, true);
+    window.addEventListener("pointercancel", reset, true);
+  }
+
+  function onAutoFetchBlur(): void {
+    if (presetPointerDown) return;
+    tryAutoFetch();
+  }
 
   function applyPreset(id: string): void {
     const p = presets.find((q) => q.id === id);
     if (!p) return;
     selectedPreset = id;
-    const nameUntouched = !formName.trim() || presets.some((q) => q.name !== "" && formName === q.name);
-    const urlUntouched = !formBaseUrl.trim() || presets.some((q) => q.baseUrl !== "" && formBaseUrl === q.baseUrl);
-    if (nameUntouched) formName = p.name;
-    if (urlUntouched) formBaseUrl = p.baseUrl;
+    if (!formName.trim() || formName === prefilledName) {
+      formName = p.name;
+      prefilledName = p.name;
+    }
+    if (!formBaseUrl.trim() || formBaseUrl === prefilledUrl) {
+      formBaseUrl = p.baseUrl;
+      prefilledUrl = p.baseUrl;
+    }
     if (id === "custom") formNameEl?.focus();
     else formKeyEl?.focus();
+    // One-shot auto-fetch against the URL now in the form (no-op while the
+    // URL is invalid, the key is blank, or the pair already ran).
+    tryAutoFetch();
   }
 
   function openForm(p: ProviderView | null): void {
@@ -233,6 +271,8 @@
     activeIndex = -1;
     discardOpen = false;
     selectedPreset = "";
+    prefilledName = "";
+    prefilledUrl = "";
     autoFetchDone = new Set();
     cancelAutoFetch();
     formInitial = formSnapshot();
@@ -712,7 +752,7 @@
             {#each presets as p (p.id)}
               <button class="preset-chip" type="button" aria-pressed={selectedPreset === p.id}
                 class:selected={selectedPreset === p.id} title={p.baseUrl || undefined}
-                onclick={() => applyPreset(p.id)}>
+                onpointerdown={onPresetPointerdown} onclick={() => applyPreset(p.id)}>
                 {#if p.id === "mintrouter"}
                   <svg viewBox="4 4 40 40" aria-hidden="true">
                     <g fill="none" stroke-width="5" stroke-linecap="round">
@@ -768,7 +808,7 @@
           <label class="add-label" for="pv-form-base">API endpoint</label>
           <input class="field-input" id="pv-form-base" type="url" bind:value={formBaseUrl}
             placeholder="https://api.mintrouter.ai/v1" autocomplete="off" spellcheck="false"
-            onblur={tryAutoFetch} />
+            onblur={onAutoFetchBlur} />
         </div>
         {#if formBase.upgraded}
           <p class="field-notice">
@@ -779,11 +819,13 @@
           <label class="add-label" for="pv-form-key">API key</label>
           <!-- Typing (debounced) or leaving the field triggers the one-shot
                auto-fetch; the URL field only triggers on blur so a typed key
-               never travels to a half-typed endpoint. -->
+               never travels to a half-typed endpoint. Blur caused by pressing
+               a preset chip is skipped (onAutoFetchBlur) — applyPreset re-runs
+               the auto-fetch after the chip's URL is in place. -->
           <input class="field-input" id="pv-form-key" type="password" bind:value={formKey}
             bind:this={formKeyEl}
             placeholder={isEdit ? "Unchanged unless typed" : "Enter the API key"}
-            autocomplete="off" oninput={scheduleAutoFetch} onblur={tryAutoFetch} />
+            autocomplete="off" oninput={scheduleAutoFetch} onblur={onAutoFetchBlur} />
         </div>
 
         <div class="add-field">
