@@ -23,13 +23,6 @@
   const active = $derived(providers.find((p) => p.active) ?? null);
   const installedTools = $derived(tools.filter((t) => t.installed));
 
-  // One-line card summary: count (with correct plural) plus the active
-  // provider's name — never any part of a key value.
-  const providersSummary = $derived(
-    providers.length === 0
-      ? "No providers yet"
-      : `${providers.length} provider${providers.length > 1 ? "s" : ""}${active ? ` · ${active.name} active` : ""}`,
-  );
 
   // Same one-line summary for a provider's model list (count + default by
   // display name), shown on the card for the active provider.
@@ -682,7 +675,6 @@
       <span><strong>Add your first provider</strong><small>Connect an OpenAI-compatible endpoint</small></span>
     </button>
   {/if}
-  <p class="provider-count">{providersSummary}</p>
 </section>
 
 <svelte:window onkeydown={onDialogKeydown} />
@@ -1029,16 +1021,14 @@
   .detail-row>span{color:var(--muted);font-size:12px}
   .detail-row>strong{min-width:0;max-width:62%;color:var(--text);font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .detail-row .secure{display:inline-flex;align-items:center;gap:6px;color:var(--ok-strong)}.secure i{width:6px;height:6px;border-radius:50%;background:var(--ok)}
-  .provider-count{margin:-3px 1px 0;color:var(--muted);font-size:11px}
   .empty-provider{display:flex;align-items:center;gap:11px;width:100%;padding:13px;text-align:left;border:1px dashed var(--border-strong);border-radius:12px;background:var(--surface-2);cursor:pointer}.empty-provider:hover{border-color:var(--accent)}
   .empty-plus{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;background:var(--accent-soft);color:var(--accent-soft-text);font-size:20px}
   .empty-provider strong,.empty-provider small{display:block}.empty-provider strong{color:var(--text);font-size:12.5px}.empty-provider small{margin-top:3px;color:var(--muted);font-size:11px}
   /* Stretch to fill the sidebar column so the card reaches down instead of
-     leaving a stubby gap; the provider count anchors to the bottom edge. */
+     leaving a stubby gap. */
   .providers { flex: 1 1 auto; min-height: 0; }
   .provider-details { flex: 1 1 auto; justify-content: flex-start; }
   .detail-row { min-height: 38px; }
-  .provider-count { margin-top: auto; padding-top: 8px; }
   .opt {
     margin-left: 0.3rem;
     text-transform: none;
