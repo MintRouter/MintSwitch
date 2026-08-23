@@ -1,6 +1,10 @@
 package core
 
-import "testing"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+)
 
 func TestProfileValidate(t *testing.T) {
 	valid := Profile{APIKey: "sk-123", BaseURL: "https://api.example.com/v1", Model: "gpt-x"}
@@ -89,11 +93,34 @@ func TestFingerprintStableAndSensitive(t *testing.T) {
 		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s", OpusModel: "o"},
 		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s", SonnetModel: "sn"},
 		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s", HaikuModel: "hk"},
+		{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s", ReviewModel: "r"},
 	}
 	for i, c := range changes {
 		if Fingerprint(c) == Fingerprint(base) {
 			t.Fatalf("change %d did not alter fingerprint", i)
 		}
+	}
+}
+
+// TestFingerprintReviewModelBackwardCompat pins the upgrade contract: a
+// profile without a ReviewModel must keep the exact hash MintSwitch computed
+// before the field existed (replicated inline over the pre-review fields), so
+// markers written by earlier versions never flip to ModifiedExternally after
+// an upgrade. Only a non-empty ReviewModel alters the hash.
+func TestFingerprintReviewModelBackwardCompat(t *testing.T) {
+	base := Profile{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s"}
+	h := sha256.New()
+	for _, f := range []string{base.BaseURL, base.APIKey, base.Model, base.SmallFastModel, base.OpusModel, base.SonnetModel, base.HaikuModel} {
+		h.Write([]byte(f))
+		h.Write([]byte{0})
+	}
+	if want := hex.EncodeToString(h.Sum(nil)); Fingerprint(base) != want {
+		t.Fatalf("empty ReviewModel changed the pre-review fingerprint: %q, want %q", Fingerprint(base), want)
+	}
+	pinned := base
+	pinned.ReviewModel = "r"
+	if Fingerprint(pinned) == Fingerprint(base) {
+		t.Fatal("non-empty ReviewModel did not alter fingerprint")
 	}
 }
 

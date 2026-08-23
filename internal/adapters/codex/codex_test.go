@@ -332,6 +332,204 @@ func TestApplyKeepsUserCatalogRef(t *testing.T) {
 	}
 }
 
+// TestApplyReviewModel pins the review-tier contract: a profile pinning
+// ReviewModel writes the top-level review_model key and — even in
+// single-model mode — the model catalog, whose appended entry carries the
+// review model's advertised context window (falling back to
+// defaultContextWindow for the session model); a re-apply without the pin is
+// first detected via the fingerprint, then removes the key, the catalog
+// reference and the catalog file again.
+func TestApplyReviewModel(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	p.ReviewModel = "gpt-5.5-review"
+	p.ModelContextWindows = map[string]int{"gpt-5.5-review": 400_000}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	catalogPath := filepath.Join(home, ".codex", catalogFileName)
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[reviewModelKey] != "gpt-5.5-review" {
+		t.Fatalf("%s = %v, want gpt-5.5-review", reviewModelKey, cfg[reviewModelKey])
+	}
+	if cfg[catalogKey] != catalogPath {
+		t.Fatalf("%s = %v, want %q", catalogKey, cfg[catalogKey], catalogPath)
+	}
+	catalog, err := core.ReadJSONObject(catalogPath)
+	if err != nil {
+		t.Fatalf("catalog not written: %v", err)
+	}
+	entries, _ := catalog["models"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("catalog models = %v, want 2 entries", entries)
+	}
+	wantWindows := []float64{defaultContextWindow, 400_000}
+	for i, id := range []string{"gpt-5.5", "gpt-5.5-review"} {
+		entry := entries[i].(map[string]any)
+		if entry["slug"] != id {
+			t.Fatalf("entry %d slug = %v, want %q", i, entry["slug"], id)
+		}
+		if w, _ := entry["context_window"].(float64); w != wantWindows[i] {
+			t.Fatalf("entry %d context_window = %v, want %v", i, entry["context_window"], wantWindows[i])
+		}
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied with review model, got %v", st)
+	}
+
+	unpinned := sampleProfile()
+	if st, _, _ := a.Status(unpinned); st != core.StatusModifiedExternally {
+		t.Fatalf("want ModifiedExternally after unpinning review model, got %v", st)
+	}
+	if _, err := a.Apply(unpinned); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg[reviewModelKey]; present {
+		t.Fatalf("%s not removed on unpinned re-apply: %+v", reviewModelKey, cfg)
+	}
+	if _, present := cfg[catalogKey]; present {
+		t.Fatalf("%s not removed on unpinned re-apply: %+v", catalogKey, cfg)
+	}
+	if _, err := os.Stat(catalogPath); !os.IsNotExist(err) {
+		t.Fatalf("catalog file not removed on unpinned re-apply: %v", err)
+	}
+	if st, _, _ := a.Status(unpinned); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied after unpinned re-apply, got %v", st)
+	}
+}
+
+// TestCatalogDedupsReviewModel proves a ReviewModel already among the applied
+// models gets no duplicate catalog entry.
+func TestCatalogDedupsReviewModel(t *testing.T) {
+	a, home := newAdapter(t)
+	p := sampleProfile()
+	p.Models = []string{"gpt-5.5", "gpt-5.5-mini"}
+	p.ApplyAllModels = true
+	p.ReviewModel = "gpt-5.5-mini"
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := core.ReadJSONObject(filepath.Join(home, ".codex", catalogFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := catalog["models"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("catalog models = %v, want 2 deduped entries", entries)
+	}
+}
+
+// TestApplyKeepsUserReviewModel proves a user's own review_model is never
+// deleted by a first Apply over an unmanaged config when the profile pins no
+// review model.
+func TestApplyKeepsUserReviewModel(t *testing.T) {
+	a, home := newAdapter(t)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTOML(filepath.Join(codexDir, "config.toml"),
+		map[string]any{reviewModelKey: "user-review"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[reviewModelKey] != "user-review" {
+		t.Fatalf("user %s changed: %v", reviewModelKey, cfg[reviewModelKey])
+	}
+}
+
+// TestReviewModelRestorePristine proves Restore after a review-model Apply
+// returns config.toml byte-for-byte to its pristine state (including the
+// user's own review_model value the Apply overwrote) and removes the catalog
+// file.
+func TestReviewModelRestorePristine(t *testing.T) {
+	a, home := newAdapter(t)
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origCfg := "other = \"keep\"\nreview_model = \"user-review\"\n"
+	if err := os.WriteFile(cfgPath, []byte(origCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := sampleProfile()
+	p.ReviewModel = "pinned-review"
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[reviewModelKey] != "pinned-review" {
+		t.Fatalf("%s = %v, want pinned-review", reviewModelKey, cfg[reviewModelKey])
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != origCfg {
+		t.Fatalf("config.toml not restored to pristine: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", catalogFileName)); !os.IsNotExist(err) {
+		t.Fatalf("catalog file not removed on restore: %v", err)
+	}
+}
+
+// TestRestoreNoBackupStripsReviewModel proves the no-backup Restore fallback
+// strips the MintSwitch-written review_model along with the other managed
+// keys while preserving the user's own settings.
+func TestRestoreNoBackupStripsReviewModel(t *testing.T) {
+	a, home := newAdapter(t)
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("approval_policy = \"never\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := sampleProfile()
+	p.ReviewModel = "pinned-review"
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(a.r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg[reviewModelKey]; present {
+		t.Fatalf("%s must be stripped: %v", reviewModelKey, cfg)
+	}
+	if cfg["approval_policy"] != "never" {
+		t.Fatalf("user config keys must be preserved: %v", cfg)
+	}
+}
+
 // TestRestoreRemovesCatalog proves Restore deletes the MintSwitch catalog
 // file and strips the managed model_catalog_json reference when no pristine
 // backup covers config.toml.

@@ -54,6 +54,10 @@ type Provider struct {
 	SonnetModel string `json:"sonnet_model,omitempty"`
 	HaikuModel  string `json:"haiku_model,omitempty"`
 	FableModel  string `json:"fable_model,omitempty"`
+	// ReviewModel optionally pins the model Codex uses for its code-review
+	// flow. Only the codex adapter reads it; empty means reviews follow the
+	// session model (no key is written). It need not be a member of Models.
+	ReviewModel string `json:"review_model,omitempty"`
 }
 
 // Profile returns the provider's endpoint fields as the [Profile] adapters
@@ -72,6 +76,7 @@ func (pr Provider) Profile() Profile {
 		SonnetModel:         pr.SonnetModel,
 		HaikuModel:          pr.HaikuModel,
 		FableModel:          pr.FableModel,
+		ReviewModel:         pr.ReviewModel,
 	}
 }
 

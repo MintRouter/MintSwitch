@@ -42,10 +42,24 @@ const defaultContextWindow = 272_000
 // picker, and priority preserves the profile's model order (lower sorts
 // first). display_name comes from the profile's ModelNames when set, and
 // context_window from the profile's ModelContextWindows (falling back to
-// defaultContextWindow).
+// defaultContextWindow). A pinned ReviewModel not already among the applied
+// models is appended last, so Codex has context-window metadata for it too.
 func catalogObject(p core.Profile) map[string]any {
+	slugs := p.ApplyModels()
+	if p.ReviewModel != "" {
+		present := false
+		for _, m := range slugs {
+			if m == p.ReviewModel {
+				present = true
+				break
+			}
+		}
+		if !present {
+			slugs = append(slugs, p.ReviewModel)
+		}
+	}
 	models := make([]any, 0)
-	for i, m := range p.ApplyModels() {
+	for i, m := range slugs {
 		display := m
 		if label := p.ModelNames[m]; label != "" {
 			display = label

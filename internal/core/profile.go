@@ -105,6 +105,11 @@ type Profile struct {
 	SonnetModel string `json:"sonnet_model,omitempty"`
 	HaikuModel  string `json:"haiku_model,omitempty"`
 	FableModel  string `json:"fable_model,omitempty"`
+	// ReviewModel optionally pins the model Codex uses for its code-review
+	// flow (config.toml's top-level review_model key). Only the codex adapter
+	// reads it; empty means reviews follow the session model (the key is not
+	// written). It need not be a member of Models.
+	ReviewModel string `json:"review_model,omitempty"`
 }
 
 // Validate reports whether the profile carries the minimum information needed

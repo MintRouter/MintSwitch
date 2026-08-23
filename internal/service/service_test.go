@@ -950,9 +950,9 @@ func TestModelNamesPersistenceRoundtrip(t *testing.T) {
 	}
 }
 
-// TestTierModelsPersistenceRoundtrip: the Claude Code tier pins survive a
-// restart, are trimmed on save, and round-trip through ProviderView so the
-// Edit dialog can re-populate them.
+// TestTierModelsPersistenceRoundtrip: the Claude Code tier pins and the Codex
+// review pin survive a restart, are trimmed on save, and round-trip through
+// ProviderView so the Edit dialog can re-populate them.
 func TestTierModelsPersistenceRoundtrip(t *testing.T) {
 	a := &fakeAdapter{id: "alpha", name: "Alpha", installed: true}
 	svc := newTestService(t, a)
@@ -960,6 +960,7 @@ func TestTierModelsPersistenceRoundtrip(t *testing.T) {
 	p.OpusModel = " opus-id "
 	p.SonnetModel = "gpt-id"
 	p.HaikuModel = " haiku-id "
+	p.ReviewModel = " review-id "
 	addProvider(t, svc, p)
 
 	reloaded := NewWithRegistry(reg(a), settings.NewStore(storeFrom(svc).Path))
@@ -972,13 +973,17 @@ func TestTierModelsPersistenceRoundtrip(t *testing.T) {
 		t.Fatalf("tier models after reload = %q/%q/%q, want opus-id/gpt-id/haiku-id",
 			pv.OpusModel, pv.SonnetModel, pv.HaikuModel)
 	}
+	if pv.ReviewModel != "review-id" {
+		t.Fatalf("review model after reload = %q, want review-id", pv.ReviewModel)
+	}
 
 	// The tier pins reach the adapter through the effective profile on Apply.
 	if _, err := reloaded.ApplyOne("alpha"); err != nil {
 		t.Fatalf("ApplyOne: %v", err)
 	}
 	if a.lastApplied == nil || a.lastApplied.OpusModel != "opus-id" ||
-		a.lastApplied.SonnetModel != "gpt-id" || a.lastApplied.HaikuModel != "haiku-id" {
+		a.lastApplied.SonnetModel != "gpt-id" || a.lastApplied.HaikuModel != "haiku-id" ||
+		a.lastApplied.ReviewModel != "review-id" {
 		t.Fatalf("applied profile tier models wrong: %+v", a.lastApplied)
 	}
 }

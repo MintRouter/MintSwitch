@@ -167,8 +167,8 @@ func NewMarker(p Profile, label string) Marker {
 // model set reports ModifiedExternally until the profile is re-applied. In
 // single-model mode the hash covers exactly the pre-mode fields, so markers
 // written by earlier MintSwitch versions keep matching after an upgrade. A
-// non-empty FableModel is folded in the same conditional way, so markers
-// written before the fable tier existed also keep matching.
+// non-empty FableModel or ReviewModel is folded in the same conditional way,
+// so markers written before those tiers existed also keep matching.
 func Fingerprint(p Profile) string {
 	h := sha256.New()
 	for _, f := range []string{p.BaseURL, p.APIKey, p.Model, p.SmallFastModel, p.OpusModel, p.SonnetModel, p.HaikuModel} {
@@ -179,6 +179,12 @@ func Fingerprint(p Profile) string {
 		h.Write([]byte("fable_model"))
 		h.Write([]byte{0})
 		h.Write([]byte(p.FableModel))
+		h.Write([]byte{0})
+	}
+	if p.ReviewModel != "" {
+		h.Write([]byte("review_model"))
+		h.Write([]byte{0})
+		h.Write([]byte(p.ReviewModel))
 		h.Write([]byte{0})
 	}
 	if p.ApplyAllModels {

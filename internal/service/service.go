@@ -169,6 +169,9 @@ type ProviderView struct {
 	SonnetModel string `json:"sonnet_model"`
 	HaikuModel  string `json:"haiku_model"`
 	FableModel  string `json:"fable_model"`
+	// ReviewModel is the provider's optional Codex review tier pin; empty
+	// means Codex reviews follow the session model.
+	ReviewModel string `json:"review_model"`
 	HasKey      bool   `json:"has_key"`
 	Active      bool   `json:"active"`
 }
@@ -207,6 +210,7 @@ func providerView(p core.Provider, active bool) ProviderView {
 		SonnetModel:         p.SonnetModel,
 		HaikuModel:          p.HaikuModel,
 		FableModel:          p.FableModel,
+		ReviewModel:         p.ReviewModel,
 		HasKey:              strings.TrimSpace(p.APIKey) != "",
 		Active:              active,
 	}
@@ -548,6 +552,7 @@ func normalizeProvider(p *core.Provider) {
 	p.SonnetModel = strings.TrimSpace(p.SonnetModel)
 	p.HaikuModel = strings.TrimSpace(p.HaikuModel)
 	p.FableModel = strings.TrimSpace(p.FableModel)
+	p.ReviewModel = strings.TrimSpace(p.ReviewModel)
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
 	p.ModelContextWindows = normalizeModelContextWindows(p.ModelContextWindows, p.Models)

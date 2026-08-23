@@ -99,6 +99,13 @@ export interface Provider {
     "sonnet_model"?: string;
     "haiku_model"?: string;
     "fable_model"?: string;
+
+    /**
+     * ReviewModel optionally pins the model Codex uses for its code-review
+     * flow. Only the codex adapter reads it; empty means reviews follow the
+     * session model (no key is written). It need not be a member of Models.
+     */
+    "review_model"?: string;
 }
 
 /**

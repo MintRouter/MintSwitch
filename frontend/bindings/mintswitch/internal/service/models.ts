@@ -78,6 +78,12 @@ export interface ProviderView {
     "sonnet_model": string;
     "haiku_model": string;
     "fable_model": string;
+
+    /**
+     * ReviewModel is the provider's optional Codex review tier pin; empty
+     * means Codex reviews follow the session model.
+     */
+    "review_model": string;
     "has_key": boolean;
     "active": boolean;
 }
