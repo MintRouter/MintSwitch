@@ -7,10 +7,22 @@
 // lives in the sidecar marker store, never in opencode.json: OpenCode
 // validates the file with a strict zod schema and rejects unknown top-level
 // keys.
+//
+// When the profile pins a small/fast model (Profile.SmallFastModel), Apply
+// additionally writes the top-level "small_model" key as
+// "mintrouter/<SmallFastModel>" — OpenCode uses it for title generation and
+// other lightweight tasks — and guarantees the model has an entry in the
+// provider's models map, because OpenCode silently ignores a small_model that
+// is not in the provider's catalog. When the profile has no SmallFastModel,
+// Apply removes a "small_model" it wrote earlier (value prefixed
+// "mintrouter/") so re-apply reverts cleanly, but never touches a
+// user-written small_model pointing at another provider. The strip fallback
+// (Restore without a backup) removes the key under the same prefix rule.
 package opencode
 
 import (
 	"os/exec"
+	"slices"
 	"strings"
 
 	"mintswitch/internal/backup"
@@ -171,8 +183,14 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	// the claudedesktop adapter's labelOverride. Lưu ý: modalities là hằng theo
 	// spec MintRouter (OpenAI-compatible multimodal); thiếu modalities thì
 	// OpenCode strip image input (custom provider không có models.dev fallback).
+	// A pinned SmallFastModel is folded into the catalog too: OpenCode silently
+	// ignores a small_model that is not in the provider's models map.
+	applyModels := p.ApplyModels()
+	if p.SmallFastModel != "" && !slices.Contains(applyModels, p.SmallFastModel) {
+		applyModels = append(applyModels, p.SmallFastModel)
+	}
 	modelEntries := map[string]any{}
-	for _, m := range p.ApplyModels() {
+	for _, m := range applyModels {
 		name := m
 		if label := p.ModelNames[m]; label != "" {
 			name = label
@@ -196,6 +214,16 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	}
 	root["provider"] = provider
 	root["model"] = providerID + "/" + p.Model
+	// Top-level small_model (OpenCode's title-generation/lightweight-task
+	// model): written when the profile pins one, removed when it does not —
+	// but only when the current value carries the mintrouter/ prefix (i.e.
+	// MintSwitch wrote it); a user-set small_model on another provider is
+	// never touched.
+	if p.SmallFastModel != "" {
+		root["small_model"] = providerID + "/" + p.SmallFastModel
+	} else if sm, _ := root["small_model"].(string); strings.HasPrefix(sm, providerID+"/") {
+		delete(root, "small_model")
+	}
 	delete(root, core.MarkerKey)
 
 	if err := core.WriteJSONObjectAtomic(path, root); err != nil {
@@ -251,10 +279,10 @@ func (a *Adapter) orphanRemnantAt(path string) bool {
 
 // stripManaged removes the MintSwitch provider block (provider.mintrouter)
 // from opencode.json, dropping the "provider" object when it becomes empty,
-// and clears the default "model" when it still points at the removed
-// provider. It is the Restore fallback when no pristine backup exists. Gated
-// on the managed signal (provider.mintrouter present) so an unmanaged file is
-// never rewritten; it never creates the file.
+// and clears the default "model" and "small_model" when they still point at
+// the removed provider. It is the Restore fallback when no pristine backup
+// exists. Gated on the managed signal (provider.mintrouter present) so an
+// unmanaged file is never rewritten; it never creates the file.
 func (a *Adapter) stripManaged(path string) (bool, error) {
 	root, err := core.ReadJSONObject(path)
 	if err != nil {
@@ -272,6 +300,9 @@ func (a *Adapter) stripManaged(path string) (bool, error) {
 	}
 	if m, _ := root["model"].(string); strings.HasPrefix(m, providerID+"/") {
 		delete(root, "model")
+	}
+	if sm, _ := root["small_model"].(string); strings.HasPrefix(sm, providerID+"/") {
+		delete(root, "small_model")
 	}
 	return true, core.WriteJSONObjectAtomic(path, root)
 }

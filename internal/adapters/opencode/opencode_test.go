@@ -729,3 +729,239 @@ func TestPureUserConfigNeverOrphan(t *testing.T) {
 		t.Fatalf("pure user config rewritten: %q", got)
 	}
 }
+
+// TestApplySmallModel proves the SmallFastModel pin: Apply writes the
+// top-level small_model as "mintrouter/<SmallFastModel>" and guarantees the
+// model has an entry in the provider's models map (OpenCode silently ignores
+// a small_model missing from the catalog) — in both single-model and "All
+// models" mode, with the ModelNames display name when one exists.
+func TestApplySmallModel(t *testing.T) {
+	t.Run("single-model mode", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		p := sampleProfile()
+		p.SmallFastModel = "mint-mini"
+		p.ModelNames = map[string]string{"mint-mini": "Mint Mini"}
+		res, err := a.Apply(p)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		root := readJSON(t, res.ChangedPath)
+		if root["small_model"] != "mintrouter/mint-mini" {
+			t.Fatalf("small_model = %v, want mintrouter/mint-mini", root["small_model"])
+		}
+		models := root["provider"].(map[string]any)[providerID].(map[string]any)["models"].(map[string]any)
+		entry, ok := models["mint-mini"].(map[string]any)
+		if !ok {
+			t.Fatalf("small model entry missing from models map: %v", models)
+		}
+		if entry["name"] != "Mint Mini" {
+			t.Fatalf("small model name = %v, want display name", entry["name"])
+		}
+		if _, ok := entry["modalities"].(map[string]any); !ok {
+			t.Fatalf("modalities missing from small model entry: %v", entry)
+		}
+		if _, ok := models[p.Model]; !ok {
+			t.Fatalf("selected model entry lost: %v", models)
+		}
+	})
+
+	t.Run("all-models mode", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		p := sampleProfile()
+		p.Models = []string{"gpt-mint", "claude-mint"}
+		p.ApplyAllModels = true
+		p.SmallFastModel = "mint-mini" // not a member of Models
+		res, err := a.Apply(p)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		root := readJSON(t, res.ChangedPath)
+		if root["small_model"] != "mintrouter/mint-mini" {
+			t.Fatalf("small_model = %v, want mintrouter/mint-mini", root["small_model"])
+		}
+		models := root["provider"].(map[string]any)[providerID].(map[string]any)["models"].(map[string]any)
+		if len(models) != 3 {
+			t.Fatalf("models = %v, want 3 entries (2 provider models + small model)", models)
+		}
+		if _, ok := models["mint-mini"].(map[string]any); !ok {
+			t.Fatalf("small model entry missing from models map: %v", models)
+		}
+	})
+
+	t.Run("small model already a member", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		p := sampleProfile()
+		p.Models = []string{"gpt-mint", "claude-mint"}
+		p.ApplyAllModels = true
+		p.SmallFastModel = "claude-mint"
+		res, err := a.Apply(p)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		root := readJSON(t, res.ChangedPath)
+		if root["small_model"] != "mintrouter/claude-mint" {
+			t.Fatalf("small_model = %v", root["small_model"])
+		}
+		models := root["provider"].(map[string]any)[providerID].(map[string]any)["models"].(map[string]any)
+		if len(models) != 2 {
+			t.Fatalf("models = %v, want 2 entries (no duplicate for member small model)", models)
+		}
+	})
+}
+
+// TestReApplyWithoutSmallModelRemovesKey proves the unset path: after an Apply
+// pinned small_model, re-applying a profile without SmallFastModel removes the
+// mintrouter/-prefixed key so the revert is clean.
+func TestReApplyWithoutSmallModelRemovesKey(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	pinned := sampleProfile()
+	pinned.SmallFastModel = "mint-mini"
+	if _, err := a.Apply(pinned); err != nil {
+		t.Fatalf("apply pinned: %v", err)
+	}
+	unpinned := sampleProfile()
+	res, err := a.Apply(unpinned)
+	if err != nil {
+		t.Fatalf("apply unpinned: %v", err)
+	}
+	if res.BackupPath != "" {
+		t.Fatalf("re-apply over managed file must not back up, got %q", res.BackupPath)
+	}
+	root := readJSON(t, a.configPath())
+	if _, present := root["small_model"]; present {
+		t.Fatalf("small_model must be removed on unpinned re-apply: %v", root)
+	}
+	if st, _, _ := a.Status(unpinned); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("status after unpinned re-apply = %v, want Applied", st)
+	}
+}
+
+// TestApplyPreservesUserSmallModel proves the no-clobber contract: a
+// small_model the user set on another provider (no mintrouter/ prefix) is
+// never rewritten or removed, whether the profile pins nothing or the pin is
+// later dropped.
+func TestApplyPreservesUserSmallModel(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"small_model":"anthropic/claude-haiku","theme":"dark"}`
+	if err := os.WriteFile(path, []byte(user), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	root := readJSON(t, path)
+	if root["small_model"] != "anthropic/claude-haiku" {
+		t.Fatalf("user small_model clobbered: %v", root["small_model"])
+	}
+	if root["theme"] != "dark" {
+		t.Fatalf("user keys lost: %v", root)
+	}
+}
+
+// TestSmallModelStatusModifiedOnPinChange confirms the shared fingerprint
+// already covers SmallFastModel: changing the pin after Apply must flip Status
+// to ModifiedExternally without any core change.
+func TestSmallModelStatusModifiedOnPinChange(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	p := sampleProfile()
+	p.SmallFastModel = "mint-mini"
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("status = %v, want Applied", st)
+	}
+	changed := p
+	changed.SmallFastModel = "mint-nano"
+	if st, _, _ := a.Status(changed); st != core.StatusModifiedExternally {
+		t.Fatalf("status after pin change = %v, want ModifiedExternally", st)
+	}
+	unset := p
+	unset.SmallFastModel = ""
+	if st, _, _ := a.Status(unset); st != core.StatusModifiedExternally {
+		t.Fatalf("status after pin unset = %v, want ModifiedExternally", st)
+	}
+}
+
+// TestRestorePristineWithSmallModel proves Restore reverts an Apply that
+// wrote small_model byte-for-byte to the pristine pre-MintSwitch file.
+func TestRestorePristineWithSmallModel(t *testing.T) {
+	a, _ := newAdapter(t)
+	path := a.configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pristine := []byte(`{"theme":"opencode"}` + "\n")
+	if err := os.WriteFile(path, pristine, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := sampleProfile()
+	p.SmallFastModel = "mint-mini"
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(pristine) {
+		t.Fatalf("not byte-for-byte restored: %q", got)
+	}
+}
+
+// TestStripManagedRemovesSmallModel covers the no-backup strip fallback: it
+// must remove a mintrouter/-prefixed small_model along with the provider
+// block, while a user small_model on another provider survives.
+func TestStripManagedRemovesSmallModel(t *testing.T) {
+	t.Run("mintrouter small_model stripped", func(t *testing.T) {
+		a, r := newAdapter(t)
+		p := sampleProfile()
+		p.SmallFastModel = "mint-mini"
+		if _, err := a.Apply(p); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if err := os.RemoveAll(r.BackupsDir()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.Restore(); err != nil {
+			t.Fatalf("restore: %v", err)
+		}
+		root := readJSON(t, a.configPath())
+		if _, present := root["small_model"]; present {
+			t.Fatalf("small_model must be stripped: %v", root)
+		}
+	})
+
+	t.Run("user small_model preserved", func(t *testing.T) {
+		a, r := newAdapter(t)
+		path := a.configPath()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"small_model":"anthropic/claude-haiku"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.Apply(sampleProfile()); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if err := os.RemoveAll(r.BackupsDir()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.Restore(); err != nil {
+			t.Fatalf("restore: %v", err)
+		}
+		root := readJSON(t, path)
+		if root["small_model"] != "anthropic/claude-haiku" {
+			t.Fatalf("user small_model must survive strip: %v", root)
+		}
+	})
+}
