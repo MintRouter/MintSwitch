@@ -119,15 +119,19 @@
     onApplyModeChange(tool.id, mode);
   }
 
-  // ---- Model tiers dialog (Claude Code only) ----
-  // Pins the models Claude Code uses for its opus/sonnet/haiku/fable aliases
-  // and background (small/fast) tasks. The pins live on the tool's EFFECTIVE
-  // provider; Save persists them through the existing UpdateProvider path
-  // (api_key stays empty = keep the stored key). Nothing persists on Cancel.
+  // ---- Model tiers dialog (per tool) ----
+  // Pins tier models on the tool's EFFECTIVE provider: Claude Code edits its
+  // opus/sonnet/haiku/fable aliases plus background (small/fast) tasks,
+  // OpenCode edits only Small/Fast (lightweight tasks like title generation)
+  // and Codex edits only Review (/review). Save persists through the existing
+  // UpdateProvider path (api_key stays empty = keep the stored key) and only
+  // overrides the fields this tool's dialog shows — the other tools' pins on
+  // the same provider pass through untouched. Nothing persists on Cancel.
   const effectiveProvider = $derived(
     providers.find((p) => p.id === tool.selected_provider_id) ?? null,
   );
-  const showTiers = $derived(tool.id === "claude-code" && tool.installed && !!effectiveProvider);
+  const tierToolIds = ["claude-code", "opencode", "codex"];
+  const showTiers = $derived(tierToolIds.includes(tool.id) && tool.installed && !!effectiveProvider);
   const tierModels = $derived(effectiveProvider?.models ?? []);
   const tierNames = $derived(effectiveProvider?.model_names ?? {});
   let tiersOpen = $state(false);
@@ -138,17 +142,45 @@
   let tHaiku = $state("");
   let tSmallFast = $state("");
   let tFable = $state("");
+  let tReview = $state("");
   let tiersDialogEl = $state<HTMLDivElement | null>(null);
   // Focus restore for keyboard users when the dialog closes.
   let tiersReturnFocus: HTMLElement | null = null;
 
-  const tierRows = $derived([
-    { id: "opus", label: "Opus", get: () => tOpus, set: (v: string) => (tOpus = v) },
-    { id: "sonnet", label: "Sonnet", get: () => tSonnet, set: (v: string) => (tSonnet = v) },
-    { id: "haiku", label: "Haiku", get: () => tHaiku, set: (v: string) => (tHaiku = v) },
-    { id: "smallfast", label: "Small/Fast", get: () => tSmallFast, set: (v: string) => (tSmallFast = v) },
-    { id: "fable", label: "Fable", get: () => tFable, set: (v: string) => (tFable = v) },
-  ]);
+  const tierRows = $derived.by(() => {
+    if (tool.id === "opencode") {
+      return [
+        { id: "smallfast", label: t("tiers.rowSmallFast"), get: () => tSmallFast, set: (v: string) => (tSmallFast = v) },
+      ];
+    }
+    if (tool.id === "codex") {
+      return [
+        { id: "review", label: t("tiers.rowReview"), get: () => tReview, set: (v: string) => (tReview = v) },
+      ];
+    }
+    return [
+      { id: "opus", label: "Opus", get: () => tOpus, set: (v: string) => (tOpus = v) },
+      { id: "sonnet", label: "Sonnet", get: () => tSonnet, set: (v: string) => (tSonnet = v) },
+      { id: "haiku", label: "Haiku", get: () => tHaiku, set: (v: string) => (tHaiku = v) },
+      { id: "smallfast", label: t("tiers.rowSmallFast"), get: () => tSmallFast, set: (v: string) => (tSmallFast = v) },
+      { id: "fable", label: "Fable", get: () => tFable, set: (v: string) => (tFable = v) },
+    ];
+  });
+
+  // Per-tool copy: the Tiers button tooltip and the dialog hint around the
+  // provider name (before/after halves keep <strong> markup out of i18n).
+  const tiersButtonTitle = $derived(
+    tool.id === "opencode" ? t("tool.tiersTitle.opencode")
+    : tool.id === "codex" ? t("tool.tiersTitle.codex")
+    : t("tool.tiersTitle"),
+  );
+  const tiersHint = $derived(
+    tool.id === "opencode"
+      ? { before: t("tiers.hintBefore.opencode"), after: t("tiers.hintAfter.opencode") }
+      : tool.id === "codex"
+        ? { before: t("tiers.hintBefore.codex"), after: t("tiers.hintAfter.codex") }
+        : { before: t("tiers.hintBefore"), after: t("tiers.hintAfter") },
+  );
 
   function tierName(m: string): string {
     return tierNames[m] || m;
@@ -163,6 +195,7 @@
     tHaiku = p.haiku_model ?? "";
     tSmallFast = p.small_fast_model ?? "";
     tFable = p.fable_model ?? "";
+    tReview = p.review_model ?? "";
     tiersError = "";
     tiersOpen = true;
   }
@@ -181,8 +214,11 @@
     if (!p || tiersSaving) return;
     tiersSaving = true;
     tiersError = "";
-    // Full provider payload with only the tier pins changed; an empty api_key
-    // means "keep the stored one" on the backend.
+    // Full provider payload passing every stored field through unchanged
+    // (the backend replaces the whole provider on update), then override ONLY
+    // the tier pins this tool's dialog edits — saving from OpenCode/Codex
+    // must never wipe Claude Code's opus/sonnet/haiku/fable pins on the same
+    // provider, and vice versa. An empty api_key means "keep the stored one".
     const payload: Provider = {
       id: p.id,
       name: p.name,
@@ -191,13 +227,26 @@
       base_url: p.base_url,
       models: p.models ?? [],
       model_names: p.model_names ?? {},
+      model_context_windows: p.model_context_windows ?? {},
       model: p.model,
-      small_fast_model: tSmallFast,
-      opus_model: tOpus,
-      sonnet_model: tSonnet,
-      haiku_model: tHaiku,
-      fable_model: tFable,
+      small_fast_model: p.small_fast_model ?? "",
+      opus_model: p.opus_model ?? "",
+      sonnet_model: p.sonnet_model ?? "",
+      haiku_model: p.haiku_model ?? "",
+      fable_model: p.fable_model ?? "",
+      review_model: p.review_model ?? "",
     };
+    if (tool.id === "opencode") {
+      payload.small_fast_model = tSmallFast;
+    } else if (tool.id === "codex") {
+      payload.review_model = tReview;
+    } else {
+      payload.small_fast_model = tSmallFast;
+      payload.opus_model = tOpus;
+      payload.sonnet_model = tSonnet;
+      payload.haiku_model = tHaiku;
+      payload.fable_model = tFable;
+    }
     const err = await onProviderUpdate(payload);
     tiersSaving = false;
     if (err != null) {
@@ -332,7 +381,7 @@
       <button class="text-action" type="button" onclick={() => onRestore(tool.id)} disabled={!canRestore}>{t("tool.restore")}</button>
       {#if showTiers}
         <button class="text-action" type="button" onclick={openTiers} disabled={busy}
-          title={t("tool.tiersTitle")}>{t("tool.tiers")}</button>
+          title={tiersButtonTitle}>{t("tool.tiers")}</button>
       {/if}
       {#if tool.installed && tool.installable}
         <button class="text-action danger" type="button" onclick={() => onUninstall(tool.id)} disabled={busy}>{t("tool.uninstall")}</button>
@@ -352,7 +401,7 @@
       tabindex="-1" bind:this={tiersDialogEl}>
       <h2 class="dialog-title" id={`tiers-title-${tool.id}`}>{t("tiers.title", { name: nameParts.name })}</h2>
       <p class="dialog-hint">
-        {t("tiers.hintBefore")}<strong>{effectiveProvider?.name}</strong>{t("tiers.hintAfter")}
+        {tiersHint.before}<strong>{effectiveProvider?.name}</strong>{tiersHint.after}
       </p>
       <div class="tiers-grid">
         {#each tierRows as tier (tier.id)}
@@ -395,7 +444,7 @@
      Uninstall, and a clearly dimmed disabled state. */
   .text-action{display:inline-flex;align-items:center;justify-content:center;height:26px;padding:0 9px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:7px;cursor:pointer;font-size:10px;font-weight:600;line-height:1;white-space:nowrap;transition:background .15s ease,border-color .15s ease,color .15s ease,opacity .15s ease}.text-action:hover:not(:disabled){background:var(--surface-hover);border-color:var(--border-strong)}.text-action:active:not(:disabled){transform:translateY(1px)}.text-action.danger{margin-left:auto;color:var(--muted-danger)}.text-action.danger:hover:not(:disabled){color:var(--danger-strong);background:color-mix(in srgb,var(--danger) 7%,var(--surface));border-color:color-mix(in srgb,var(--danger) 35%,var(--border))}.text-action:disabled{opacity:.4;cursor:default}.manual-note{margin-left:auto;color:var(--muted);font-size:9.5px}
   @media(max-width:860px){.tool-card{padding:13px}.tool-body{padding:9px}}
-  /* ---- Model tiers dialog (Claude Code) ---- */
+  /* ---- Model tiers dialog ---- */
   .backdrop{position:fixed;inset:0;z-index:55;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(10,13,20,.48);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);--wails-draggable:no-drag}
   .dialog{width:100%;max-width:26rem;max-height:min(90dvh,40rem);display:flex;flex-direction:column;gap:10px;padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-pop);overflow-y:auto}
   .dialog-title{margin:0;color:var(--text);font-size:15px;font-weight:720;letter-spacing:-.015em}

@@ -565,9 +565,10 @@
   async function saveForm(): Promise<void> {
     if (!canSave || saving) return;
     formError = "";
-    // Tier pins are edited from the Claude Code tool card, not this form —
-    // pass the stored values through unchanged so saving here never wipes them
-    // (the backend replaces the whole provider on update).
+    // Tier pins are edited from the tool cards (Claude Code, OpenCode,
+    // Codex), not this form — pass the stored values through unchanged so
+    // saving here never wipes them (the backend replaces the whole provider
+    // on update).
     const payload: Provider = {
       id: formId,
       name: formName.trim(),
@@ -583,6 +584,7 @@
       sonnet_model: editing?.sonnet_model ?? "",
       haiku_model: editing?.haiku_model ?? "",
       fable_model: editing?.fable_model ?? "",
+      review_model: editing?.review_model ?? "",
     };
     const err = isEdit ? await onUpdate(payload) : await onAdd(payload);
     if (err != null) {
