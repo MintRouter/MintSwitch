@@ -21,9 +21,42 @@ jobs:
     permissions:
       contents: read
 
+  # Fail fast when the tag version drifts from the version hardcoded in the
+  # build metadata files, so no package ships with a stale embedded version.
+  version-check:
+    name: Verify tag matches build metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Compare tag version against build files
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          fail=0
+          check() {
+            local file="$1" found="$2"
+            if [ "$found" != "$tag_version" ]; then
+              echo "::error file=$file::version '$found' does not match tag version '$tag_version'"
+              fail=1
+            fi
+          }
+          check build/config.yml "$(sed -n 's/^  version: "\([^"]*\)".*/\1/p' build/config.yml)"
+          check build/linux/nfpm/nfpm.yaml "$(sed -n 's/^version: "\([^"]*\)".*/\1/p' build/linux/nfpm/nfpm.yaml)"
+          check build/windows/info.json "$(jq -r '.fixed.file_version' build/windows/info.json)"
+          check build/windows/info.json "$(jq -r '.info["0000"].ProductVersion' build/windows/info.json)"
+          check build/windows/nsis/project.nsi "$(sed -n 's/^!define INFO_PRODUCTVERSION "\([^"]*\)".*/\1/p' build/windows/nsis/project.nsi)"
+          check build/darwin/Info.plist "$(awk '/<key>CFBundleVersion<\/key>/{getline; gsub(/.*<string>|<\/string>.*/, ""); print}' build/darwin/Info.plist)"
+          check build/darwin/Info.plist "$(awk '/<key>CFBundleShortVersionString<\/key>/{getline; gsub(/.*<string>|<\/string>.*/, ""); print}' build/darwin/Info.plist)"
+          exit "$fail"
+
   build:
     name: Build (${{ matrix.platform }}-${{ matrix.arch }})
-    needs: quality
+    needs: [quality, version-check]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -80,9 +113,7 @@ jobs:
 
       - name: Build Linux package
         if: matrix.platform == 'linux'
-        run: |
-          sed -i "s/^version: .*/version: \"${GITHUB_REF_NAME#v}\"/" build/linux/nfpm/nfpm.yaml
-          wails3 task linux:create:deb
+        run: wails3 task linux:create:deb
 
       - name: Install NSIS
         if: matrix.platform == 'windows'

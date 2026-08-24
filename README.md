@@ -6,6 +6,12 @@ A profile can contain multiple Providers, each with a user-chosen name, base URL
 
 MintSwitch is built with Go and Wails. It does not provide or support an HTTP server, web deployment, or server container image.
 
+## Features
+
+- **Model tiers** — optionally pin secondary models per tool: Claude Code's opus / sonnet / haiku / fable aliases plus background (small/fast) tasks, OpenCode's small/fast model for lightweight tasks such as title generation, and the model Codex uses for its `/review` flow. Empty tiers follow the default model.
+- **Theme toggle** — Light, Dark, or System (follows the OS `prefers-color-scheme` and updates in real time).
+- **Internationalization** — English, Tiếng Việt, and 中文, switchable live from the UI.
+
 ## Project layout
 
 - `main.go` — desktop application entry point
