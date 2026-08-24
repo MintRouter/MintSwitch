@@ -10,7 +10,7 @@
   <Identity
     Name="ai.mintrouter.mintswitch"
     Publisher="CN=MintRouter.AI"
-    Version="1.6.1.0"
+    Version="1.6.2.0"
     ProcessorArchitecture="arm64" />
 
   <Properties>
