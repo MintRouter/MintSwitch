@@ -2,12 +2,6 @@
   import { Browser } from "@wailsio/runtime";
   import { t } from "./i18n.svelte";
 
-  interface Props {
-    /** Topbar variant: a tall 40px two-line banner sized to its content. */
-    compact?: boolean;
-  }
-  let { compact = false }: Props = $props();
-
   // Main banner opens the MintRouter.AI website; the Telegram tile opens the
   // community invite link (user feedback #10).
   const SITE_URL = "https://mintrouter.ai";
@@ -24,9 +18,9 @@
 </script>
 
 <!-- Promo row (Multilogin-style): a navy ad banner opening mintrouter.ai plus
-     a separate Telegram tile opening the community link. Default sizing suits
-     a column footer; `compact` shrinks it to topbar control height. -->
-<div class="promo-row" class:compact>
+     a separate Telegram tile opening the community link, sized for a column
+     footer. -->
+<div class="promo-row">
   <button
     class="promo-main"
     type="button"
@@ -167,57 +161,5 @@
   }
   :global([data-theme="dark"]) .promo-telegram {
     color: var(--text);
-  }
-
-  /* Compact topbar variant (feedback #10/#13/#15/#16): a tall two-line
-     banner — 40px, dominating the 50px topbar like Multilogin's — that fits
-     its content instead of stretching across the gap, and sits on the RIGHT,
-     just before the utility cluster (margin-left: auto absorbs the free
-     space after the brand block). The -4px right margin trims the topbar's
-     12px flex gap so banner → tile → cluster all read as even ~8px gaps.
-     The chevron hugs the banner's right edge via the small 8px right
-     padding, centered against the whole two-line block. The Telegram tile
-     matches the 40px height. */
-  .promo-row.compact {
-    flex: 0 0 auto;
-    margin: 0 -4px 0 auto;
-    gap: 8px;
-  }
-  .compact .promo-main,
-  .compact .promo-telegram {
-    border-radius: var(--radius-sm);
-  }
-  .compact .promo-main {
-    flex: 0 0 auto;
-    height: 40px;
-    padding: 0 8px 0 14px;
-  }
-  .compact .promo-logo {
-    width: 22px;
-    height: 22px;
-  }
-  /* Optical vertical centering (feedback #16): the flex-centered text block
-     is geometrically symmetric, but the title's line box carries dead
-     leading above its caps while the subline's descenders touch its bottom
-     edge — so the copy reads bottom-heavy. The 3px bottom padding lifts the
-     glyphs ~1.5px, evening out the visible top/bottom breathing room. */
-  .compact .promo-lines {
-    padding-bottom: 3px;
-  }
-  .compact .promo-title {
-    font-size: 16px;
-  }
-  .compact .promo-chevron {
-    width: 16px;
-    height: 16px;
-    margin-left: 8px; /* replaces the auto pin: fit-content leaves no free space */
-  }
-  .compact .promo-telegram {
-    width: 40px;
-    height: 40px;
-  }
-  .compact .promo-telegram svg {
-    width: 20px;
-    height: 20px;
   }
 </style>

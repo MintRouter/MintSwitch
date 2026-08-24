@@ -115,7 +115,7 @@ export const zh: Record<string, string> = {
   "tiers.hintAfter.opencode": " 上固定 OpenCode 用于轻量后台任务（如标题生成，small/fast）的模型。留空则跟随默认模型。重新应用配置后更改才会生效。",
   "tiers.hintBefore.codex": "在 ",
   "tiers.hintAfter.codex": " 上固定 Codex 在 /review 代码审查时使用的模型。留空则审查跟随会话模型。重新应用配置后更改才会生效。",
-  "tiers.rowSmallFast": "Small/Fast",
+  "tiers.rowSmallFast": "小型/快速（Small/Fast）",
   "tiers.rowReview": "审查（Review）",
   "tiers.useDefault": "使用默认模型",
   "tiers.saveFailed": "无法保存：{error}",

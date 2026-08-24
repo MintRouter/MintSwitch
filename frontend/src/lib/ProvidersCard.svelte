@@ -480,16 +480,19 @@
   function onModelInput(e: Event): void {
     dropdownOpen = true;
     const q = (e.currentTarget as HTMLInputElement).value.trim().toLowerCase();
-    activeIndex = q && fetchedModels.some((m) => m.toLowerCase().includes(q)) ? 0 : -1;
+    activeIndex = q && fetchedModels.some((m) => m.toLowerCase().includes(q)) ? 1 : -1;
   }
 
   // ArrowUp/Down wrap through the visible rows and keep the row in view.
+  // Position 0 is the "Select all" row; positions 1..n map to
+  // filteredModels[position - 1].
   function moveActive(delta: number): void {
     dropdownOpen = true;
     const n = filteredModels.length;
     if (n === 0) return;
-    activeIndex = activeIndex < 0 ? (delta > 0 ? 0 : n - 1) : (activeIndex + delta + n) % n;
-    const rowId = `pv-model-opt-${activeIndex}`;
+    const total = n + 1;
+    activeIndex = activeIndex < 0 ? (delta > 0 ? 0 : total - 1) : (activeIndex + delta + total) % total;
+    const rowId = activeIndex === 0 ? "pv-model-opt-all" : `pv-model-opt-${activeIndex - 1}`;
     requestAnimationFrame(() => document.getElementById(rowId)?.scrollIntoView({ block: "nearest" }));
   }
 
@@ -531,8 +534,12 @@
     }
     if (e.key !== "Enter") return;
     e.preventDefault();
-    if (dropdownOpen && activeIndex >= 0 && activeIndex < filteredModels.length) {
-      toggleModel(filteredModels[activeIndex]);
+    if (dropdownOpen && activeIndex === 0 && filteredModels.length > 0) {
+      toggleAllFiltered();
+      return;
+    }
+    if (dropdownOpen && activeIndex >= 1 && activeIndex <= filteredModels.length) {
+      toggleModel(filteredModels[activeIndex - 1]);
       modelInput = "";
       activeIndex = -1;
       return;
@@ -892,8 +899,8 @@
                 autocomplete="off" spellcheck="false"
                 role="combobox" aria-expanded={dropdownOpen} aria-controls="pv-model-listbox"
                 aria-autocomplete="list"
-                aria-activedescendant={dropdownOpen && activeIndex >= 0 && activeIndex < filteredModels.length
-                  ? `pv-model-opt-${activeIndex}` : undefined}
+                aria-activedescendant={dropdownOpen && activeIndex >= 0 && activeIndex <= filteredModels.length
+                  ? (activeIndex === 0 ? "pv-model-opt-all" : `pv-model-opt-${activeIndex - 1}`) : undefined}
                 onfocus={openDropdown} oninput={onModelInput} onkeydown={onModelKeydown} />
               <svg class="combo-search" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5" />
@@ -916,7 +923,7 @@
                 {:else}
                   <button class="combo-option combo-all" type="button" role="option"
                     id="pv-model-opt-all" tabindex="-1" aria-selected={allFilteredSelected}
-                    class:checked={allFilteredSelected}
+                    class:checked={allFilteredSelected} class:active={activeIndex === 0}
                     onmousedown={(e) => e.preventDefault()} onclick={toggleAllFiltered}
                     title={allFilteredSelected ? t("form.unselectAllTitle") : t("form.selectAllTitle")}>
                     <span class="combo-check" aria-hidden="true">
@@ -936,7 +943,7 @@
                   {#each filteredModels as m, i (m)}
                     <button class="combo-option" type="button" role="option" id={`pv-model-opt-${i}`}
                       tabindex="-1" aria-selected={fModels.includes(m)}
-                      class:checked={fModels.includes(m)} class:active={i === activeIndex}
+                      class:checked={fModels.includes(m)} class:active={i + 1 === activeIndex}
                       onmousedown={(e) => e.preventDefault()} onclick={() => toggleModel(m)}
                       title={fModels.includes(m) ? t("form.removeOption", { name: m }) : t("form.addOption", { name: m })}>
                       <span class="combo-check" aria-hidden="true">

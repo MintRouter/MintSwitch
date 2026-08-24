@@ -4,7 +4,7 @@
 import { t } from "./i18n.svelte";
 
 /** Visual tone keys map to the status-badge colour classes in the components. */
-export type Tone = "neutral" | "info" | "success" | "warning";
+export type Tone = "neutral" | "success" | "warning";
 
 /** StatusMeta is the human label + colour tone for a backend tool status. */
 export interface StatusMeta {
@@ -24,7 +24,7 @@ export function statusMeta(status: string): StatusMeta {
     case "modified_externally":
       return { label: t("status.modifiedExternally"), tone: "warning" };
     case "default":
-      return { label: t("status.defaultConfig"), tone: "info" };
+      return { label: t("status.defaultConfig"), tone: "neutral" };
     case "not_installed":
       return { label: t("status.notInstalled"), tone: "neutral" };
     default:
