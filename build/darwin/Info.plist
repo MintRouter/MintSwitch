@@ -4,9 +4,9 @@
         <key>CFBundlePackageType</key>
             <string>APPL</string>
         <key>CFBundleName</key>
-            <string>MintSwitch By MintRouter.AI</string>
+            <string>MintSwitch</string>
         <key>CFBundleDisplayName</key>
-            <string>MintSwitch By MintRouter.AI</string>
+            <string>MintSwitch</string>
         <key>CFBundleExecutable</key>
             <string>mintswitch</string>
         <key>CFBundleIdentifier</key>

@@ -14,7 +14,7 @@
     </Installer>
     <PackageInformation
         PackageName="MintSwitch"
-        PackageDisplayName="MintSwitch By MintRouter.AI"
+        PackageDisplayName="MintSwitch"
         PublisherName="CN=MintRouter.AI"
         PublisherDisplayName="MintRouter.AI"
         Version="1.6.1.0"
@@ -41,7 +41,7 @@
         </Dependencies>
         <Properties>
             <Framework>false</Framework>
-            <DisplayName>MintSwitch By MintRouter.AI</DisplayName>
+            <DisplayName>MintSwitch</DisplayName>
             <PublisherDisplayName>MintRouter.AI</PublisherDisplayName>
             <Description>AI Tool API Config Switcher</Description>
             <Logo>Assets\AppIcon.png</Logo>

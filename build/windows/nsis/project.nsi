@@ -32,7 +32,7 @@ Unicode true
 ## !define WAILS_INSTALL_SCOPE     "user"             # Default "machine" - set to "user" for per-user install ($LOCALAPPDATA) without UAC prompt
 ####
 !define INFO_COMPANYNAME    "MintRouter.AI"
-!define INFO_PRODUCTNAME    "MintSwitch By MintRouter.AI"
+!define INFO_PRODUCTNAME    "MintSwitch"
 !define INFO_PRODUCTVERSION "1.6.1"
 !define INFO_COPYRIGHT      "© 2026 MintRouter.AI"
 ####

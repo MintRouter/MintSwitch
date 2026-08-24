@@ -130,7 +130,7 @@ jobs:
         if: matrix.platform == 'darwin'
         run: |
           mkdir dmg-stage
-          cp -R "bin/MintSwitch By MintRouter.AI.app" dmg-stage/
+          cp -R "bin/MintSwitch.app" dmg-stage/
           ln -s /Applications dmg-stage/Applications
           hdiutil create -volname "MintSwitch" -srcfolder dmg-stage -ov -format UDZO "MintSwitch-${{ matrix.platform }}-${{ matrix.arch }}.dmg"
 

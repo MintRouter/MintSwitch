@@ -6,7 +6,7 @@ version: '3'
 # This information is used to generate the build assets.
 info:
   companyName: "MintRouter.AI" # The name of the company
-  productName: "MintSwitch By MintRouter.AI" # The name of the application
+  productName: "MintSwitch" # The name of the application
   productIdentifier: "ai.mintrouter.mintswitch" # The unique product identifier
   description: "AI Tool API Config Switcher" # The application description
   copyright: "© 2026 MintRouter.AI" # Copyright text
