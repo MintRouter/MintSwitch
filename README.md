@@ -33,7 +33,7 @@ The Go binary embeds `frontend/dist`, so the frontend must be built before direc
 Install the matching Wails CLI and check the host:
 
 ```sh
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.111
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.12
 wails3 doctor
 ```
 
