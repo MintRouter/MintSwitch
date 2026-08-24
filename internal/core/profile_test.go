@@ -82,7 +82,8 @@ func TestNormalizeBaseURL(t *testing.T) {
 
 func TestFingerprintStableAndSensitive(t *testing.T) {
 	base := Profile{APIKey: "k", BaseURL: "https://h", Model: "m", SmallFastModel: "s"}
-	if Fingerprint(base) != Fingerprint(base) {
+	first, second := Fingerprint(base), Fingerprint(base)
+	if first != second {
 		t.Fatal("fingerprint not stable for identical profiles")
 	}
 	changes := []Profile{
