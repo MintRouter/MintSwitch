@@ -5,8 +5,19 @@
 // the unified ChatGPT app (macOS bundle ID com.openai.codex), but the CLI is
 // still the "codex" binary (npm @openai/codex) and its configuration is
 // unchanged: $CODEX_HOME (default ~/.codex) with config.toml and auth.json.
-// OpenAI documents that no configuration migration is needed, so detection
-// and the managed keys below remain the correct contract.
+// OpenAI documents that no configuration migration is needed, so the managed
+// keys below remain the correct contract. Detect covers both surfaces: the
+// "codex" CLI binary being resolvable, or the ChatGPT desktop app being
+// present — on macOS an .app bundle in /Applications or ~/Applications whose
+// Info.plist carries the com.openai.codex bundle ID (the legacy chat-only
+// ChatGPT.app / "ChatGPT Classic.app" keep com.openai.chat and must NOT
+// count), on Windows the MSIX package data dir %LOCALAPPDATA%\Packages\
+// OpenAI.Codex_* or the app's runtime dir %LOCALAPPDATA%\OpenAI\Codex (the
+// binary itself sits in the protected WindowsApps dir and cannot be stat'ed
+// from user space), and on Linux the "chatgpt" launcher binary or the .deb/
+// .rpm payload dir /usr/lib/chatgpt. All probes are filesystem-only — no
+// subprocesses. The desktop app shares ~/.codex with the CLI, so a
+// desktop-only install still applies/restores through the same files.
 //
 // Codex stores user configuration in ~/.codex/config.toml (TOML) and file-based
 // credentials in ~/.codex/auth.json (JSON). To point the built-in "openai"
@@ -24,12 +35,14 @@
 package codex
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -39,6 +52,25 @@ import (
 
 // authKeyName is the JSON key Codex reads the API key from in auth.json.
 const authKeyName = "OPENAI_API_KEY"
+
+// desktopBundleID is the macOS bundle identifier of the unified ChatGPT
+// desktop app (and of the pre-unification Codex.app). The legacy chat-only
+// app uses com.openai.chat under the same ChatGPT.app name, so bundle
+// presence alone is not an installed signal — the Info.plist must carry this
+// ID (see bundleIsCodexApp).
+const desktopBundleID = "com.openai.codex"
+
+// msixPackageGlob matches the ChatGPT desktop app's MSIX package data dir
+// under %LOCALAPPDATA%\Packages. The published family is
+// OpenAI.Codex_2p2nqsd0c76g0 (the publisher-hash suffix is stable across
+// versions); the glob keys off the OpenAI.Codex_ name prefix so a re-signed
+// package with a different suffix is still detected.
+const msixPackageGlob = "OpenAI.Codex_*"
+
+// linuxDesktopLibDir is the payload dir of the official Linux .deb/.rpm
+// packages (holding the ChatGPT binary and codex-launcher, with the
+// /usr/bin/chatgpt symlink pointing into it).
+const linuxDesktopLibDir = "/usr/lib/chatgpt"
 
 // authModeKey is the auth.json field selecting Codex's credential source, and
 // authModeAPIKey is the value forcing it to use OPENAI_API_KEY (matching the
@@ -80,21 +112,62 @@ type Adapter struct {
 	// failures into the second half of Apply's two-file write. Defaults to
 	// writeTOML.
 	writeConfig func(string, map[string]any) error
+	// goos selects the OS-specific desktop-app probe; overridable in tests so
+	// every branch is exercisable from any host OS. Defaults to runtime.GOOS.
+	goos string
+	// macAppBundles are the macOS .app bundle dirs probed for the unified
+	// ChatGPT desktop app; overridable in tests. Defaults to
+	// defaultMacAppBundles.
+	macAppBundles []string
+	// linuxLibDir is the Linux .deb/.rpm payload dir probed for the desktop
+	// app; overridable in tests. Defaults to linuxDesktopLibDir.
+	linuxLibDir string
 }
 
 // New constructs a Codex adapter using the injected resolver, backup engine,
 // and sidecar marker store.
 func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
-	return &Adapter{r: r, e: e, m: m, lookPath: exec.LookPath, writeConfig: writeTOML}
+	return &Adapter{
+		r: r, e: e, m: m,
+		lookPath:      exec.LookPath,
+		writeConfig:   writeTOML,
+		goos:          runtime.GOOS,
+		macAppBundles: defaultMacAppBundles(r),
+		linuxLibDir:   linuxDesktopLibDir,
+	}
+}
+
+// defaultMacAppBundles returns the macOS .app bundle dirs desktopInstalled
+// probes: the unified ChatGPT.app plus the pre-unification Codex.app (same
+// com.openai.codex bundle ID), each in /Applications and ~/Applications.
+func defaultMacAppBundles(r *paths.Resolver) []string {
+	return []string{
+		"/Applications/ChatGPT.app",
+		r.Join("Applications", "ChatGPT.app"),
+		"/Applications/Codex.app",
+		r.Join("Applications", "Codex.app"),
+	}
 }
 
 // ID returns the stable adapter identifier.
 func (a *Adapter) ID() string { return "codex" }
 
-// Name returns the display name. Codex now ships as part of the unified
-// ChatGPT app, so the UI leads with ChatGPT; the parenthetical becomes the
-// card subtitle and keeps the Codex CLI/IDE identity visible.
-func (a *Adapter) Name() string { return "ChatGPT (Codex CLI + IDE)" }
+// Name returns the display name for the installed surface(s). The UI leads
+// with ChatGPT and splits the parenthetical off as the card subtitle, so the
+// subtitle reflects what is actually present: the Codex CLI/IDE, the ChatGPT
+// desktop app, or both. With nothing installed it falls back to the CLI + IDE
+// form, matching the uninstalled card's generic copy.
+func (a *Adapter) Name() string {
+	cli := a.r.BinaryResolvable(a.lookPath, "codex")
+	switch {
+	case cli && a.desktopInstalled():
+		return "ChatGPT (Codex CLI + Desktop app)"
+	case !cli && a.desktopInstalled():
+		return "ChatGPT (Desktop app)"
+	default:
+		return "ChatGPT (Codex CLI + IDE)"
+	}
+}
 
 // configPath returns the absolute path to config.toml under the Codex home
 // dir ($CODEX_HOME, default ~/.codex).
@@ -114,13 +187,70 @@ func (a *Adapter) ConfigPaths() []string {
 	return []string{a.configPath(), a.authPath()}
 }
 
-// Detect reports whether Codex is installed, defined solely as the "codex" CLI
-// binary being resolvable (via PATH or a curated set of common bin dirs). A
+// Detect reports whether Codex is installed: either the "codex" CLI binary is
+// resolvable (via PATH or a curated set of common bin dirs) or the ChatGPT
+// desktop app is present (see desktopInstalled). The desktop app shares
+// ~/.codex with the CLI, so a desktop-only install is fully manageable. A
 // leftover ~/.codex dir is not an installed signal, so an uninstall is
 // reflected. The active path is always config.toml and is returned even when not
 // installed, since Status/Apply rely on it.
 func (a *Adapter) Detect() (bool, string) {
-	return a.r.BinaryResolvable(a.lookPath, "codex"), a.configPath()
+	installed := a.r.BinaryResolvable(a.lookPath, "codex") || a.desktopInstalled()
+	return installed, a.configPath()
+}
+
+// desktopInstalled reports whether the ChatGPT desktop app is present, using
+// only filesystem probes (no subprocesses, matching the claudecode extension
+// probe) so it is safe to call on every Detect/ListTools. Per OS: macOS
+// checks the .app bundles in macAppBundles for the com.openai.codex bundle ID
+// (see bundleIsCodexApp); Windows checks the MSIX package data dir
+// %LOCALAPPDATA%\Packages\OpenAI.Codex_* and the app's runtime dir
+// %LOCALAPPDATA%\OpenAI\Codex — the binary lives in the protected WindowsApps
+// dir and cannot be stat'ed from user space; Linux checks for the "chatgpt"
+// launcher binary or the /usr/lib/chatgpt package payload dir.
+func (a *Adapter) desktopInstalled() bool {
+	switch a.goos {
+	case "darwin":
+		for _, app := range a.macAppBundles {
+			if bundleIsCodexApp(app) {
+				return true
+			}
+		}
+	case "windows":
+		if matches, err := filepath.Glob(filepath.Join(a.r.PackagesDir(), msixPackageGlob)); err == nil {
+			for _, m := range matches {
+				if fi, err := os.Stat(m); err == nil && fi.IsDir() {
+					return true
+				}
+			}
+		}
+		if fi, err := os.Stat(filepath.Join(a.r.LocalAppDataDir(), "OpenAI", "Codex")); err == nil && fi.IsDir() {
+			return true
+		}
+	case "linux":
+		if a.r.BinaryResolvable(a.lookPath, "chatgpt") {
+			return true
+		}
+		if fi, err := os.Stat(a.linuxLibDir); err == nil && fi.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// bundleIsCodexApp reports whether the macOS .app bundle at dir is the
+// unified ChatGPT/Codex desktop app, by checking its Contents/Info.plist for
+// the com.openai.codex bundle identifier. The legacy chat-only app ships
+// under the same ChatGPT.app name (and as "ChatGPT Classic.app") with bundle
+// ID com.openai.chat, so the name alone must never count as installed.
+// Info.plist may be XML or binary; a byte-substring check covers both without
+// a plist parser. A missing or unreadable plist is never a match.
+func bundleIsCodexApp(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "Contents", "Info.plist"))
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(data, []byte(desktopBundleID))
 }
 
 // Status inspects config.toml and auth.json relative to the given profile.

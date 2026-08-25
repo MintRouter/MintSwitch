@@ -23,6 +23,11 @@ func newAdapter(t *testing.T) (*Adapter, string) {
 	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
 	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
 	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	// Pin every desktop-app probe to temp-dir locations so a real ChatGPT
+	// install on the host machine never leaks into the tests.
+	a.goos = "darwin"
+	a.macAppBundles = []string{filepath.Join(home, "Applications", "ChatGPT.app")}
+	a.linuxLibDir = filepath.Join(home, "usr", "lib", "chatgpt")
 	return a, home
 }
 
@@ -88,6 +93,199 @@ func TestDetect(t *testing.T) {
 	}
 	if !strings.HasSuffix(active, filepath.Join(".codex", "config.toml")) {
 		t.Fatalf("unexpected active path %q", active)
+	}
+}
+
+// installBundle writes a fake macOS .app bundle with the given Info.plist
+// bytes at appDir.
+func installBundle(t *testing.T, appDir string, plist []byte) {
+	t.Helper()
+	contents := filepath.Join(appDir, "Contents")
+	if err := os.MkdirAll(contents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), plist, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// xmlPlist returns a minimal XML Info.plist carrying the given bundle ID.
+func xmlPlist(bundleID string) []byte {
+	return []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+	<key>CFBundleIdentifier</key><string>` + bundleID + `</string>
+</dict></plist>
+`)
+}
+
+// TestDetectDesktopMacOS proves the macOS desktop probe keys off the
+// com.openai.codex bundle ID in Contents/Info.plist, never the app name: the
+// unified ChatGPT.app and the legacy Codex.app count (XML or binary plist),
+// while the old chat-only ChatGPT.app (bundle ID com.openai.chat, on machines
+// that never migrated) and a bundle without a readable plist do not.
+func TestDetectDesktopMacOS(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		app    string
+		plist  []byte
+		wantOK bool
+	}{
+		{"unified ChatGPT.app xml plist", "ChatGPT.app", xmlPlist("com.openai.codex"), true},
+		{"legacy Codex.app", "Codex.app", xmlPlist("com.openai.codex"), true},
+		{"binary-style plist", "ChatGPT.app", append([]byte("bplist00\x00\x14\x01"), []byte("com.openai.codex\x00\x08")...), true},
+		{"old chat-only ChatGPT.app", "ChatGPT.app", xmlPlist("com.openai.chat"), false},
+		{"bundle without Info.plist", "ChatGPT.app", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, home := newAdapter(t)
+			appDir := filepath.Join(home, "Applications", tc.app)
+			a.macAppBundles = []string{appDir}
+			if tc.plist == nil {
+				if err := os.MkdirAll(filepath.Join(appDir, "Contents"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				installBundle(t, appDir, tc.plist)
+			}
+			ok, active := a.Detect()
+			if ok != tc.wantOK {
+				t.Fatalf("Detect() = %v, want %v", ok, tc.wantOK)
+			}
+			if !strings.HasSuffix(active, filepath.Join(".codex", "config.toml")) {
+				t.Fatalf("unexpected active path %q", active)
+			}
+		})
+	}
+}
+
+// TestDetectDesktopWindows proves the Windows probes are the user-accessible
+// dirs only (the MSIX binary sits in the protected WindowsApps dir): the
+// OpenAI.Codex_* package data dir under %LOCALAPPDATA%\Packages — exact
+// family or a re-signed suffix, dirs only — and the app's runtime dir
+// %LOCALAPPDATA%\OpenAI\Codex.
+func TestDetectDesktopWindows(t *testing.T) {
+	newWindowsAdapter := func(t *testing.T) *Adapter {
+		a, home := newAdapter(t)
+		a.goos = "windows"
+		a.r.LocalAppData = filepath.Join(home, "AppData", "Local")
+		return a
+	}
+	t.Run("msix package data dir", func(t *testing.T) {
+		a := newWindowsAdapter(t)
+		pkgs := filepath.Join(a.r.LocalAppData, "Packages")
+		// Unrelated entries and plain files must never match.
+		if err := os.MkdirAll(filepath.Join(pkgs, "OpenAI.ChatGPT_xyz"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgs, "OpenAI.Codex_notadir"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := a.Detect(); ok {
+			t.Fatal("unrelated Packages entries must not detect")
+		}
+		if err := os.MkdirAll(filepath.Join(pkgs, "OpenAI.Codex_2p2nqsd0c76g0"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := a.Detect(); !ok {
+			t.Fatal("expected detected via OpenAI.Codex_* package data dir")
+		}
+	})
+	t.Run("runtime dir", func(t *testing.T) {
+		a := newWindowsAdapter(t)
+		if ok, _ := a.Detect(); ok {
+			t.Fatal("expected not detected without any probe dir")
+		}
+		if err := os.MkdirAll(filepath.Join(a.r.LocalAppData, "OpenAI", "Codex"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := a.Detect(); !ok {
+			t.Fatal("expected detected via %LOCALAPPDATA%\\OpenAI\\Codex runtime dir")
+		}
+	})
+}
+
+// TestDetectDesktopLinux proves the Linux probes for the official .deb/.rpm
+// app: the "chatgpt" launcher binary being resolvable, or the /usr/lib/chatgpt
+// payload dir (via the test seam) existing.
+func TestDetectDesktopLinux(t *testing.T) {
+	t.Run("chatgpt binary", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		a.goos = "linux"
+		if ok, _ := a.Detect(); ok {
+			t.Fatal("expected not detected without binary or lib dir")
+		}
+		a.lookPath = func(name string) (string, error) {
+			if name == "chatgpt" {
+				return "/usr/bin/chatgpt", nil
+			}
+			return "", errors.New("not found")
+		}
+		if ok, _ := a.Detect(); !ok {
+			t.Fatal("expected detected via chatgpt binary")
+		}
+	})
+	t.Run("lib dir", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		a.goos = "linux"
+		if err := os.MkdirAll(a.linuxLibDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := a.Detect(); !ok {
+			t.Fatal("expected detected via /usr/lib/chatgpt payload dir")
+		}
+		// The macOS-shaped and Windows probes must not fire on linux even when
+		// their dirs exist.
+		a.goos = "darwin"
+		if ok, _ := a.Detect(); ok {
+			t.Fatal("linux lib dir must not detect on darwin")
+		}
+	})
+}
+
+// TestNameBySurface proves the display name's parenthetical (the UI card
+// subtitle) reflects the installed surface: CLI-only and nothing-installed
+// keep the generic CLI + IDE form, desktop-only says Desktop app, and both
+// surfaces are named together.
+func TestNameBySurface(t *testing.T) {
+	a, home := newAdapter(t)
+	if got, want := a.Name(), "ChatGPT (Codex CLI + IDE)"; got != want {
+		t.Fatalf("nothing installed: Name() = %q, want %q", got, want)
+	}
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	if got, want := a.Name(), "ChatGPT (Codex CLI + IDE)"; got != want {
+		t.Fatalf("CLI only: Name() = %q, want %q", got, want)
+	}
+	installBundle(t, filepath.Join(home, "Applications", "ChatGPT.app"), xmlPlist("com.openai.codex"))
+	if got, want := a.Name(), "ChatGPT (Codex CLI + Desktop app)"; got != want {
+		t.Fatalf("both surfaces: Name() = %q, want %q", got, want)
+	}
+	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	if got, want := a.Name(), "ChatGPT (Desktop app)"; got != want {
+		t.Fatalf("desktop only: Name() = %q, want %q", got, want)
+	}
+}
+
+// TestDesktopOnlyStatusApplyRestore proves a desktop-only install (no codex
+// binary anywhere) is a fully manageable card: installed, Status reaches the
+// config-reading branch, and Apply/Restore work on ~/.codex as usual.
+func TestDesktopOnlyStatusApplyRestore(t *testing.T) {
+	a, home := newAdapter(t)
+	installBundle(t, filepath.Join(home, "Applications", "ChatGPT.app"), xmlPlist("com.openai.codex"))
+	p := sampleProfile()
+	if st, _, _ := a.Status(p); st != core.StatusDefault {
+		t.Fatalf("want Default, got %v", st)
+	}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied, got %v", st)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusDefault {
+		t.Fatalf("want Default after restore, got %v", st)
 	}
 }
 
