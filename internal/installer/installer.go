@@ -237,6 +237,36 @@ type UninstallPlan struct {
 	CanExecute bool
 }
 
+// resolveBinary resolves a tool's CLI binary name to its absolute path via the
+// injected resolve func, falling back to lookPath (PATH only) when none was
+// injected. It is shared by [Installer.PlanUninstall] and [Installer.CLIInstalled]
+// so both classify against the same resolution.
+func (i *Installer) resolveBinary(name string) (string, bool) {
+	if i.resolve != nil {
+		return i.resolve(name)
+	}
+	p, err := i.lookPath(name)
+	if err != nil {
+		return "", false
+	}
+	return p, true
+}
+
+// CLIInstalled reports whether toolID's CLI binary is currently resolvable.
+// It is the signal the UI uses to offer Uninstall only when there is actually
+// a binary the method-aware uninstall can act on: a tool can be detected as
+// installed without its CLI (e.g. Codex via the ChatGPT desktop app only, or
+// Claude Code via the editor extension only), and uninstalling then is a
+// guaranteed no-op. Unknown tool IDs report false.
+func (i *Installer) CLIInstalled(toolID string) bool {
+	spec, ok := binaries[toolID]
+	if !ok {
+		return false
+	}
+	_, found := i.resolveBinary(spec.bin)
+	return found
+}
+
 // PlanUninstall resolves and classifies toolID without running a command or
 // deleting a file. Missing npm/brew and unknown methods return a populated plan
 // plus their sentinel error so callers can render a useful, non-destructive
@@ -246,17 +276,7 @@ func (i *Installer) PlanUninstall(toolID string) (UninstallPlan, error) {
 	if !ok {
 		return UninstallPlan{}, ErrUnknownTool
 	}
-	resolve := i.resolve
-	if resolve == nil {
-		resolve = func(name string) (string, bool) {
-			p, err := i.lookPath(name)
-			if err != nil {
-				return "", false
-			}
-			return p, true
-		}
-	}
-	resolved, found := resolve(spec.bin)
+	resolved, found := i.resolveBinary(spec.bin)
 	if !found {
 		warning := fmt.Sprintf("Could not determine how %s was installed: the %q binary was not found. Remove it manually.", toolID, spec.bin)
 		return UninstallPlan{

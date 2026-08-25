@@ -383,7 +383,7 @@
         <button class="text-action" type="button" onclick={openTiers} disabled={busy}
           title={tiersButtonTitle}>{t("tool.tiers")}</button>
       {/if}
-      {#if tool.installed && tool.installable}
+      {#if tool.installed && tool.installable && tool.cli_installed}
         <button class="text-action danger" type="button" onclick={() => onUninstall(tool.id)} disabled={busy}>{t("tool.uninstall")}</button>
       {:else if !tool.installed && !tool.installable}
         <span class="manual-note">{t("tool.manualInstall")}</span>

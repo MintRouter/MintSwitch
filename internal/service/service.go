@@ -108,6 +108,11 @@ type ToolView struct {
 	// installer can install/uninstall. It is false for tools distributed only as
 	// a standalone binary, so the UI can hide the Install action for those.
 	Installable bool `json:"installable"`
+	// CliInstalled is true when the tool's CLI binary is actually resolvable
+	// right now. Installed can be true without it (e.g. Codex via the ChatGPT
+	// desktop app only, or Claude Code via the editor extension only), so the
+	// UI shows Uninstall only when there is a binary the installer can act on.
+	CliInstalled bool `json:"cli_installed"`
 }
 
 // Apply modes selectable per tool (see [Service.SetToolApplyMode]).
@@ -397,6 +402,7 @@ func (s *Service) viewFor(a core.ToolAdapter, st *settings.State) ToolView {
 		ProviderOverridden: overridden,
 		ApplyMode:          applyModeFor(st, a.ID()),
 		Installable:        installable,
+		CliInstalled:       s.inst.CLIInstalled(a.ID()),
 	}
 }
 

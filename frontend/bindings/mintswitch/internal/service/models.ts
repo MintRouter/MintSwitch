@@ -167,6 +167,14 @@ export interface ToolView {
      * a standalone binary, so the UI can hide the Install action for those.
      */
     "installable": boolean;
+
+    /**
+     * CliInstalled is true when the tool's CLI binary is actually resolvable
+     * right now. Installed can be true without it (e.g. Codex via the ChatGPT
+     * desktop app only, or Claude Code via the editor extension only), so the
+     * UI shows Uninstall only when there is a binary the installer can act on.
+     */
+    "cli_installed": boolean;
 }
 
 /**

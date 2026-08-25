@@ -1058,6 +1058,43 @@ func TestWave2StateMigratesToProviders(t *testing.T) {
 	}
 }
 
+// TestListToolsCliInstalled: ListTools surfaces whether the tool's CLI binary
+// actually resolves, independently of the adapter's Installed (a desktop-app-
+// or extension-only install detects as installed with no binary), so the UI
+// only offers Uninstall when there is a binary the installer can act on.
+func TestListToolsCliInstalled(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		found bool
+	}{
+		{"binary resolvable", true},
+		{"desktop-only, no binary", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &fakeAdapter{id: "codex", name: "Codex", installed: true}
+			inst := installer.NewWithResolver(&fakeRunner{}, okLook,
+				func(string) (string, bool) {
+					if tt.found {
+						return "/home/u/.npm-global/bin/codex", true
+					}
+					return "", false
+				}, nil, nil)
+			svc := NewWithInstaller(reg(a), settings.NewStore(filepath.Join(t.TempDir(), "settings.json")), inst)
+
+			views, err := svc.ListTools()
+			if err != nil {
+				t.Fatalf("ListTools: %v", err)
+			}
+			if len(views) != 1 || views[0].CliInstalled != tt.found {
+				t.Fatalf("CliInstalled = %v, want %v", views[0].CliInstalled, tt.found)
+			}
+			if !views[0].Installed || !views[0].Installable {
+				t.Fatalf("Installed/Installable must be unaffected: %+v", views[0])
+			}
+		})
+	}
+}
+
 func TestInstallSuccess(t *testing.T) {
 	fr := &fakeRunner{out: "added 1 package"}
 	svc := newInstallService(t, fr, okLook)

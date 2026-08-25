@@ -429,6 +429,29 @@ func TestPlanUninstallUnknownTool(t *testing.T) {
 	}
 }
 
+// TestCLIInstalled: the CLI-installed signal is true only when the tool's
+// binary resolves; unknown tool IDs are always false. Without an injected
+// resolver it falls back to lookPath (PATH only), like PlanUninstall.
+func TestCLIInstalled(t *testing.T) {
+	found := NewWithResolver(&fakeRunner{}, okLook, resolveTo("/usr/local/bin/codex"), nil, nil)
+	if !found.CLIInstalled("codex") {
+		t.Fatal("resolvable binary must report CLIInstalled=true")
+	}
+	missing := NewWithResolver(&fakeRunner{}, okLook, func(string) (string, bool) { return "", false }, nil, nil)
+	if missing.CLIInstalled("codex") {
+		t.Fatal("unresolvable binary must report CLIInstalled=false")
+	}
+	if found.CLIInstalled("nope") {
+		t.Fatal("unknown tool must report CLIInstalled=false")
+	}
+	if !NewWithLookPath(&fakeRunner{}, okLook).CLIInstalled("codex") {
+		t.Fatal("lookPath fallback must report CLIInstalled=true")
+	}
+	if NewWithLookPath(&fakeRunner{}, missLook).CLIInstalled("codex") {
+		t.Fatal("lookPath fallback must report CLIInstalled=false when unresolvable")
+	}
+}
+
 // TestUninstallReplansAtExecution proves a previously previewed path is never
 // accepted or replayed: Uninstall resolves again and executes the new method.
 func TestUninstallReplansAtExecution(t *testing.T) {
