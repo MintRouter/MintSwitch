@@ -170,9 +170,16 @@ func (r *Resolver) UserBinDirs() []string {
 
 // binDirs returns the bounded, curated set of directories searched for tool
 // binaries: the HOME-derived user dirs (see UserBinDirs) plus the configured
-// SystemBinDirs.
-func (r *Resolver) binDirs() []string {
-	return append(r.UserBinDirs(), r.SystemBinDirs...)
+// SystemBinDirs. On Windows it additionally includes the Codex standalone CLI
+// installer's bin dir (%LOCALAPPDATA%\Programs\OpenAI\Codex\bin), which the
+// installer does not add to PATH. It is search-only: UserBinDirs (the
+// standalone-deletion bound) deliberately excludes it.
+func (r *Resolver) binDirs(goos string) []string {
+	dirs := append(r.UserBinDirs(), r.SystemBinDirs...)
+	if goos == "windows" {
+		dirs = append(dirs, filepath.Join(r.LocalAppDataDir(), "Programs", "OpenAI", "Codex", "bin"))
+	}
+	return dirs
 }
 
 // BinaryResolvable reports whether binName is installed as a resolvable CLI. It
@@ -205,7 +212,7 @@ func (r *Resolver) resolveBinary(lookPath func(string) (string, error), binName,
 	if p, err := lookPath(binName); err == nil {
 		return p, true
 	}
-	for _, dir := range r.binDirs() {
+	for _, dir := range r.binDirs(goos) {
 		for _, name := range binCandidates(binName, goos) {
 			p := filepath.Join(dir, name)
 			if isExecutableFile(p, goos) {

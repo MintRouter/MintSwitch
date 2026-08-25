@@ -205,3 +205,40 @@ func TestResolveBinaryWindows(t *testing.T) {
 		t.Fatal("expected codex.exe to not resolve as codex on linux")
 	}
 }
+
+// TestResolveBinaryWindowsCodexStandaloneDir pins the Codex standalone CLI
+// installer's bin dir (%LOCALAPPDATA%\Programs\OpenAI\Codex\bin) as a curated
+// search dir on Windows only: the installer does not add it to PATH, so a
+// codex.exe there must still resolve. Unix must ignore it.
+func TestResolveBinaryWindowsCodexStandaloneDir(t *testing.T) {
+	home := t.TempDir()
+	local := t.TempDir()
+	r := &Resolver{Home: home, LocalAppData: local}
+	miss := func(string) (string, error) { return "", errors.New("not found") }
+
+	codexBin := filepath.Join(local, "Programs", "OpenAI", "Codex", "bin")
+	if err := os.MkdirAll(codexBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(codexBin, "codex.exe")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := r.resolveBinary(miss, "codex", "windows")
+	if !ok || got != p {
+		t.Fatalf("resolveBinary(codex, windows) = %q, %v; want %q, true", got, ok, p)
+	}
+	for _, goos := range []string{"darwin", "linux"} {
+		if _, ok := r.resolveBinary(miss, "codex", goos); ok {
+			t.Fatalf("expected Codex standalone dir to not be searched on %s", goos)
+		}
+	}
+	// Search-only: the standalone-deletion bound (UserBinDirs) must not
+	// include the Codex installer dir.
+	for _, dir := range r.UserBinDirs() {
+		if dir == codexBin {
+			t.Fatal("UserBinDirs must not include the Codex standalone dir")
+		}
+	}
+}
