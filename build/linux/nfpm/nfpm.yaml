@@ -6,7 +6,7 @@
 name: "mintswitch"
 arch: ${GOARCH}
 platform: "linux"
-version: "1.6.2"
+version: "1.6.3"
 section: "default"
 priority: "extra"
 maintainer: "MintRouter.AI <support@mintrouter.ai>"
