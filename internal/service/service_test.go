@@ -1809,3 +1809,84 @@ func TestAddProviderNormalizesModelReasoningLevels(t *testing.T) {
 		t.Fatalf("ModelReasoningLevels = %v, want map[a:[low medium]]", got)
 	}
 }
+
+// TestApplyOneBackfillsReasoningLevels proves ApplyOne("codex") fills in a
+// saved provider's missing reasoning levels from the endpoint, persists them
+// and applies them, without replacing existing levels; other tools never
+// trigger the request.
+func TestApplyOneBackfillsReasoningLevels(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Query().Get("client_version") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"models":[
+			{"slug":"gpt-test","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]},
+			{"slug":"kept","supported_reasoning_levels":[{"effort":"max"}]},
+			{"slug":"unlisted","supported_reasoning_levels":[{"effort":"low"}]}
+		]}`))
+	}))
+	defer srv.Close()
+	cdx := &fakeAdapter{id: "codex", name: "Codex", installed: true}
+	other := &fakeAdapter{id: "claude-code", name: "Claude Code", installed: true}
+	svc := newTestService(t, cdx, other)
+	svc.modelsClient = srv.Client()
+	p := validProvider()
+	p.BaseURL = srv.URL
+	p.Models = []string{"gpt-test", "kept"}
+	p.ModelReasoningLevels = map[string][]string{"kept": {"medium"}}
+	addProvider(t, svc, p)
+
+	if _, err := svc.ApplyOne("claude-code"); err != nil {
+		t.Fatalf("ApplyOne(claude-code): %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("non-codex apply made %d requests, want 0", calls)
+	}
+	if _, err := svc.ApplyOne("codex"); err != nil {
+		t.Fatalf("ApplyOne(codex): %v", err)
+	}
+	want := map[string][]string{"gpt-test": {"low", "high"}, "kept": {"medium"}}
+	if got := cdx.lastApplied.ModelReasoningLevels; !reflect.DeepEqual(got, want) {
+		t.Fatalf("applied levels = %v, want %v", got, want)
+	}
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := views[0].ModelReasoningLevels; !reflect.DeepEqual(got, want) {
+		t.Fatalf("persisted levels = %v, want %v", got, want)
+	}
+
+	// Every model now has levels, so a re-apply sends no request.
+	calls = 0
+	if _, err := svc.ApplyOne("codex"); err != nil {
+		t.Fatalf("re-ApplyOne: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("re-apply made %d requests, want 0 when every model has levels", calls)
+	}
+}
+
+// TestApplyOneBackfillFailureIsSilent proves an endpoint that does not serve
+// reasoning levels never fails the Apply or touches settings.
+func TestApplyOneBackfillFailureIsSilent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	cdx := &fakeAdapter{id: "codex", name: "Codex", installed: true}
+	svc := newTestService(t, cdx)
+	svc.modelsClient = srv.Client()
+	p := validProvider()
+	p.BaseURL = srv.URL
+	addProvider(t, svc, p)
+	if _, err := svc.ApplyOne("codex"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if got := cdx.lastApplied.ModelReasoningLevels; got != nil {
+		t.Fatalf("applied levels = %v, want none", got)
+	}
+}
