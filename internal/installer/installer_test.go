@@ -549,3 +549,24 @@ func TestUninstallReplansAtExecution(t *testing.T) {
 		t.Fatalf("preview target must remain: %v", err)
 	}
 }
+
+// TestEnvWithDirOnPath proves an absolute exe's dir is prepended to PATH
+// (matched case-insensitively, as Windows' "Path"), a missing PATH is added,
+// and a bare name inherits the parent environment.
+func TestEnvWithDirOnPath(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "nodejs", "npm.cmd")
+	dir := filepath.Dir(exe)
+	sep := string(os.PathListSeparator)
+
+	got := envWithDirOnPath([]string{"A=1", "Path=/x", "PATH=/y"}, exe)
+	want := []string{"A=1", "Path=" + dir + sep + "/x", "PATH=/y"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("env = %v, want %v", got, want)
+	}
+	if got := envWithDirOnPath([]string{"A=1"}, exe); !reflect.DeepEqual(got, []string{"A=1", "PATH=" + dir}) {
+		t.Fatalf("env without PATH = %v", got)
+	}
+	if got := envWithDirOnPath([]string{"PATH=/x"}, "npm"); got != nil {
+		t.Fatalf("bare name env = %v, want nil", got)
+	}
+}

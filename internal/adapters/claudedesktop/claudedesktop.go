@@ -536,7 +536,11 @@ func (a *Adapter) readMergeBase(path string) (map[string]any, error) {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		if real := a.msixRealPath(path); real != "" {
 			if _, err := os.Stat(real); err == nil {
-				return core.ReadJSONObject(real)
+				m, err := core.ReadJSONObject(real)
+				if err != nil {
+					return nil, fmt.Errorf("claudedesktop: seed from %s: %w", real, err)
+				}
+				return m, nil
 			}
 		}
 	}

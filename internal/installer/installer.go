@@ -29,12 +29,13 @@ import (
 	"mintswitch/internal/paths"
 )
 
-// ErrNpmMissing is returned when the npm executable cannot be found on PATH.
-var ErrNpmMissing = errors.New("installer: npm not found on PATH")
+// ErrNpmMissing is returned when the npm executable cannot be found on PATH or
+// (for [NewMethodAware]) in the resolver's curated bin dirs.
+var ErrNpmMissing = errors.New("installer: npm not found")
 
 // ErrBrewMissing is returned when a Homebrew-installed tool is being uninstalled
-// but the brew executable cannot be found on PATH.
-var ErrBrewMissing = errors.New("installer: brew not found on PATH")
+// but the brew executable cannot be found on PATH or in the curated bin dirs.
+var ErrBrewMissing = errors.New("installer: brew not found")
 
 // ErrUnknownTool is returned when a toolID has no whitelisted npm package.
 var ErrUnknownTool = errors.New("installer: unknown tool")
@@ -133,9 +134,40 @@ type ExecRunner struct{}
 // GUI app never flashes a cmd window the user could close mid-install.
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = envWithDirOnPath(os.Environ(), name)
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// envWithDirOnPath returns env with the directory of an absolute exe prepended
+// to PATH, or nil (inherit the parent environment) when exe is a bare name.
+// npm may be resolved from a curated dir missing from a GUI app's stale PATH
+// (e.g. %ProgramFiles%\nodejs); npm's shim, package lifecycle scripts and the
+// installed CLI's own shim all expect node next to it on PATH.
+func envWithDirOnPath(env []string, exe string) []string {
+	if !filepath.IsAbs(exe) {
+		return nil
+	}
+	dir := filepath.Dir(exe)
+	out := make([]string, 0, len(env)+1)
+	found := false
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if ok && strings.EqualFold(k, "PATH") && !found {
+			found = true
+			if v == "" {
+				kv = k + "=" + dir
+			} else {
+				kv = k + "=" + dir + string(os.PathListSeparator) + v
+			}
+		}
+		out = append(out, kv)
+	}
+	if !found {
+		out = append(out, "PATH="+dir)
+	}
+	return out
 }
 
 // Installer builds and runs install/uninstall actions for a tool. Install is

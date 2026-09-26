@@ -728,3 +728,23 @@ func TestApplyMSIXPrefersPrivateCopy(t *testing.T) {
 		t.Fatalf("msixRealPath off windows = %q, want empty", got)
 	}
 }
+
+// TestApplyMSIXCorruptRealFile proves a corrupt real-path file fails Apply
+// with an error naming that file, and nothing is written to the private copy.
+func TestApplyMSIXCorruptRealFile(t *testing.T) {
+	a, real := newMSIXAdapter(t)
+	realCfg := filepath.Join(real, "claude_desktop_config.json")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realCfg, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := a.Apply(sampleProfile())
+	if err == nil || !strings.Contains(err.Error(), realCfg) {
+		t.Fatalf("Apply err = %v, want error naming %s", err, realCfg)
+	}
+	if _, err := os.Stat(a.configPath()); !os.IsNotExist(err) {
+		t.Fatalf("private config must not be written, stat err = %v", err)
+	}
+}
