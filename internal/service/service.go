@@ -164,9 +164,12 @@ type ProviderView struct {
 	ModelNames map[string]string `json:"model_names"`
 	// ModelContextWindows maps a member of Models to its advertised context
 	// window in tokens, passed through so the Edit form can re-save it.
-	ModelContextWindows map[string]int    `json:"model_context_windows"`
-	Model               string            `json:"model"`
-	SmallFastModel      string            `json:"small_fast_model"`
+	ModelContextWindows map[string]int `json:"model_context_windows"`
+	// ModelReasoningLevels maps a member of Models to its advertised ordered
+	// reasoning-effort levels, passed through so the Edit form can re-save it.
+	ModelReasoningLevels map[string][]string `json:"model_reasoning_levels"`
+	Model                string              `json:"model"`
+	SmallFastModel       string              `json:"small_fast_model"`
 	// OpusModel, SonnetModel, HaikuModel and FableModel are the provider's
 	// optional Claude Code tier pins; empty means the tier follows the default
 	// Model.
@@ -202,22 +205,23 @@ func providerView(p core.Provider, active bool) ProviderView {
 		models = []string{p.Model}
 	}
 	return ProviderView{
-		ID:                  p.ID,
-		Name:                p.Name,
-		Note:                p.Note,
-		BaseURL:             p.BaseURL,
-		Models:              models,
-		ModelNames:          p.ModelNames,
-		ModelContextWindows: p.ModelContextWindows,
-		Model:               p.Model,
-		SmallFastModel:      p.SmallFastModel,
-		OpusModel:           p.OpusModel,
-		SonnetModel:         p.SonnetModel,
-		HaikuModel:          p.HaikuModel,
-		FableModel:          p.FableModel,
-		ReviewModel:         p.ReviewModel,
-		HasKey:              strings.TrimSpace(p.APIKey) != "",
-		Active:              active,
+		ID:                   p.ID,
+		Name:                 p.Name,
+		Note:                 p.Note,
+		BaseURL:              p.BaseURL,
+		Models:               models,
+		ModelNames:           p.ModelNames,
+		ModelContextWindows:  p.ModelContextWindows,
+		ModelReasoningLevels: p.ModelReasoningLevels,
+		Model:                p.Model,
+		SmallFastModel:       p.SmallFastModel,
+		OpusModel:            p.OpusModel,
+		SonnetModel:          p.SonnetModel,
+		HaikuModel:           p.HaikuModel,
+		FableModel:           p.FableModel,
+		ReviewModel:          p.ReviewModel,
+		HasKey:               strings.TrimSpace(p.APIKey) != "",
+		Active:               active,
 	}
 }
 
@@ -562,6 +566,7 @@ func normalizeProvider(p *core.Provider) {
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
 	p.ModelContextWindows = normalizeModelContextWindows(p.ModelContextWindows, p.Models)
+	p.ModelReasoningLevels = normalizeModelReasoningLevels(p.ModelReasoningLevels, p.Models)
 }
 
 // newProviderID returns a fresh provider ID not present in taken.
@@ -715,6 +720,45 @@ func normalizeModelContextWindows(windows map[string]int, models []string) map[s
 			continue
 		}
 		out[id] = w
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// normalizeModelReasoningLevels keeps only entries whose (trimmed) model ID is
+// a member of models, with each level list trimmed, lower-cased,
+// de-duplicated and limited to well-formed level tokens (see
+// validReasoningLevel), so stale or malformed levels never persist or reach
+// a tool config. It returns nil when nothing remains.
+func normalizeModelReasoningLevels(levels map[string][]string, models []string) map[string][]string {
+	if len(levels) == 0 {
+		return nil
+	}
+	member := make(map[string]bool, len(models))
+	for _, m := range models {
+		member[m] = true
+	}
+	out := make(map[string][]string, len(levels))
+	for id, list := range levels {
+		id = strings.TrimSpace(id)
+		if !member[id] {
+			continue
+		}
+		var clean []string
+		seen := map[string]bool{}
+		for _, l := range list {
+			l = strings.ToLower(strings.TrimSpace(l))
+			if !validReasoningLevel(l) || seen[l] {
+				continue
+			}
+			seen[l] = true
+			clean = append(clean, l)
+		}
+		if len(clean) > 0 {
+			out[id] = clean
+		}
 	}
 	if len(out) == 0 {
 		return nil

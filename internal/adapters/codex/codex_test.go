@@ -1253,3 +1253,175 @@ func TestApplyWriteOrderAuthFirst(t *testing.T) {
 		t.Fatal("auth.json must carry the API key before config.toml is written")
 	}
 }
+
+// TestCatalogReasoningLevels pins the effort metadata: endpoint-advertised
+// levels become ordered {effort, description} presets with
+// default_reasoning_level "medium" (or the middle level when medium is not
+// offered); levels outside the known allow-list are dropped; a model without
+// advertised levels gets an empty list and no default (no name guessing).
+func TestCatalogReasoningLevels(t *testing.T) {
+	p := sampleProfile()
+	p.Models = []string{"gpt-5.5", "gpt-6-astra", "custom", "unknown-only"}
+	p.ApplyAllModels = true
+	p.ModelReasoningLevels = map[string][]string{
+		"gpt-6-astra":  {"low", "medium", "high", "xhigh", "max", "ultra"},
+		"custom":       {"low", "turbo", "high", "max"},
+		"unknown-only": {"turbo"},
+	}
+	entries := catalogObject(p)["models"].([]any)
+	type want struct {
+		levels []string
+		def    string
+	}
+	cases := map[string]want{
+		"gpt-5.5":      {nil, ""},
+		"gpt-6-astra":  {[]string{"low", "medium", "high", "xhigh", "max", "ultra"}, "medium"},
+		"custom":       {[]string{"low", "high", "max"}, "high"},
+		"unknown-only": {nil, ""},
+	}
+	if len(entries) != len(cases) {
+		t.Fatalf("catalog models = %d, want %d", len(entries), len(cases))
+	}
+	for _, e := range entries {
+		entry := e.(map[string]any)
+		slug := entry["slug"].(string)
+		w := cases[slug]
+		presets := entry["supported_reasoning_levels"].([]any)
+		if len(presets) != len(w.levels) {
+			t.Fatalf("%s levels = %v, want %v", slug, presets, w.levels)
+		}
+		for i, pr := range presets {
+			m := pr.(map[string]any)
+			if m["effort"] != w.levels[i] {
+				t.Fatalf("%s level %d = %v, want %q", slug, i, m["effort"], w.levels[i])
+			}
+			if d, _ := m["description"].(string); d == "" {
+				t.Fatalf("%s level %d has no description", slug, i)
+			}
+		}
+		def, has := entry["default_reasoning_level"]
+		if w.def == "" {
+			if has {
+				t.Fatalf("%s default_reasoning_level = %v, want absent", slug, def)
+			}
+		} else if def != w.def {
+			t.Fatalf("%s default_reasoning_level = %v, want %q", slug, def, w.def)
+		}
+	}
+}
+
+// TestStatusPreLevelsCatalogStaysApplied proves upgrading keeps an
+// "All models" apply from the previous release Applied: without advertised
+// levels the catalog MintSwitch would write is unchanged (empty levels, no
+// default), so catalogStale finds nothing to flag.
+func TestStatusPreLevelsCatalogStaysApplied(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	p.Models = []string{"gpt-5.5", "gpt-5.5-mini"}
+	p.ApplyAllModels = true
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range catalogObject(p)["models"].([]any) {
+		entry := e.(map[string]any)
+		if n := len(entry["supported_reasoning_levels"].([]any)); n != 0 {
+			t.Fatalf("%v: levels = %d, want 0 without advertised levels", entry["slug"], n)
+		}
+		if _, has := entry["default_reasoning_level"]; has {
+			t.Fatalf("%v: default_reasoning_level written without advertised levels", entry["slug"])
+		}
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied, got %v", st)
+	}
+}
+
+// TestApplySingleModelWritesCatalogForReasoningLevels proves single-model
+// mode writes the catalog when the endpoint advertised reasoning levels for
+// the selected model (Codex in API-key mode never refreshes its model list,
+// so without it an uncatalogued model has no effort picker), and removes it
+// again once no levels are known.
+func TestApplySingleModelWritesCatalogForReasoningLevels(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	p.ModelReasoningLevels = map[string][]string{p.Model: {"low", "medium", "high", "xhigh"}}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	catalogPath := filepath.Join(home, ".codex", catalogFileName)
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[catalogKey] != catalogPath {
+		t.Fatalf("%s = %v, want %q", catalogKey, cfg[catalogKey], catalogPath)
+	}
+	catalog, err := core.ReadJSONObject(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := catalog["models"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("catalog models = %v, want 1 entry", entries)
+	}
+	if got := len(entries[0].(map[string]any)["supported_reasoning_levels"].([]any)); got != 4 {
+		t.Fatalf("supported_reasoning_levels len = %d, want 4", got)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied, got %v", st)
+	}
+
+	plain := sampleProfile()
+	if _, err := a.Apply(plain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(catalogPath); !os.IsNotExist(err) {
+		t.Fatalf("catalog not removed without levels: %v", err)
+	}
+}
+
+// TestStatusCatalogStale proves reasoning levels (kept out of the
+// fingerprint) still surface as ModifiedExternally when they change after an
+// Apply, and when the catalog file is deleted, until the next Apply.
+func TestStatusCatalogStale(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	p.ModelReasoningLevels = map[string][]string{p.Model: {"low", "medium", "high"}}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied, got %v", st)
+	}
+	refreshed := p
+	refreshed.ModelReasoningLevels = map[string][]string{p.Model: {"low", "medium", "high", "xhigh"}}
+	st, detail, _ := a.Status(refreshed)
+	if st != core.StatusModifiedExternally || detail != catalogStaleDetail {
+		t.Fatalf("want stale-catalog ModifiedExternally, got %v %q", st, detail)
+	}
+	if _, err := a.Apply(refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := a.Status(refreshed); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied after re-apply, got %v", st)
+	}
+	if err := os.Remove(filepath.Join(home, ".codex", catalogFileName)); err != nil {
+		t.Fatal(err)
+	}
+	if st, detail, _ := a.Status(refreshed); st != core.StatusModifiedExternally || detail != catalogStaleDetail {
+		t.Fatalf("want stale-catalog after delete, got %v %q", st, detail)
+	}
+
+	// Levels withdrawn: the profile needs no catalog any more, but config.toml
+	// still references it until the next Apply.
+	if _, err := a.Apply(refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if st, detail, _ := a.Status(sampleProfile()); st != core.StatusModifiedExternally || detail != catalogStaleDetail {
+		t.Fatalf("want stale-catalog after levels withdrawn, got %v %q", st, detail)
+	}
+}

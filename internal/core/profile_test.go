@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -241,5 +242,45 @@ func TestNewMarker(t *testing.T) {
 	}
 	if m.AppliedAt.IsZero() {
 		t.Fatal("marker AppliedAt not set")
+	}
+}
+
+// TestReasoningLevels pins that only endpoint-advertised levels are used:
+// no name-based guessing, so an unlisted model gets none.
+func TestReasoningLevels(t *testing.T) {
+	p := Profile{ModelReasoningLevels: map[string][]string{"gpt-6-astra": {"low", "max"}}}
+	if got := p.ReasoningLevels("gpt-6-astra"); strings.Join(got, ",") != "low,max" {
+		t.Errorf("ReasoningLevels(gpt-6-astra) = %v, want [low max]", got)
+	}
+	if got := p.ReasoningLevels("gpt-5.5"); got != nil {
+		t.Errorf("ReasoningLevels(gpt-5.5) = %v, want nil", got)
+	}
+}
+
+// TestProviderProfileCarriesReasoningLevels proves Provider.Profile passes
+// ModelReasoningLevels through to adapters.
+func TestProviderProfileCarriesReasoningLevels(t *testing.T) {
+	pr := Provider{ModelReasoningLevels: map[string][]string{"m": {"low"}}}
+	if got := pr.Profile().ModelReasoningLevels["m"]; strings.Join(got, ",") != "low" {
+		t.Fatalf("Profile().ModelReasoningLevels = %v, want [low]", got)
+	}
+}
+
+// TestDefaultReasoningLevel: medium when offered, else the middle level.
+func TestDefaultReasoningLevel(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{"low"}, "low"},
+		{[]string{"low", "high"}, "low"},
+		{[]string{"none", "low", "medium", "high"}, "medium"},
+		{[]string{"low", "high", "max"}, "high"},
+	}
+	for _, c := range cases {
+		if got := DefaultReasoningLevel(c.in); got != c.want {
+			t.Errorf("DefaultReasoningLevel(%v) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
