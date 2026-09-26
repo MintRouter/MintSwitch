@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1493,7 +1494,7 @@ func TestFetchEndpointModelsDisplayNames(t *testing.T) {
 		t.Fatalf("options = %+v, want %+v", options, want)
 	}
 	for i := range want {
-		if options[i] != want[i] {
+		if !reflect.DeepEqual(options[i], want[i]) {
 			t.Fatalf("options[%d] = %+v, want %+v", i, options[i], want[i])
 		}
 	}
@@ -1574,8 +1575,10 @@ func TestFetchEndpointModelsStoredKeyURLGuard(t *testing.T) {
 	if gotAuth != "Bearer sk-test" {
 		t.Fatalf("Authorization = %q, want the stored bearer key", gotAuth)
 	}
-	if calls != 1 {
-		t.Fatalf("matching URL made %d request(s), want 1", calls)
+	// Two requests: the plain listing plus the best-effort reasoning-level
+	// enrichment (both to the stored endpoint).
+	if calls != 2 {
+		t.Fatalf("matching URL made %d request(s), want 2", calls)
 	}
 
 	// Different URL: a display-safe error that never carries the key, and no
@@ -1719,5 +1722,90 @@ func TestUninstallPlanJSONContract(t *testing.T) {
 		if _, ok := fields[key]; !ok {
 			t.Fatalf("missing JSON field %q in %s", key, data)
 		}
+	}
+}
+
+// TestFetchEndpointModelsReasoningLevels pins the reasoning-level enrichment:
+// the plain listing carries none, so a second ?client_version= request is
+// made and its Codex-shaped supported_reasoning_levels ("slug" IDs, effort
+// objects) fill in each listed model; malformed levels are dropped, and IDs
+// only present in the enrichment response are never added.
+func TestFetchEndpointModelsReasoningLevels(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("client_version") == "" {
+			w.Write([]byte(`{"data":[{"id":"gpt-x"},{"id":"plain"}]}`))
+			return
+		}
+		w.Write([]byte(`{"models":[
+			{"slug":"gpt-x","supported_reasoning_levels":[
+				{"effort":"low","description":"d"},{"effort":" High "},{"effort":"low"},{"effort":"<b>bad</b>"},"max"]},
+			{"slug":"plain","supported_reasoning_levels":[]},
+			{"slug":"extra","supported_reasoning_levels":[{"effort":"low"}]}
+		]}`))
+	}))
+	defer srv.Close()
+	svc, id := newModelsService(t, srv)
+	options, err := svc.FetchEndpointModels(srv.URL, "", id)
+	if err != nil {
+		t.Fatalf("FetchEndpointModels: %v", err)
+	}
+	want := []ModelOption{
+		{ID: "gpt-x", ReasoningLevels: []string{"low", "high", "max"}},
+		{ID: "plain"},
+	}
+	if !reflect.DeepEqual(options, want) {
+		t.Fatalf("options = %+v, want %+v", options, want)
+	}
+	if len(queries) != 2 || queries[0] != "" || queries[1] != "client_version="+codexClientVersion {
+		t.Fatalf("queries = %q, want plain then client_version", queries)
+	}
+}
+
+// TestFetchEndpointModelsReasoningEnrichmentFailure proves a failing
+// enrichment request never fails the fetch: the plain listing is returned
+// without levels.
+func TestFetchEndpointModelsReasoningEnrichmentFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("client_version") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+	svc, id := newModelsService(t, srv)
+	options, err := svc.FetchEndpointModels(srv.URL, "", id)
+	if err != nil {
+		t.Fatalf("FetchEndpointModels: %v", err)
+	}
+	if !reflect.DeepEqual(options, []ModelOption{{ID: "m"}}) {
+		t.Fatalf("options = %+v, want plain [m]", options)
+	}
+}
+
+// TestAddProviderNormalizesModelReasoningLevels: only member models keep
+// levels, each list trimmed, lower-cased, de-duplicated and stripped of
+// malformed tokens; empty lists are dropped.
+func TestAddProviderNormalizesModelReasoningLevels(t *testing.T) {
+	svc := newTestService(t)
+	p := validProvider()
+	p.Model = "sel"
+	p.Models = []string{"a", "b"}
+	p.ModelReasoningLevels = map[string][]string{
+		"a":     {" Low ", "medium", "low", "bad level"},
+		"b":     {""},
+		"ghost": {"high"},
+	}
+	addProvider(t, svc, p)
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	got := views[0].ModelReasoningLevels
+	if !reflect.DeepEqual(got, map[string][]string{"a": {"low", "medium"}}) {
+		t.Fatalf("ModelReasoningLevels = %v, want map[a:[low medium]]", got)
 	}
 }

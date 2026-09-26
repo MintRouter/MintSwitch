@@ -45,7 +45,22 @@ type ModelOption struct {
 	// ContextWindow is the model's advertised context window in tokens; 0
 	// means the endpoint did not advertise one.
 	ContextWindow int `json:"context_window,omitempty"`
+	// ReasoningLevels is the model's advertised ordered reasoning-effort
+	// levels (e.g. "low", "medium", "high"); empty means none advertised.
+	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
 }
+
+// codexClientVersion is sent as the ?client_version= query of the
+// reasoning-level enrichment request (see [Service.enrichReasoningLevels]).
+// Gateways that serve Codex clients (e.g. MintRouter) answer that query with
+// Codex's catalog shape, which carries per-model supported_reasoning_levels;
+// a version >= 0.144.0 unlocks the extended levels ("max", "ultra").
+const codexClientVersion = "0.157.0"
+
+// reasoningFetchTimeout bounds the optional reasoning-level enrichment
+// request, shorter than modelsFetchTimeout so an endpoint that stalls on the
+// unfamiliar query adds little to the fetch the user is waiting on.
+const reasoningFetchTimeout = 4 * time.Second
 
 // FetchProviderModels queries the stored provider's OpenAI-compatible
 // endpoint (GET {base_url}/models with a Bearer key) and returns the sorted,
@@ -82,8 +97,9 @@ func (s *Service) FetchProviderModels(providerID string) ([]string, error) {
 // FetchEndpointModels queries {baseURL}/models like [Service.FetchProviderModels]
 // but for endpoint values that may not be saved yet, so the Add/Edit dialog
 // can list models before the provider is persisted. It returns each model's
-// ID plus the display name the endpoint advertises (when any), so the dialog
-// can seed friendly names. The API key is transient: it is used only for this
+// ID plus the display name, context window and reasoning-effort levels the
+// endpoint advertises (when any, see [Service.enrichReasoningLevels]), so the
+// dialog can seed them. The API key is transient: it is used only for this
 // one request and is never stored, logged, or included in errors. When apiKey
 // is blank and providerID names a stored provider, that provider's stored key
 // is used instead (the Edit flow, where the key never round-trips to the
@@ -114,7 +130,12 @@ func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]Mod
 			key = strings.TrimSpace(pr.APIKey)
 		}
 	}
-	return s.fetchModels(base, key)
+	options, err := s.fetchModels(base, key)
+	if err != nil {
+		return nil, err
+	}
+	s.enrichReasoningLevels(base, key, options)
+	return options, nil
 }
 
 // fetchModels performs the actual GET {base}/models request with an optional
@@ -164,6 +185,70 @@ func (s *Service) fetchModels(base, key string) ([]ModelOption, error) {
 	return models, nil
 }
 
+// enrichReasoningLevels best-effort fills ReasoningLevels for models the
+// plain listing advertised none for, from a second GET
+// {base}/models?client_version=... request. Plain OpenAI /models entries
+// carry no reasoning metadata, but gateways that serve Codex clients answer
+// that query with Codex's catalog shape ({"models":[{"slug":...,
+// "supported_reasoning_levels":[{"effort":...}]}]}); endpoints that ignore
+// the query simply return the same plain listing. Any failure (transport,
+// non-200, unparseable body) is silently ignored — the plain listing already
+// succeeded and the levels are optional metadata. Only IDs present in the
+// plain listing are enriched, so the query can never add models.
+func (s *Service) enrichReasoningLevels(base, key string, models []ModelOption) {
+	missing := false
+	for _, m := range models {
+		if len(m.ReasoningLevels) == 0 {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reasoningFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models?client_version="+codexClientVersion, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Accept", "application/json")
+	if key = strings.TrimSpace(key); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	client := s.modelsClient
+	if client == nil {
+		client = &http.Client{Timeout: modelsFetchTimeout}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, modelsFetchMaxBody))
+	if err != nil {
+		return
+	}
+	extra, ok := parseModelOptions(body)
+	if !ok {
+		return
+	}
+	levels := make(map[string][]string, len(extra))
+	for _, o := range extra {
+		if len(o.ReasoningLevels) > 0 {
+			levels[o.ID] = o.ReasoningLevels
+		}
+	}
+	for i := range models {
+		if len(models[i].ReasoningLevels) == 0 {
+			models[i].ReasoningLevels = levels[models[i].ID]
+		}
+	}
+}
+
 // httpStatusHint maps common /models failure statuses to a short display-safe
 // hint appended to the error. It never includes the response body.
 func httpStatusHint(code int) string {
@@ -181,20 +266,75 @@ func httpStatusHint(code int) string {
 }
 
 // modelEntry decodes one element of a models listing. It tolerates the OpenAI
-// object shape ({"id": ...}, with "name"/"model" as fallbacks) as well as a
-// bare string element. DisplayName ("display_name", with "name" as fallback
+// object shape ({"id": ...}, with "slug"/"model"/"name" as fallbacks — "slug"
+// is the Codex catalog shape's identifier) as well as a bare string element. DisplayName ("display_name", with "name" as fallback
 // when it wasn't consumed as the ID) is the optional human-friendly label.
 // The context-window fields (standard OpenAI /models has none, but many
 // providers advertise one under varying names) are RawMessage so a quirky
 // non-numeric value is simply ignored instead of failing the whole parse.
 type modelEntry struct {
 	ID               string          `json:"id"`
+	Slug             string          `json:"slug"`
 	Name             string          `json:"name"`
 	Model            string          `json:"model"`
 	DisplayName      string          `json:"display_name"`
 	ContextWindow    json.RawMessage `json:"context_window"`
 	ContextLength    json.RawMessage `json:"context_length"`
 	MaxContextLength json.RawMessage `json:"max_context_length"`
+	// SupportedReasoningLevels is the Codex catalog shape's per-model effort
+	// list ([{"effort":"low",...}]); bare strings are accepted too. RawMessage
+	// so an unexpected shape is ignored instead of failing the whole parse.
+	SupportedReasoningLevels json.RawMessage `json:"supported_reasoning_levels"`
+}
+
+// reasoningLevelsOf returns the entry's advertised reasoning-effort levels in
+// order: each element's "effort" (or a bare string), trimmed, lower-cased,
+// de-duplicated, keeping only well-formed level tokens (see
+// validReasoningLevel). nil means none advertised or an unusable shape.
+func reasoningLevelsOf(e modelEntry) []string {
+	if len(e.SupportedReasoningLevels) == 0 {
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(e.SupportedReasoningLevels, &raw); err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range raw {
+		var level string
+		if err := json.Unmarshal(r, &level); err != nil {
+			var obj struct {
+				Effort string `json:"effort"`
+			}
+			if err := json.Unmarshal(r, &obj); err != nil {
+				continue
+			}
+			level = obj.Effort
+		}
+		level = strings.ToLower(strings.TrimSpace(level))
+		if !validReasoningLevel(level) || seen[level] {
+			continue
+		}
+		seen[level] = true
+		out = append(out, level)
+	}
+	return out
+}
+
+// validReasoningLevel reports whether level is a plausible reasoning-effort
+// token: 1-32 characters of [a-z0-9_-]. Anything else (free text, markup) is
+// dropped so it can never reach a tool config.
+func validReasoningLevel(level string) bool {
+	if level == "" || len(level) > 32 {
+		return false
+	}
+	for _, c := range level {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // contextWindowOf returns the entry's advertised context window: the first
@@ -263,10 +403,10 @@ func parseModelOptions(body []byte) (options []ModelOption, ok bool) {
 	return nil, false
 }
 
-// optionsOf collects the non-empty identifier of each entry (ID, else Model,
-// else Name), trimmed and de-duplicated, plus its optional display name
-// ("display_name", else "name" when Name wasn't consumed as the ID) and
-// advertised context window. Display names equal to the ID are dropped as
+// optionsOf collects the non-empty identifier of each entry (ID, else Slug,
+// else Model, else Name), trimmed and de-duplicated, plus its optional
+// display name ("display_name", else "name" when Name wasn't consumed as the
+// ID), advertised context window and reasoning-effort levels. Display names equal to the ID are dropped as
 // noise. Nothing secret is preserved.
 func optionsOf(entries []modelEntry) []ModelOption {
 	options := make([]ModelOption, 0, len(entries))
@@ -274,6 +414,9 @@ func optionsOf(entries []modelEntry) []ModelOption {
 	for _, e := range entries {
 		nameUsedAsID := false
 		id := strings.TrimSpace(e.ID)
+		if id == "" {
+			id = strings.TrimSpace(e.Slug)
+		}
 		if id == "" {
 			id = strings.TrimSpace(e.Model)
 		}
@@ -292,7 +435,12 @@ func optionsOf(entries []modelEntry) []ModelOption {
 		if display == id {
 			display = ""
 		}
-		options = append(options, ModelOption{ID: id, DisplayName: display, ContextWindow: contextWindowOf(e)})
+		options = append(options, ModelOption{
+			ID:              id,
+			DisplayName:     display,
+			ContextWindow:   contextWindowOf(e),
+			ReasoningLevels: reasoningLevelsOf(e),
+		})
 	}
 	return options
 }

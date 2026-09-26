@@ -7,7 +7,7 @@ import (
 )
 
 // catalogFileName is the model-catalog file MintSwitch writes under the Codex
-// home dir in "All models" mode and points config.toml's model_catalog_json
+// home dir (see needsCatalog) and points config.toml's model_catalog_json
 // at. The name is MintSwitch-specific, so its presence (or a
 // model_catalog_json value ending in it) is a reliable managed signal.
 const catalogFileName = "mintswitch-models.json"
@@ -42,8 +42,13 @@ const defaultContextWindow = 272_000
 // picker, and priority preserves the profile's model order (lower sorts
 // first). display_name comes from the profile's ModelNames when set, and
 // context_window from the profile's ModelContextWindows (falling back to
-// defaultContextWindow). A pinned ReviewModel not already among the applied
-// models is appended last, so Codex has context-window metadata for it too.
+// defaultContextWindow). supported_reasoning_levels and
+// default_reasoning_level come from [core.Profile.ReasoningLevels] (limited
+// to knownReasoningLevels): Codex
+// shows its effort picker only for levels listed here, and clamps (or drops)
+// any configured model_reasoning_effort to them — an empty list means no
+// effort is ever sent. A pinned ReviewModel not already among the applied
+// models is appended last, so Codex has metadata for it too.
 func catalogObject(p core.Profile) map[string]any {
 	slugs := p.ApplyModels()
 	if p.ReviewModel != "" {
@@ -68,11 +73,12 @@ func catalogObject(p core.Profile) map[string]any {
 		if w := p.ModelContextWindows[m]; w > 0 {
 			window = w
 		}
-		models = append(models, map[string]any{
+		levels := knownReasoningLevels(p.ReasoningLevels(m))
+		entry := map[string]any{
 			"slug":                         m,
 			"display_name":                 display,
 			"description":                  nil,
-			"supported_reasoning_levels":   []any{},
+			"supported_reasoning_levels":   reasoningPresets(levels),
 			"shell_type":                   "default",
 			"visibility":                   "list",
 			"supported_in_api":             true,
@@ -86,9 +92,66 @@ func catalogObject(p core.Profile) map[string]any {
 			"context_window":               window,
 			"experimental_supported_tools": []any{},
 			"base_instructions":            catalogBaseInstructions,
-		})
+		}
+		if def := core.DefaultReasoningLevel(levels); def != "" {
+			entry["default_reasoning_level"] = def
+		}
+		models = append(models, entry)
 	}
 	return map[string]any{"models": models}
+}
+
+// reasoningLevelDescriptions are the short picker descriptions for the
+// effort levels MintSwitch writes, matching the wording of Codex's own
+// catalog (codex-rs models.json, 2026-08). Its keys are also the allow-list:
+// Codex releases before 0.140 parse ReasoningEffort as a closed enum and
+// reject the whole catalog on an unknown value, so any other advertised level
+// is dropped (and so are levels a given Codex version may not know yet — the
+// safe failure is a shorter picker, never a catalog Codex refuses to load).
+var reasoningLevelDescriptions = map[string]string{
+	"none":    "No reasoning; fastest responses",
+	"minimal": "Minimal reasoning for the simplest tasks",
+	"low":     "Fast responses with lighter reasoning",
+	"medium":  "Balances speed and reasoning depth for everyday tasks",
+	"high":    "Greater reasoning depth for complex problems",
+	"xhigh":   "Extra high reasoning depth for complex problems",
+	"max":     "Maximum reasoning depth for the hardest problems",
+	"ultra":   "Deepest reasoning; slowest and most token-intensive",
+}
+
+// knownReasoningLevels filters levels to the reasoningLevelDescriptions
+// allow-list, preserving order.
+func knownReasoningLevels(levels []string) []string {
+	var out []string
+	for _, l := range levels {
+		if _, ok := reasoningLevelDescriptions[l]; ok {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// reasoningPresets renders levels as Codex ReasoningEffortPreset objects
+// ({"effort", "description"}), in order. It returns an empty (non-nil) list
+// for no levels, since supported_reasoning_levels is a required field.
+func reasoningPresets(levels []string) []any {
+	out := make([]any, 0, len(levels))
+	for _, l := range levels {
+		out = append(out, map[string]any{"effort": l, "description": reasoningLevelDescriptions[l]})
+	}
+	return out
+}
+
+// needsCatalog reports whether Apply must write MintSwitch's model catalog:
+// always in "All models" mode and whenever a review model is pinned (as
+// before), and in single-model mode when the endpoint advertised reasoning
+// levels for the selected model. Codex in API-key mode never refreshes its
+// model list from the endpoint, so without a catalog entry a model missing
+// from Codex's bundled/cached catalog gets fallback metadata with no
+// reasoning levels — the effort picker is empty and a configured effort Codex
+// cannot validate is replaced by its default.
+func needsCatalog(p core.Profile) bool {
+	return p.ApplyAllModels || p.ReviewModel != "" || len(knownReasoningLevels(p.ReasoningLevels(p.Model))) > 0
 }
 
 // managedCatalogRef reports whether the config's model_catalog_json value is

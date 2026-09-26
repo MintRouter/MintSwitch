@@ -54,8 +54,9 @@ export function ApplyOne(toolID: string): $CancellablePromise<core$0.ApplyResult
  * FetchEndpointModels queries {baseURL}/models like [Service.FetchProviderModels]
  * but for endpoint values that may not be saved yet, so the Add/Edit dialog
  * can list models before the provider is persisted. It returns each model's
- * ID plus the display name the endpoint advertises (when any), so the dialog
- * can seed friendly names. The API key is transient: it is used only for this
+ * ID plus the display name, context window and reasoning-effort levels the
+ * endpoint advertises (when any, see [Service.enrichReasoningLevels]), so the
+ * dialog can seed them. The API key is transient: it is used only for this
  * one request and is never stored, logged, or included in errors. When apiKey
  * is blank and providerID names a stored provider, that provider's stored key
  * is used instead (the Edit flow, where the key never round-trips to the

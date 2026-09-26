@@ -36,12 +36,14 @@ package codex
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 
 	"mintswitch/internal/backup"
@@ -97,6 +99,14 @@ const orphanDetail = "MintSwitch settings are still present but the managed mark
 // bypasses the configured endpoint, so the profile must be re-applied.
 const authDriftDetail = "auth.json no longer uses the MintSwitch API key (a ChatGPT sign-in " +
 	"likely replaced it), so Codex bypasses the configured endpoint. Apply the profile again to fix this."
+
+// catalogStaleDetail explains the stale-catalog state: the profile needs
+// MintSwitch's model catalog (see needsCatalog) but the file is missing,
+// unreferenced, or carries outdated model metadata (e.g. reasoning levels
+// fetched after the last Apply) — or the profile needs none but config.toml
+// still references it.
+const catalogStaleDetail = "Codex's model metadata (reasoning-effort levels, context windows) is out of date. " +
+	"Apply the profile again to update it."
 
 // Adapter applies/restores a MintSwitch profile to the Codex configuration.
 // The managed marker lives in the sidecar marker store, never in config.toml,
@@ -178,8 +188,8 @@ func (a *Adapter) configPath() string { return filepath.Join(a.r.CodexDir(), "co
 func (a *Adapter) authPath() string { return filepath.Join(a.r.CodexDir(), "auth.json") }
 
 // catalogPath returns the absolute path to MintSwitch's model-catalog file
-// under the Codex home dir ($CODEX_HOME, default ~/.codex), written in "All
-// models" mode and referenced by config.toml's model_catalog_json.
+// under the Codex home dir ($CODEX_HOME, default ~/.codex), written when
+// needsCatalog holds and referenced by config.toml's model_catalog_json.
 func (a *Adapter) catalogPath() string { return filepath.Join(a.r.CodexDir(), catalogFileName) }
 
 // ConfigPaths returns the config files this adapter manages.
@@ -295,7 +305,42 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	if a.authDrifted(p) {
 		return core.StatusModifiedExternally, authDriftDetail, nil
 	}
+	if needsCatalog(p) {
+		if a.catalogStale(cfg, p) {
+			return core.StatusModifiedExternally, catalogStaleDetail, nil
+		}
+	} else if managedCatalogRef(cfg, a.catalogPath()) {
+		// Apply removes the catalog reference when the profile needs none,
+		// so a leftover one still feeds Codex outdated model metadata.
+		return core.StatusModifiedExternally, catalogStaleDetail, nil
+	}
 	return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
+}
+
+// catalogStale reports whether MintSwitch's model catalog does not match what
+// Apply would write for p now: config.toml no longer references it, the file
+// is missing or unreadable, or its contents differ. The catalog carries data
+// deliberately kept out of [core.Fingerprint] (context windows, reasoning
+// levels), so this is how a refreshed model list surfaces as "apply again".
+// Both sides are compared as decoded JSON, so formatting never matters.
+func (a *Adapter) catalogStale(cfg map[string]any, p core.Profile) bool {
+	catalogPath := a.catalogPath()
+	if cfg[catalogKey] != catalogPath {
+		return true
+	}
+	got, err := core.ReadJSONObject(catalogPath)
+	if err != nil || len(got) == 0 {
+		return true
+	}
+	raw, err := json.Marshal(catalogObject(p))
+	if err != nil {
+		return true
+	}
+	var want map[string]any
+	if err := json.Unmarshal(raw, &want); err != nil {
+		return true
+	}
+	return !reflect.DeepEqual(got, want)
 }
 
 // authDrifted reports whether auth.json no longer selects the MintSwitch API
@@ -322,9 +367,10 @@ func (a *Adapter) authDrifted(p core.Profile) bool {
 // other existing keys in each file. A non-empty ReviewModel is written as the
 // top-level review_model key; when empty the key is removed, but only from an
 // already-managed config, so a user's own review_model is never deleted on a
-// first Apply. In "All models" mode — or whenever ReviewModel is set, so
-// Codex has context-window metadata for the review model — it additionally
-// writes the mintswitch-models.json catalog under the Codex home dir and sets
+// first Apply. In "All models" mode — or whenever ReviewModel is set, or the
+// selected model has endpoint-advertised reasoning levels, so Codex has
+// context-window and reasoning-effort metadata (see needsCatalog) — it
+// additionally writes the mintswitch-models.json catalog under the Codex home dir and sets
 // model_catalog_json to it (otherwise it removes both again). The managed
 // marker is recorded in the sidecar store — never in config.toml — and a
 // leftover legacy in-file marker table is stripped in the same write.
@@ -405,15 +451,17 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		}
 	}
 
-	// "All models" mode — and any profile pinning a review model, which needs
-	// catalog metadata — writes MintSwitch's model catalog and points
+	// "All models" mode — and any profile pinning a review model or whose
+	// selected model has endpoint-advertised reasoning levels, both of which
+	// need catalog metadata (see needsCatalog) — writes MintSwitch's model
+	// catalog and points
 	// model_catalog_json at it (before config.toml, so the reference never
 	// lands ahead of the file); otherwise both are removed again, gated on
 	// managedCatalogRef so a user's own catalog reference is never touched. A
 	// catalog file left behind by a failed config.toml write routes no traffic
 	// and is overwritten or removed by the next Apply/Restore.
 	catalogPath := a.catalogPath()
-	if p.ApplyAllModels || p.ReviewModel != "" {
+	if needsCatalog(p) {
 		if err := core.WriteJSONObjectAtomic(catalogPath, catalogObject(p)); err != nil {
 			rollbackAuth()
 			return core.ApplyResult{}, err

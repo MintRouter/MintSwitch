@@ -79,6 +79,13 @@ export interface Provider {
     "model_context_windows"?: { [_ in string]?: number } | null;
 
     /**
+     * ModelReasoningLevels optionally maps a member of Models to the ordered
+     * reasoning-effort levels the endpoint advertised for it (e.g. "low",
+     * "medium", "high"). Missing entries mean no levels are known.
+     */
+    "model_reasoning_levels"?: { [_ in string]?: string[] | null } | null;
+
+    /**
      * Model is the provider's default model identifier. Required.
      */
     "model": string;

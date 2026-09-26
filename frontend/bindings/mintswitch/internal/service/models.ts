@@ -30,6 +30,12 @@ export interface ModelOption {
      * means the endpoint did not advertise one.
      */
     "context_window"?: number;
+
+    /**
+     * ReasoningLevels is the model's advertised ordered reasoning-effort
+     * levels (e.g. "low", "medium", "high"); empty means none advertised.
+     */
+    "reasoning_levels"?: string[] | null;
 }
 
 /**
@@ -66,6 +72,12 @@ export interface ProviderView {
      * window in tokens, passed through so the Edit form can re-save it.
      */
     "model_context_windows": { [_ in string]?: number } | null;
+
+    /**
+     * ModelReasoningLevels maps a member of Models to its advertised ordered
+     * reasoning-effort levels, passed through so the Edit form can re-save it.
+     */
+    "model_reasoning_levels": { [_ in string]?: string[] | null } | null;
     "model": string;
     "small_fast_model": string;
 

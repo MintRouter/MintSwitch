@@ -85,6 +85,11 @@ type Profile struct {
 	// the hash is shared by every adapter, so folding it in would flip
 	// already-applied tools to ModifiedExternally over data only codex uses.
 	ModelContextWindows map[string]int `json:"model_context_windows,omitempty"`
+	// ModelReasoningLevels optionally maps a member of Models to the ordered
+	// reasoning-effort levels the endpoint advertised for it. Adapters read it
+	// through [Profile.ReasoningLevels]. Like ModelContextWindows it is
+	// deliberately NOT part of [Fingerprint].
+	ModelReasoningLevels map[string][]string `json:"model_reasoning_levels,omitempty"`
 	// Model is the currently selected model identifier and the default value
 	// adapters write to tool configs. Required.
 	Model string `json:"model"`
@@ -168,4 +173,29 @@ func (p Profile) ApplyModels() []string {
 		out = append(out, m)
 	}
 	return out
+}
+
+// ReasoningLevels returns the ordered reasoning-effort levels the endpoint
+// advertised for model m (ModelReasoningLevels). nil means none are known,
+// so adapters must not advertise any: guessing levels from the model name
+// risks efforts a model rejects (e.g. pro variants accept only "high"), which
+// would turn a working request into a 400.
+func (p Profile) ReasoningLevels(m string) []string {
+	return p.ModelReasoningLevels[m]
+}
+
+// DefaultReasoningLevel picks the default effort from an ordered level list:
+// "medium" when offered (the default of every Codex and Claude family),
+// otherwise the middle level — the same choice Codex makes when a configured
+// effort is unsupported. It returns "" for an empty list.
+func DefaultReasoningLevel(levels []string) string {
+	if len(levels) == 0 {
+		return ""
+	}
+	for _, l := range levels {
+		if l == "medium" {
+			return l
+		}
+	}
+	return levels[(len(levels)-1)/2]
 }
