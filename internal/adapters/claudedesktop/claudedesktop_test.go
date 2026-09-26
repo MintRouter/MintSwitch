@@ -22,6 +22,8 @@ func newAdapter(t *testing.T) (*Adapter, *paths.Resolver, string) {
 	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
 	appDir := filepath.Join(home, "Applications", "Claude.app")
 	a.appDirs = []string{appDir}
+	// Never consult the host registry from tests.
+	a.policyManaged = func() bool { return false }
 	return a, r, appDir
 }
 
@@ -562,5 +564,167 @@ func mustWriteJSON(t *testing.T, path string, m map[string]any) {
 	t.Helper()
 	if err := core.WriteJSONObjectAtomic(path, m); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestPolicyOwnsDevice covers the registry managed-config decision: HKLM wins
+// whenever it holds any value (HKCU ignored), app-behavior keys alone never
+// take ownership, and name matching is case-insensitive.
+func TestPolicyOwnsDevice(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		hklm, hkcu []string
+		want       bool
+	}{
+		{"none", nil, nil, false},
+		{"hkcu provider key", nil, []string{"inferenceProvider"}, true},
+		{"hklm provider key", []string{"inferenceProvider"}, nil, true},
+		{"hkcu app-behavior only", nil, []string{"disableAutoUpdates", "egressProxyUrl"}, false},
+		{"hklm app-behavior only masks hkcu", []string{"autoUpdaterEnforcementHours"}, []string{"inferenceProvider"}, false},
+		{"hklm owns over benign hkcu", []string{"inferenceGatewayBaseUrl"}, []string{"relaunchEnforcementHours"}, true},
+		{"case-insensitive", nil, []string{"DISABLEAUTOUPDATES", "configrecheckintervalminutes", "EgressProxyPacUrl", "UpdateViaUpdatesHost"}, false},
+		{"mixed", nil, []string{"disableAutoUpdates", "deploymentMode"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := policyOwnsDevice(tc.hklm, tc.hkcu); got != tc.want {
+				t.Fatalf("policyOwnsDevice(%v, %v) = %v, want %v", tc.hklm, tc.hkcu, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStatusAndApplyUnderPolicy proves a registry managed configuration
+// keeps an otherwise applied profile out of "Applied" (the app ignores the
+// local 3P files) with policyDetail, while Apply still writes and warns.
+func TestStatusAndApplyUnderPolicy(t *testing.T) {
+	a, _, appDir := newAdapter(t)
+	installApp(t, appDir)
+	managed := true
+	a.policyManaged = func() bool { return managed }
+	p := sampleProfile()
+
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !strings.Contains(res.Message, "organization policy") {
+		t.Fatalf("Apply message = %q, want policy warning", res.Message)
+	}
+	if cfg := readJSON(t, a.configPath()); cfg["deploymentMode"] != "3p" {
+		t.Fatal("Apply must still write under a policy")
+	}
+	st, detail, err := a.Status(p)
+	if err != nil || st != core.StatusModifiedExternally || detail != policyDetail {
+		t.Fatalf("Status under policy = %v, %q, %v; want ModifiedExternally with policyDetail", st, detail, err)
+	}
+	managed = false
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("Status without policy = %v, want Applied", st)
+	}
+	if res, _ := a.Apply(p); strings.Contains(res.Message, "organization policy") {
+		t.Fatalf("Apply message without policy = %q", res.Message)
+	}
+}
+
+// newMSIXAdapter returns a Windows-mode adapter with an MSIX package dir
+// present, so baseDir is the package's LocalCache\Local\Claude-3p; it also
+// returns the real %LOCALAPPDATA%\Claude-3p dir.
+func newMSIXAdapter(t *testing.T) (*Adapter, string) {
+	t.Helper()
+	home := t.TempDir()
+	r := &paths.Resolver{
+		Home:         home,
+		DataDir:      filepath.Join(home, "data"),
+		LocalAppData: filepath.Join(home, "AppData", "Local"),
+	}
+	installApp(t, filepath.Join(r.PackagesDir(), msixPackageFamily))
+	a := New(r, backup.NewEngine(r.BackupsDir()), markers.NewStore(r.MarkersPath()))
+	a.goos = "windows"
+	a.appDirs = defaultAppDirs(r, "windows")
+	a.policyManaged = func() bool { return false }
+	return a, filepath.Join(r.LocalAppData, "Claude-3p")
+}
+
+// TestApplyMSIXSeedsFromRealPath proves that under MSIX, shared files missing
+// from the private LocalCache copy are seeded from the real
+// %LOCALAPPDATA%\Claude-3p files (which the app reads through to), so the
+// new private copies keep the user's keys and entries; the real files are
+// never written; and Restore deletes the private copies (recorded absent) so
+// the app falls back to the untouched real files.
+func TestApplyMSIXSeedsFromRealPath(t *testing.T) {
+	a, real := newMSIXAdapter(t)
+	if a.baseDir() == real {
+		t.Fatal("baseDir should be the MSIX LocalCache path")
+	}
+	realCfg := filepath.Join(real, "claude_desktop_config.json")
+	realMeta := filepath.Join(real, "configLibrary", "_meta.json")
+	mustWriteJSON(t, realCfg, map[string]any{"locale": "en-US", "mcpServers": map[string]any{"x": map[string]any{}}})
+	mustWriteJSON(t, realMeta, map[string]any{
+		"appliedId": "other-id",
+		"entries":   []any{map[string]any{"id": "other-id", "name": "Mine"}},
+	})
+	realCfgBytes, err := os.ReadFile(realCfg)
+	if err != nil {
+		t.Fatalf("read real config: %v", err)
+	}
+
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	cfg := readJSON(t, a.configPath())
+	if cfg["deploymentMode"] != "3p" || cfg["locale"] != "en-US" || cfg["mcpServers"] == nil {
+		t.Fatalf("private config not seeded from real path: %v", cfg)
+	}
+	meta := readJSON(t, a.metaPath())
+	entries := asArray(meta["entries"])
+	if len(entries) != 2 || core.AsJSONObject(entries[0])["name"] != "Mine" {
+		t.Fatalf("private _meta.json entries = %v, want Mine + MintRouter.AI", entries)
+	}
+	if after, _ := os.ReadFile(realCfg); string(after) != string(realCfgBytes) {
+		t.Fatal("real-path config must not be written")
+	}
+
+	// Re-apply merges into the private copy, not the real one.
+	mustWriteJSON(t, realCfg, map[string]any{"locale": "fr-FR"})
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("re-Apply: %v", err)
+	}
+	if cfg := readJSON(t, a.configPath()); cfg["locale"] != "en-US" {
+		t.Fatalf("re-Apply locale = %v, want private en-US", cfg["locale"])
+	}
+
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	for _, p := range []string{a.configPath(), a.metaPath()} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("private %s should be removed by Restore, stat err = %v", p, err)
+		}
+	}
+	if _, err := os.Stat(realMeta); err != nil {
+		t.Fatalf("real _meta.json must survive Restore: %v", err)
+	}
+}
+
+// TestApplyMSIXPrefersPrivateCopy proves an existing private LocalCache file
+// wins over the real path, and that msixRealPath maps nothing outside the
+// MSIX base dir or off Windows.
+func TestApplyMSIXPrefersPrivateCopy(t *testing.T) {
+	a, real := newMSIXAdapter(t)
+	mustWriteJSON(t, filepath.Join(real, "claude_desktop_config.json"), map[string]any{"locale": "fr-FR"})
+	mustWriteJSON(t, a.configPath(), map[string]any{"theme": "dark"})
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	cfg := readJSON(t, a.configPath())
+	if cfg["theme"] != "dark" || cfg["locale"] != nil {
+		t.Fatalf("private config = %v, want private keys only", cfg)
+	}
+	if got := a.msixRealPath(filepath.Join(real, "x.json")); got != "" {
+		t.Fatalf("msixRealPath outside baseDir = %q, want empty", got)
+	}
+	a.goos = "darwin"
+	if got := a.msixRealPath(a.configPath()); got != "" {
+		t.Fatalf("msixRealPath off windows = %q, want empty", got)
 	}
 }
