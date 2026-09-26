@@ -129,8 +129,12 @@ type CommandRunner interface {
 type ExecRunner struct{}
 
 // Run executes name with args and returns the combined output and any error.
+// On Windows the child runs without a console window (see hideWindow), so the
+// GUI app never flashes a cmd window the user could close mid-install.
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	hideWindow(cmd)
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
@@ -165,14 +169,20 @@ func NewWithLookPath(runner CommandRunner, lookPath func(string) (string, error)
 }
 
 // NewMethodAware returns the production Installer: commands run via runner,
-// executables are detected with exec.LookPath, binaries are resolved with the
-// resolver's no-subprocess [paths.Resolver.ResolveBinary], standalone deletions
-// are bounded to the resolver's curated [paths.Resolver.UserBinDirs], and files
-// are removed with os.Remove.
+// npm/brew and tool binaries are both resolved with the resolver's
+// no-subprocess [paths.Resolver.ResolveBinary] (PATH first, then the curated
+// dirs, so a GUI app with a stale PATH still finds a freshly installed npm),
+// standalone deletions are bounded to the resolver's curated
+// [paths.Resolver.UserBinDirs], and files are removed with os.Remove.
 func NewMethodAware(runner CommandRunner, r *paths.Resolver) *Installer {
-	return NewWithResolver(runner, exec.LookPath,
-		func(name string) (string, bool) { return r.ResolveBinary(exec.LookPath, name) },
-		r.UserBinDirs(), os.Remove)
+	resolve := func(name string) (string, bool) { return r.ResolveBinary(exec.LookPath, name) }
+	lookPath := func(name string) (string, error) {
+		if p, ok := resolve(name); ok {
+			return p, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	return NewWithResolver(runner, lookPath, resolve, r.UserBinDirs(), os.Remove)
 }
 
 // NewWithResolver is the fully-injected Installer seam used by both
@@ -197,16 +207,32 @@ func NewWithResolver(runner CommandRunner, lookPath func(string) (string, error)
 // (or would be) run so callers can show it to the user, the command's combined
 // output, and any error. For an unknown tool it returns ErrUnknownTool with nil
 // args; when npm is missing it returns the intended args plus ErrNpmMissing.
+// npm is executed via the path lookPath resolved (which may lie outside the
+// process PATH); the returned argv keeps the bare "npm" for display.
 func (i *Installer) Install(ctx context.Context, toolID string) ([]string, string, error) {
 	args, err := InstallArgs(toolID)
 	if err != nil {
 		return nil, "", err
 	}
-	if _, err := i.lookPath("npm"); err != nil {
+	exe, err := i.executable(args[0])
+	if err != nil {
 		return args, "", ErrNpmMissing
 	}
-	out, runErr := i.runner.Run(ctx, args[0], args[1:]...)
+	out, runErr := i.runner.Run(ctx, exe, args[1:]...)
 	return args, out, runErr
+}
+
+// executable resolves a whitelisted command name (npm/brew) to the path that is
+// actually executed, via lookPath. An empty lookPath result falls back to name.
+func (i *Installer) executable(name string) (string, error) {
+	p, err := i.lookPath(name)
+	if err != nil {
+		return "", err
+	}
+	if p == "" {
+		return name, nil
+	}
+	return p, nil
 }
 
 // Uninstall method values returned by [Installer.PlanUninstall].
@@ -349,7 +375,13 @@ func (i *Installer) Uninstall(ctx context.Context, toolID string) ([]string, str
 
 	switch plan.Action {
 	case UninstallActionRunCommand:
-		out, runErr := i.runner.Run(ctx, plan.Args[0], plan.Args[1:]...)
+		// PlanUninstall just verified the command resolves; run it via its
+		// resolved path, keeping the bare name in the displayed argv.
+		exe, err := i.executable(plan.Args[0])
+		if err != nil {
+			exe = plan.Args[0]
+		}
+		out, runErr := i.runner.Run(ctx, exe, plan.Args[1:]...)
 		return plan.Args, out, runErr
 	case UninstallActionDeleteFile:
 		remove := i.remove
@@ -387,7 +419,9 @@ const (
 // Anything else is methodUnknown (a safe no-op). The Cellar/node_modules checks
 // precede the brew-prefix check so an npm-global package installed under a
 // Homebrew node prefix is still classified as npm. Paths are slash-normalised
-// (see normalizeSlashes) before matching so Windows backslash paths classify too.
+// (see normalizeSlashes) before matching so Windows backslash paths classify too,
+// and the npm signals are matched case-insensitively since Windows paths are.
+// The curated-dir (deletion) check stays exact.
 func classifyMethod(resolved string, userBinDirs []string) uninstallMethod {
 	candidates := []string{normalizeSlashes(resolved)}
 	if target := symlinkTarget(resolved); target != "" {
@@ -399,8 +433,9 @@ func classifyMethod(resolved string, userBinDirs []string) uninstallMethod {
 		}
 	}
 	for _, p := range candidates {
-		if strings.Contains(p, "/node_modules/") || strings.Contains(p, "/.npm-global/") ||
-			strings.Contains(p, "/AppData/Roaming/npm/") {
+		lp := strings.ToLower(p)
+		if strings.Contains(lp, "/node_modules/") || strings.Contains(lp, "/.npm-global/") ||
+			strings.Contains(lp, "/appdata/roaming/npm/") {
 			return methodNpm
 		}
 	}

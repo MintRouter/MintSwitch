@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"mintswitch/internal/paths"
 )
 
 // fakeRunner records the command it was asked to run and returns a canned
@@ -26,9 +28,10 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 	return f.out, f.err
 }
 
-// okLook simulates npm being present; missLook simulates it being absent.
-func okLook(string) (string, error)   { return "/usr/bin/npm", nil }
-func missLook(string) (string, error) { return "", errors.New("not found") }
+// okLook simulates npm/brew being present at /usr/bin/<name>; missLook
+// simulates them being absent.
+func okLook(name string) (string, error) { return "/usr/bin/" + name, nil }
+func missLook(string) (string, error)    { return "", errors.New("not found") }
 
 func TestArgsPerTool(t *testing.T) {
 	tests := []struct {
@@ -83,7 +86,8 @@ func TestInstallRunsCommand(t *testing.T) {
 	if out != "added 1 package" {
 		t.Fatalf("output = %q", out)
 	}
-	if fr.runs != 1 || fr.name != "npm" {
+	// npm runs via its resolved path; the returned argv keeps the bare name.
+	if fr.runs != 1 || fr.name != "/usr/bin/npm" {
 		t.Fatalf("runner not invoked correctly: runs=%d name=%q", fr.runs, fr.name)
 	}
 	wantArgs := []string{"install", "-g", "@openai/codex"}
@@ -123,7 +127,7 @@ func TestUninstallHomebrewSymlink(t *testing.T) {
 	if !reflect.DeepEqual(args, []string{"brew", "uninstall", "opencode"}) {
 		t.Fatalf("args = %v", args)
 	}
-	if fr.runs != 1 || fr.name != "brew" || !reflect.DeepEqual(fr.args, []string{"uninstall", "opencode"}) {
+	if fr.runs != 1 || fr.name != "/usr/bin/brew" || !reflect.DeepEqual(fr.args, []string{"uninstall", "opencode"}) {
 		t.Fatalf("runner invoked wrong: runs=%d name=%q args=%v", fr.runs, fr.name, fr.args)
 	}
 	if out == "" {
@@ -151,7 +155,7 @@ func TestUninstallNpmPrefix(t *testing.T) {
 	if !reflect.DeepEqual(args, []string{"npm", "uninstall", "-g", "@openai/codex"}) {
 		t.Fatalf("args = %v", args)
 	}
-	if fr.runs != 1 || fr.name != "npm" || !reflect.DeepEqual(fr.args, []string{"uninstall", "-g", "@openai/codex"}) {
+	if fr.runs != 1 || fr.name != "/usr/bin/npm" || !reflect.DeepEqual(fr.args, []string{"uninstall", "-g", "@openai/codex"}) {
 		t.Fatalf("runner invoked wrong: runs=%d name=%q args=%v", fr.runs, fr.name, fr.args)
 	}
 	if len(removed) != 0 {
@@ -295,6 +299,16 @@ func TestClassifyMethodWindowsPaths(t *testing.T) {
 			methodNpm,
 		},
 		{
+			"npm shim with lower-case appdata (case-insensitive)",
+			`c:\users\alice\appdata\roaming\npm\codex.cmd`,
+			methodNpm,
+		},
+		{
+			"upper-case node_modules (case-insensitive)",
+			`D:\Tools\NODE_MODULES\@openai\codex\bin\codex.exe`,
+			methodNpm,
+		},
+		{
 			"unknown windows location",
 			`C:\Program Files\Codex\codex.exe`,
 			methodUnknown,
@@ -322,6 +336,46 @@ func TestNpmMissing(t *testing.T) {
 	// The intended command is still returned so the UI can show it.
 	if len(args) == 0 {
 		t.Fatal("expected intended argv even when npm missing")
+	}
+}
+
+// TestNewMethodAwareResolvesNpmOutsidePath proves the production constructor
+// finds npm through the resolver's curated-dir fallback when it is not on the
+// process PATH (the stale-PATH GUI case) and executes it via that absolute
+// path, while the returned argv keeps the bare "npm".
+func TestNewMethodAwareResolvesNpmOutsidePath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	npm := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(npm, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{out: "added 1 package"}
+	inst := NewMethodAware(fr, &paths.Resolver{Home: home})
+
+	args, _, err := inst.Install(context.Background(), "codex")
+	if err != nil {
+		t.Fatalf("Install error: %v", err)
+	}
+	if fr.runs != 1 || fr.name != npm {
+		t.Fatalf("runner invoked wrong: runs=%d name=%q, want %q", fr.runs, fr.name, npm)
+	}
+	if !reflect.DeepEqual(args, []string{"npm", "install", "-g", "@openai/codex"}) {
+		t.Fatalf("returned argv = %v", args)
+	}
+
+	if err := os.Remove(npm); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := inst.Install(context.Background(), "codex"); !errors.Is(err, ErrNpmMissing) {
+		t.Fatalf("Install err = %v, want ErrNpmMissing once npm is gone", err)
+	}
+	if fr.runs != 1 {
+		t.Fatalf("runner must not run when npm is missing: runs=%d", fr.runs)
 	}
 }
 
