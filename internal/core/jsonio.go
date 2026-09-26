@@ -1,12 +1,19 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// utf8BOM is the UTF-8 byte-order mark some Windows editors (older Notepad,
+// PowerShell 5's Out-File -Encoding utf8) prepend. encoding/json rejects it,
+// so ReadJSONObject strips it; the file is written back without one.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // ReadJSONObject reads path as a JSON object. A missing or empty file yields an
 // empty object so callers can merge without special-casing first-run.
@@ -18,6 +25,7 @@ func ReadJSONObject(path string) (map[string]any, error) {
 		}
 		return nil, err
 	}
+	data = bytes.TrimPrefix(data, utf8BOM)
 	if len(data) == 0 {
 		return map[string]any{}, nil
 	}
@@ -75,11 +83,34 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameReplace(tmpName, path); err != nil {
 		return err
 	}
 	SyncDir(dir)
 	return nil
+}
+
+// renameRetries and renameRetryDelay bound how long renameReplace retries a
+// transiently failing rename (about 0.5s in total).
+const (
+	renameRetries    = 5
+	renameRetryDelay = 100 * time.Millisecond
+)
+
+// renameReplace renames src over dst, retrying briefly while
+// renameRetryable reports the error as transient. On Windows, replacing a
+// file fails with "Access is denied" / a sharing violation while another
+// process (antivirus, the search indexer, a sync client, an editor) holds dst
+// open without delete sharing; such locks are usually released within
+// milliseconds. Elsewhere renameRetryable is always false, so this is a plain
+// os.Rename.
+func renameReplace(src, dst string) error {
+	err := os.Rename(src, dst)
+	for i := 0; i < renameRetries && err != nil && renameRetryable(err); i++ {
+		time.Sleep(renameRetryDelay)
+		err = os.Rename(src, dst)
+	}
+	return err
 }
 
 // SyncDir fsyncs the directory so a rename inside it survives a power loss.

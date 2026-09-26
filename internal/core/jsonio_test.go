@@ -74,3 +74,27 @@ func TestWriteJSONObjectAtomic(t *testing.T) {
 		t.Fatalf("ReadJSONObject = %v, %v", m, err)
 	}
 }
+
+// TestReadJSONObjectStripsBOM proves a UTF-8 BOM (as written by some Windows
+// editors) does not make an otherwise valid config unreadable.
+func TestReadJSONObjectStripsBOM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bom.json")
+	if err := os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, `{"a":1}`...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := ReadJSONObject(path)
+	if err != nil {
+		t.Fatalf("ReadJSONObject: %v", err)
+	}
+	if m["a"] != float64(1) {
+		t.Fatalf("m = %v, want a=1", m)
+	}
+
+	// A file holding only a BOM reads as empty, like an empty file.
+	if err := os.WriteFile(path, []byte{0xEF, 0xBB, 0xBF}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := ReadJSONObject(path); err != nil || len(m) != 0 {
+		t.Fatalf("BOM-only = %v, %v; want empty object", m, err)
+	}
+}
