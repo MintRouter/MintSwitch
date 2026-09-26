@@ -249,6 +249,64 @@ func (s *Service) enrichReasoningLevels(base, key string, models []ModelOption) 
 	}
 }
 
+// reasoningBackfillTools are the tools whose Apply writes per-model
+// reasoning-effort levels (Codex's model catalog), and so benefit from
+// [Service.backfillReasoningLevels].
+var reasoningBackfillTools = map[string]bool{"codex": true}
+
+// backfillReasoningLevels best-effort fills in toolID's effective provider's
+// missing ModelReasoningLevels from the endpoint before an Apply, and
+// persists them. Levels are otherwise only captured when the provider form
+// fetches models, so a provider saved before levels existed (or never
+// re-fetched) would apply a catalog with empty effort pickers until the user
+// re-opened and re-saved it. Only tools in reasoningBackfillTools trigger
+// it, only models already listed get levels, existing levels are never
+// replaced, and every failure (no key, transport, non-Codex endpoint) leaves
+// settings untouched. The caller holds s.mu.
+func (s *Service) backfillReasoningLevels(toolID string) {
+	if !reasoningBackfillTools[toolID] {
+		return
+	}
+	st, err := s.store.Load()
+	if err != nil {
+		return
+	}
+	pr, _, ok := resolveProvider(st, toolID)
+	if !ok {
+		return
+	}
+	base, _ := core.NormalizeBaseURL(pr.BaseURL)
+	if base == "" {
+		return
+	}
+	options := make([]ModelOption, 0, len(pr.Models))
+	for _, m := range pr.Models {
+		options = append(options, ModelOption{ID: m, ReasoningLevels: pr.ModelReasoningLevels[m]})
+	}
+	s.enrichReasoningLevels(base, pr.APIKey, options)
+	levels := make(map[string][]string, len(options))
+	for m, l := range pr.ModelReasoningLevels {
+		levels[m] = l
+	}
+	added := false
+	for _, o := range options {
+		if len(o.ReasoningLevels) > 0 && len(levels[o.ID]) == 0 {
+			levels[o.ID] = o.ReasoningLevels
+			added = true
+		}
+	}
+	if !added {
+		return
+	}
+	for i := range st.Providers {
+		if st.Providers[i].ID == pr.ID {
+			st.Providers[i].ModelReasoningLevels = normalizeModelReasoningLevels(levels, pr.Models)
+			_ = s.store.Save(st)
+			return
+		}
+	}
+}
+
 // httpStatusHint maps common /models failure statuses to a short display-safe
 // hint appended to the error. It never includes the response body.
 func httpStatusHint(code int) string {

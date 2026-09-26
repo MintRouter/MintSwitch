@@ -883,6 +883,7 @@ func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 	if !ok {
 		return core.ApplyResult{}, fmt.Errorf("service: unknown tool %q", toolID)
 	}
+	s.backfillReasoningLevels(toolID)
 	p, err := s.effectiveProfileFor(toolID)
 	if err != nil {
 		return core.ApplyResult{}, err
@@ -922,6 +923,7 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 		if installed, _ := a.Detect(); !installed {
 			continue
 		}
+		s.backfillReasoningLevels(a.ID())
 		p, perr := s.effectiveProfileFor(a.ID())
 		if perr != nil {
 			out = append(out, ToolOpResult{ID: a.ID(), OK: false, Error: perr.Error()})
