@@ -41,9 +41,13 @@ type Resolver struct {
 	ClaudeConfigDir string
 	// SystemBinDirs are absolute, system-wide executable directories searched by
 	// [Resolver.BinaryResolvable] in addition to the HOME-derived ones.
-	// NewResolver seeds the common macOS/Linux locations; tests can leave it nil
-	// to scan only HOME-derived dirs for determinism.
+	// NewResolver seeds the common macOS/Linux locations (none on Windows); tests
+	// can leave it nil to scan only HOME-derived dirs for determinism.
 	SystemBinDirs []string
+	// ProgramFiles, when non-empty, is Windows' machine-wide program root.
+	// NewResolver seeds it from the ProgramFiles environment variable (empty on
+	// other OSes); [Resolver.ProgramFilesDir] falls back to C:\Program Files.
+	ProgramFiles string
 }
 
 // NewResolver builds a Resolver from the current environment. Home defaults to
@@ -67,8 +71,19 @@ func NewResolver() (*Resolver, error) {
 		LocalAppData:    os.Getenv("LOCALAPPDATA"),
 		CodexHome:       os.Getenv("CODEX_HOME"),
 		ClaudeConfigDir: os.Getenv("CLAUDE_CONFIG_DIR"),
-		SystemBinDirs:   []string{"/opt/homebrew/bin", "/usr/local/bin"},
+		SystemBinDirs:   systemBinDirs(runtime.GOOS),
+		ProgramFiles:    os.Getenv("ProgramFiles"),
 	}, nil
+}
+
+// systemBinDirs returns the default system-wide bin dirs for goos: the
+// Homebrew/local prefixes on macOS/Linux and none on Windows, whose Node.js
+// dirs are added by binDirs instead.
+func systemBinDirs(goos string) []string {
+	if goos == "windows" {
+		return nil
+	}
+	return []string{"/opt/homebrew/bin", "/usr/local/bin"}
 }
 
 // Join joins the given path elements under Home and returns an absolute path,
@@ -101,6 +116,26 @@ func (r *Resolver) LocalAppDataDir() string {
 		return r.LocalAppData
 	}
 	return filepath.Join(r.Home, "AppData", "Local")
+}
+
+// RoamingAppDataDir returns Windows' per-user roaming app-data root:
+// NativeConfigDir (os.UserConfigDir, i.e. %APPDATA% on Windows) when set,
+// otherwise the Windows default Home\AppData\Roaming. The fallback derives from
+// Home so tests pointing Home at a temp dir stay isolated.
+func (r *Resolver) RoamingAppDataDir() string {
+	if r.NativeConfigDir != "" {
+		return r.NativeConfigDir
+	}
+	return filepath.Join(r.Home, "AppData", "Roaming")
+}
+
+// ProgramFilesDir returns Windows' machine-wide program root: ProgramFiles
+// (%ProgramFiles%) when set, otherwise the Windows default C:\Program Files.
+func (r *Resolver) ProgramFilesDir() string {
+	if r.ProgramFiles != "" {
+		return r.ProgramFiles
+	}
+	return `C:\Program Files`
 }
 
 // PackagesDir returns Windows' per-user MSIX/Store package data root
@@ -172,12 +207,18 @@ func (r *Resolver) UserBinDirs() []string {
 // binaries: the HOME-derived user dirs (see UserBinDirs) plus the configured
 // SystemBinDirs. On Windows it additionally includes the Codex standalone CLI
 // installer's bin dir (%LOCALAPPDATA%\Programs\OpenAI\Codex\bin), which the
-// installer does not add to PATH. It is search-only: UserBinDirs (the
-// standalone-deletion bound) deliberately excludes it.
+// installer does not add to PATH, npm's default global prefix (%APPDATA%\npm)
+// and the Node.js install dir (%ProgramFiles%\nodejs), so a GUI app launched
+// with a stale PATH still finds npm and npm-global CLIs. These are search-only:
+// UserBinDirs (the standalone-deletion bound) deliberately excludes them.
 func (r *Resolver) binDirs(goos string) []string {
 	dirs := append(r.UserBinDirs(), r.SystemBinDirs...)
 	if goos == "windows" {
-		dirs = append(dirs, filepath.Join(r.LocalAppDataDir(), "Programs", "OpenAI", "Codex", "bin"))
+		dirs = append(dirs,
+			filepath.Join(r.LocalAppDataDir(), "Programs", "OpenAI", "Codex", "bin"),
+			filepath.Join(r.RoamingAppDataDir(), "npm"),
+			filepath.Join(r.ProgramFilesDir(), "nodejs"),
+		)
 	}
 	return dirs
 }

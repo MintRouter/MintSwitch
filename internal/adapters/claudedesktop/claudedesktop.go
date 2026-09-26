@@ -112,6 +112,11 @@ type Adapter struct {
 	// goos selects the OS-specific baseDir branch; overridable in tests so the
 	// Windows path is exercisable from any host OS. Defaults to runtime.GOOS.
 	goos string
+	// policyManaged reports whether a Windows registry managed configuration
+	// (HKLM/HKCU\SOFTWARE\Policies\Claude) owns the device, in which case the
+	// app ignores the local configLibrary; overridable in tests. Always false
+	// off Windows.
+	policyManaged func() bool
 }
 
 // New returns an Adapter that resolves paths via r, backs up via e, and
@@ -121,6 +126,8 @@ func New(r *paths.Resolver, e *backup.Engine, m *markers.Store) *Adapter {
 		r: r, e: e, m: m,
 		appDirs: defaultAppDirs(r, runtime.GOOS),
 		goos:    runtime.GOOS,
+
+		policyManaged: registryPolicyManaged,
 	}
 }
 
@@ -265,7 +272,10 @@ func (a *Adapter) SupportsModel(model string) bool {
 // reports ModifiedExternally so the UI offers Restore even after the marker
 // was lost. An entry whose managed signal (deploymentMode "3p" in
 // claude_desktop_config.json) has been removed also means Default; otherwise
-// the marker fingerprint decides Applied vs ModifiedExternally.
+// the marker fingerprint decides Applied vs ModifiedExternally. An otherwise
+// applied profile reports ModifiedExternally with policyDetail while a
+// Windows registry managed configuration owns the device: the app then
+// ignores the local 3P files, so "Applied" would be misleading.
 func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 	installed, path := a.Detect()
 	if !installed {
@@ -289,6 +299,9 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		return core.StatusDefault, core.StatusDefault.Detail(), nil
 	}
 	if marker.Fingerprint == core.Fingerprint(p) {
+		if a.isPolicyManaged() {
+			return core.StatusModifiedExternally, policyDetail, nil
+		}
 		return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
 	}
 	return core.StatusModifiedExternally, core.StatusModifiedExternally.Detail(), nil
@@ -309,6 +322,12 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 // missing provider config. Backups are taken only on the first Apply over an
 // unmanaged state, so the pristine pre-MintSwitch snapshots are what Restore
 // reverts to even after repeated Applies.
+//
+// Under MSIX, a shared file missing from the private LocalCache copy is
+// seeded from the real %LOCALAPPDATA%\Claude-3p path (see readMergeBase) so
+// the new private copy does not hide the user's existing keys. When a
+// Windows registry managed configuration owns the device the files are
+// still written, but the message warns that the policy overrides them.
 func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	if err := p.Validate(); err != nil {
 		return core.ApplyResult{}, err
@@ -322,11 +341,11 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	cfgPath, metaPath := a.configPath(), a.metaPath()
 	// Read every file up front so a corrupt one fails the Apply before
 	// anything is written.
-	cfg, err := core.ReadJSONObject(cfgPath)
+	cfg, err := a.readMergeBase(cfgPath)
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
-	meta, err := core.ReadJSONObject(metaPath)
+	meta, err := a.readMergeBase(metaPath)
 	if err != nil {
 		return core.ApplyResult{}, err
 	}
@@ -376,6 +395,9 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		msg = fmt.Sprintf(
 			"Applied MintSwitch gateway to Claude Desktop (3P mode). The selected model %q is not a claude-* model, which Claude Desktop requires, so %q leads the model list instead.",
 			p.Model, models[0])
+	}
+	if a.isPolicyManaged() {
+		msg += " Warning: " + policyDetail
 	}
 	return core.ApplyResult{
 		ChangedPath: cfgPath,
@@ -474,6 +496,55 @@ func (a *Adapter) Restore() (core.RestoreResult, error) {
 		BackupPath:  cfgEntry,
 		Message:     msg,
 	}, nil
+}
+
+// isPolicyManaged reports whether a registry managed configuration owns the
+// device (see Adapter.policyManaged); a nil probe means unmanaged.
+func (a *Adapter) isPolicyManaged() bool {
+	return a.policyManaged != nil && a.policyManaged()
+}
+
+// msixRealPath maps path under the MSIX LocalCache\Local\Claude-3p base dir
+// to its real %LOCALAPPDATA%\Claude-3p counterpart, or returns "" when
+// baseDir is not the MSIX path (non-Windows, or no package dir) or path lies
+// outside it.
+func (a *Adapter) msixRealPath(path string) string {
+	if a.goos != "windows" {
+		return ""
+	}
+	base := a.baseDir()
+	real := filepath.Join(a.r.LocalAppDataDir(), "Claude-3p")
+	if base == real {
+		return ""
+	}
+	rel, err := filepath.Rel(base, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.Join(real, rel)
+}
+
+// readMergeBase reads the JSON object Apply merges into at path. MSIX
+// AppData virtualization lets the app read %LOCALAPPDATA%\Claude-3p\X
+// through to the real path while no private LocalCache copy exists
+// (learn.microsoft.com/windows/msix/desktop/desktop-to-uwp-behind-the-scenes),
+// so when the private file is missing but the real one exists, its contents
+// seed the merge; otherwise the first private write would hide the user's
+// existing keys. Backups still record the private path (absent), so Restore
+// deletes the private copy and the app falls back to the real file.
+func (a *Adapter) readMergeBase(path string) (map[string]any, error) {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		if real := a.msixRealPath(path); real != "" {
+			if _, err := os.Stat(real); err == nil {
+				m, err := core.ReadJSONObject(real)
+				if err != nil {
+					return nil, fmt.Errorf("claudedesktop: seed from %s: %w", real, err)
+				}
+				return m, nil
+			}
+		}
+	}
+	return core.ReadJSONObject(path)
 }
 
 // orphanRemnant reports whether the config files still carry the FULL

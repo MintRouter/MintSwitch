@@ -242,3 +242,75 @@ func TestResolveBinaryWindowsCodexStandaloneDir(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveBinaryWindowsNodeDirs pins npm's default global prefix
+// (%APPDATA%\npm) and the Node.js install dir (%ProgramFiles%\nodejs) as
+// search-only dirs on Windows, so a GUI app with a stale PATH still finds npm
+// and npm-global CLIs. Unix must ignore them and UserBinDirs (the deletion
+// bound) must never include them.
+func TestResolveBinaryWindowsNodeDirs(t *testing.T) {
+	home := t.TempDir()
+	appData := t.TempDir()
+	programFiles := t.TempDir()
+	r := &Resolver{Home: home, NativeConfigDir: appData, ProgramFiles: programFiles}
+	miss := func(string) (string, error) { return "", errors.New("not found") }
+
+	npmPrefix := filepath.Join(appData, "npm")
+	nodeDir := filepath.Join(programFiles, "nodejs")
+	for _, d := range []string{npmPrefix, nodeDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	codexShim := filepath.Join(npmPrefix, "codex.cmd")
+	npmShim := filepath.Join(nodeDir, "npm.cmd")
+	for _, p := range []string{codexShim, npmShim} {
+		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for bin, want := range map[string]string{"codex": codexShim, "npm": npmShim} {
+		got, ok := r.resolveBinary(miss, bin, "windows")
+		if !ok || got != want {
+			t.Fatalf("resolveBinary(%s, windows) = %q, %v; want %q, true", bin, got, ok, want)
+		}
+		for _, goos := range []string{"darwin", "linux"} {
+			if _, ok := r.resolveBinary(miss, bin, goos); ok {
+				t.Fatalf("expected Windows Node dirs to not be searched on %s", goos)
+			}
+		}
+	}
+	for _, dir := range r.UserBinDirs() {
+		if dir == npmPrefix || dir == nodeDir {
+			t.Fatalf("UserBinDirs must not include search-only dir %q", dir)
+		}
+	}
+}
+
+// TestWindowsNodeDirFallbacks proves the %APPDATA% and %ProgramFiles%
+// fallbacks derive from Home and the Windows default respectively, and that
+// Windows gets no Unix system bin dirs by default.
+func TestWindowsNodeDirFallbacks(t *testing.T) {
+	home := t.TempDir()
+	r := &Resolver{Home: home}
+	if got, want := r.RoamingAppDataDir(), filepath.Join(home, "AppData", "Roaming"); got != want {
+		t.Errorf("RoamingAppDataDir fallback = %q, want %q", got, want)
+	}
+	if got, want := r.ProgramFilesDir(), `C:\Program Files`; got != want {
+		t.Errorf("ProgramFilesDir fallback = %q, want %q", got, want)
+	}
+	r.NativeConfigDir, r.ProgramFiles = "/appdata", "/pf"
+	if got := r.RoamingAppDataDir(); got != "/appdata" {
+		t.Errorf("RoamingAppDataDir = %q, want /appdata", got)
+	}
+	if got := r.ProgramFilesDir(); got != "/pf" {
+		t.Errorf("ProgramFilesDir = %q, want /pf", got)
+	}
+	if dirs := systemBinDirs("windows"); len(dirs) != 0 {
+		t.Errorf("systemBinDirs(windows) = %v, want none", dirs)
+	}
+	if dirs := systemBinDirs("darwin"); len(dirs) == 0 {
+		t.Error("systemBinDirs(darwin) empty, want Homebrew/local prefixes")
+	}
+}
