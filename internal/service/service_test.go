@@ -16,6 +16,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/enhance"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
@@ -1888,5 +1889,77 @@ func TestApplyOneBackfillFailureIsSilent(t *testing.T) {
 	}
 	if got := cdx.lastApplied.ModelReasoningLevels; got != nil {
 		t.Fatalf("applied levels = %v, want none", got)
+	}
+}
+
+// newEnhanceService builds a test Service whose /enhance manager writes under
+// a temp HOME, over the given fake adapters.
+func newEnhanceService(t *testing.T, adapters ...*fakeAdapter) (*Service, *paths.Resolver) {
+	t.Helper()
+	svc := newTestService(t, adapters...)
+	home := t.TempDir()
+	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
+	svc.setEnhance(enhance.New(r, backup.NewEngine(r.BackupsDir()), filepath.Join(home, "MintSwitch")))
+	return svc, r
+}
+
+func TestListToolsReportsEnhanceSupportAndStatus(t *testing.T) {
+	svc, _ := newEnhanceService(t,
+		&fakeAdapter{id: "codex", name: "Codex", installed: true},
+		&fakeAdapter{id: "claude-desktop", name: "Claude Desktop", installed: true},
+	)
+	tools, err := svc.ListTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]ToolView{}
+	for _, tv := range tools {
+		byID[tv.ID] = tv
+	}
+	if c := byID["codex"]; !c.EnhanceSupported || c.EnhanceStatus != enhance.StatusNotInstalled || c.EnhancePath == "" {
+		t.Errorf("codex view = %+v", c)
+	}
+	if d := byID["claude-desktop"]; d.EnhanceSupported || d.EnhanceStatus != "" || d.EnhancePath != "" {
+		t.Errorf("claude-desktop view = %+v", d)
+	}
+	if _, err := svc.InstallEnhance("codex"); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ = svc.ListTools()
+	for _, tv := range tools {
+		if tv.ID == "codex" && tv.EnhanceStatus != enhance.StatusInstalled {
+			t.Errorf("status after install = %q", tv.EnhanceStatus)
+		}
+	}
+	if _, err := svc.RemoveEnhance("codex"); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ = svc.ListTools()
+	for _, tv := range tools {
+		if tv.ID == "codex" && tv.EnhanceStatus != enhance.StatusNotInstalled {
+			t.Errorf("status after remove = %q", tv.EnhanceStatus)
+		}
+	}
+}
+
+func TestEnhanceRejectsUnknownAndUnsupportedTools(t *testing.T) {
+	svc, _ := newEnhanceService(t, &fakeAdapter{id: "claude-desktop", name: "Claude Desktop", installed: true})
+	if _, err := svc.InstallEnhance("nope"); err == nil {
+		t.Error("unknown tool must fail")
+	}
+	if _, err := svc.InstallEnhance("claude-desktop"); err == nil {
+		t.Error("unsupported tool must fail")
+	}
+	if _, err := svc.RemoveEnhance("claude-desktop"); err == nil {
+		t.Error("unsupported tool must fail")
+	}
+	// Without a manager (plain test service) the feature is reported unsupported.
+	plain := newTestService(t, &fakeAdapter{id: "codex", name: "Codex", installed: true})
+	tools, _ := plain.ListTools()
+	if tools[0].EnhanceSupported {
+		t.Error("no manager must mean unsupported")
+	}
+	if _, err := plain.InstallEnhance("codex"); err == nil {
+		t.Error("no manager must fail install")
 	}
 }

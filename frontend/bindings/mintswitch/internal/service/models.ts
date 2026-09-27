@@ -187,6 +187,26 @@ export interface ToolView {
      * UI shows Uninstall only when there is a binary the installer can act on.
      */
     "cli_installed": boolean;
+
+    /**
+     * EnhanceSupported is true when MintSwitch can install a /enhance slash
+     * command for this tool (every tool with user-level slash commands; not
+     * Claude Desktop).
+     */
+    "enhance_supported": boolean;
+
+    /**
+     * EnhanceStatus is the /enhance command state: "not_installed",
+     * "installed", "outdated" (rendered by an older/moved MintSwitch —
+     * re-install) or "foreign" (a user-authored enhance command exists; it is
+     * backed up on install and restored on remove). Empty when unsupported.
+     */
+    "enhance_status": string;
+
+    /**
+     * EnhancePath is the command file MintSwitch writes for this tool.
+     */
+    "enhance_path": string;
 }
 
 /**

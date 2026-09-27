@@ -600,3 +600,27 @@ func TestSaveRemoveLastRollsBackKeychainDelete(t *testing.T) {
 		t.Fatal("failed final-provider removal did not restore the old keychain blob")
 	}
 }
+
+func TestProviderForTool(t *testing.T) {
+	st := &State{
+		Providers:        []core.Provider{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}},
+		ActiveProviderID: "a",
+		ToolProviders:    map[string]string{"codex": "b", "pi": "stale"},
+	}
+	if p, ov, ok := st.ProviderForTool("codex"); !ok || p.ID != "b" || !ov {
+		t.Errorf("override: %v %v %v", p.ID, ov, ok)
+	}
+	if p, ov, ok := st.ProviderForTool("pi"); !ok || p.ID != "a" || ov {
+		t.Errorf("stale override falls back to active: %v %v %v", p.ID, ov, ok)
+	}
+	if p, ov, ok := st.ProviderForTool("opencode"); !ok || p.ID != "a" || ov {
+		t.Errorf("no override: %v %v %v", p.ID, ov, ok)
+	}
+	st.ToolProviders["codex"] = "a"
+	if _, ov, _ := st.ProviderForTool("codex"); ov {
+		t.Error("override equal to active must not report overridden")
+	}
+	if _, _, ok := (&State{}).ProviderForTool("codex"); ok {
+		t.Error("empty state must report ok=false")
+	}
+}

@@ -3,10 +3,14 @@
 package main
 
 import (
+	"context"
 	"embed"
-
+	"flag"
+	"fmt"
 	"log"
+	"os"
 
+	"mintswitch/internal/enhance"
 	"mintswitch/internal/service"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -20,8 +24,14 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// main is the desktop application entry point.
+// main is the desktop application entry point. When invoked as
+// `MintSwitch enhance-prompt --tool <id>` (by the /enhance slash command
+// MintSwitch installs into the managed tools) it runs the headless
+// enhance-prompt client instead of opening a window and exits.
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == enhance.CLIName {
+		os.Exit(runEnhanceCLI(os.Args[2:]))
+	}
 
 	// Build the backend service that exposes tool management to the frontend.
 	// A failure here means the user's home/data directories could not be resolved,
@@ -80,4 +90,27 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// runEnhanceCLI parses `--tool <id>`, reads the rough prompt from stdin and
+// prints the enhanced prompt on stdout. Errors go to stderr prefixed with
+// "enhance-prompt:" so the slash-command templates can recognise them; the
+// exit code is 2 for usage errors and 1 for everything else.
+func runEnhanceCLI(args []string) int {
+	fs := flag.NewFlagSet(enhance.CLIName, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	tool := fs.String("tool", "", "tool ID whose effective provider is used (claude-code, codex, opencode, pi)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	store, err := service.SettingsStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", enhance.CLIName, err)
+		return 1
+	}
+	if err := enhance.RunCLI(context.Background(), store, *tool, os.Stdin, os.Stdout, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", enhance.CLIName, err)
+		return 1
+	}
+	return 0
 }
