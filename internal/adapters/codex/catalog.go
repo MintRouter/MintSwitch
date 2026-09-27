@@ -150,6 +150,16 @@ func reasoningPresets(levels []string) []any {
 // from Codex's bundled/cached catalog gets fallback metadata with no
 // reasoning levels — the effort picker is empty and a configured effort Codex
 // cannot validate is replaced by its default.
+//
+// An advertised context window alone deliberately does NOT trigger the
+// catalog: model_catalog_json replaces Codex's whole bundled catalog rather
+// than overlaying it, so a window-only entry for a slug Codex already knows
+// would strip its bundled reasoning levels and model messages — and generic
+// OpenAI-compatible proxies advertise windows without Codex-style levels, so
+// that is the common case. The window is delivered instead through Codex's
+// top-level model_context_window override (see windowKey), which only ever
+// lowers the resolved window (it is clamped to the model's max, so a window
+// above Codex's 272k fallback for an unknown slug still compacts at 272k).
 func needsCatalog(p core.Profile) bool {
 	return p.ApplyAllModels || p.ReviewModel != "" || len(knownReasoningLevels(p.ReasoningLevels(p.Model))) > 0
 }
