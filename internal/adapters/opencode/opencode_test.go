@@ -965,3 +965,47 @@ func TestStripManagedRemovesSmallModel(t *testing.T) {
 		}
 	})
 }
+
+// TestApplyWritesLimits proves every model entry carries OpenCode's required
+// "limit" object: the endpoint-advertised context window and max output
+// tokens when the profile knows them, OpenCode's own flat defaults otherwise,
+// so a 1M-context model is not compacted at 200k and a 128k one is not
+// overflowed.
+func TestApplyWritesLimits(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	p := sampleProfile()
+	p.Models = []string{"gpt-mint", "big", "unknown"}
+	p.ApplyAllModels = true
+	p.ModelContextWindows = map[string]int{"gpt-mint": 200_000, "big": 1_000_000}
+	p.ModelMaxOutputTokens = map[string]int{"gpt-mint": 32_768}
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	root := readJSON(t, res.ChangedPath)
+	models := root["provider"].(map[string]any)[providerID].(map[string]any)["models"].(map[string]any)
+	want := map[string][2]float64{
+		"gpt-mint": {200_000, 32_768},
+		"big":      {1_000_000, defaultOutputLimit},
+		"unknown":  {defaultContextLimit, defaultOutputLimit},
+	}
+	for id, w := range want {
+		entry, ok := models[id].(map[string]any)
+		if !ok {
+			t.Fatalf("entry %q missing: %v", id, models)
+		}
+		limit, ok := entry["limit"].(map[string]any)
+		if !ok {
+			t.Fatalf("limit missing from %q: %v", id, entry)
+		}
+		if limit["context"] != w[0] || limit["output"] != w[1] {
+			t.Fatalf("limit for %q = %v, want context %v output %v", id, limit, w[0], w[1])
+		}
+	}
+	// Limits are metadata only: the fingerprint (and so Status) ignores them.
+	p.ModelContextWindows, p.ModelMaxOutputTokens = nil, nil
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("limits must not affect the fingerprint; got %v", st)
+	}
+}

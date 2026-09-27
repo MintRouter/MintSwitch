@@ -92,6 +92,18 @@ export function Install(toolID: string): $CancellablePromise<$models.InstallResu
 }
 
 /**
+ * InstallEnhance installs (or refreshes) the /enhance slash command for
+ * toolID. The command calls back into this MintSwitch binary, which posts the
+ * user's rough task to the tool's effective provider at /v1/enhance-prompt
+ * using the key stored in MintSwitch — nothing secret is written to the tool.
+ * A pre-existing command file is backed up first. It returns an error for an
+ * unknown or unsupported tool.
+ */
+export function InstallEnhance(toolID: string): $CancellablePromise<core$0.ApplyResult> {
+    return $Call.ByID(4249467567, toolID);
+}
+
+/**
  * ListProviders returns the non-secret views of every managed provider, in
  * stored order. With no providers configured it returns an empty list and no
  * error.
@@ -119,6 +131,16 @@ export function ListTools(): $CancellablePromise<$models.ToolView[] | null> {
  */
 export function PlanUninstall(toolID: string): $CancellablePromise<$models.UninstallPlan> {
     return $Call.ByID(1185264271, toolID);
+}
+
+/**
+ * RemoveEnhance removes the /enhance slash command for toolID, restoring
+ * whatever file was there before MintSwitch installed it. It is a safe no-op
+ * when nothing is installed and returns an error for an unknown or
+ * unsupported tool.
+ */
+export function RemoveEnhance(toolID: string): $CancellablePromise<core$0.RestoreResult> {
+    return $Call.ByID(2755902754, toolID);
 }
 
 /**

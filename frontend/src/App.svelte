@@ -297,6 +297,45 @@
     });
   }
 
+  function installEnhance(id: string): void {
+    const tool = tools.find((x) => x.id === id);
+    const name = tool?.name ?? id;
+    const cmd = id === "codex" ? "/prompts:enhance" : "/enhance";
+    ask({
+      title: t("confirm.installEnhance.title", { name }),
+      message: t(tool?.enhance_status === "foreign" ? "confirm.installEnhance.messageForeign" : "confirm.installEnhance.message", { name, cmd, path: tool?.enhance_path ?? "" }),
+      confirmLabel: t("confirm.installEnhance.confirm"),
+      action: () => withBusy(id, async () => {
+        try {
+          const r = await Service.InstallEnhance(id);
+          flash(r.message || t("toast.enhanceInstalled", { cmd }), "success");
+        } catch (e) {
+          flash(errMsg(e));
+        }
+        await safeRefresh();
+      }),
+    });
+  }
+
+  function removeEnhance(id: string): void {
+    const tool = tools.find((x) => x.id === id);
+    const name = tool?.name ?? id;
+    ask({
+      title: t("confirm.removeEnhance.title", { name }),
+      message: t("confirm.removeEnhance.message", { path: tool?.enhance_path ?? "" }),
+      confirmLabel: t("confirm.removeEnhance.confirm"), danger: true,
+      action: () => withBusy(id, async () => {
+        try {
+          const r = await Service.RemoveEnhance(id);
+          flash(r.message || t("toast.enhanceRemoved"), "success");
+        } catch (e) {
+          flash(errMsg(e));
+        }
+        await safeRefresh();
+      }),
+    });
+  }
+
   // Persist a per-tool model selection then refresh so the tool's badge and
   // selected_model reflect the change. An empty model clears the override (the
   // tool falls back to the profile default). Always refresh — on failure it
@@ -481,6 +520,7 @@
               {#each tools as t (t.id)}
                 <ToolCard tool={t} busy={busyIds.includes(t.id) || busyIds.includes("__all__")} {providers}
                   onApply={applyOne} onRestore={restoreOne} onInstall={installOne} onUninstall={uninstallOne} onModelChange={changeToolModel}
+                  onInstallEnhance={installEnhance} onRemoveEnhance={removeEnhance}
                   onApplyModeChange={changeToolApplyMode} onProviderUpdate={updateProvider}
                   onAddProvider={() => providersCard?.openAddProvider()} />
               {/each}

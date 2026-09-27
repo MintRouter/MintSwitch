@@ -18,6 +18,17 @@
 // "mintrouter/") so re-apply reverts cleanly, but never touches a
 // user-written small_model pointing at another provider. The strip fallback
 // (Restore without a backup) removes the key under the same prefix rule.
+//
+// Each model entry also carries OpenCode's per-model "limit" object
+// ({context, output}, both required by the schema at
+// https://opencode.ai/config.json). A custom provider has no models.dev
+// entry, so without it OpenCode (verified in v2.0.11) falls back to a flat
+// 200k context / 32k output for every model — wrong in both directions for a
+// gateway serving 128k–1M models — and both its context-usage display and its
+// overflow-triggered compaction key off that value. The values come from the
+// profile's ModelContextWindows / ModelMaxOutputTokens (what the endpoint's
+// /models listing advertised), falling back to OpenCode's own defaults for
+// models the endpoint did not describe.
 package opencode
 
 import (
@@ -36,6 +47,15 @@ const id = "opencode"
 
 // providerID is the custom provider key MintSwitch writes under "provider".
 const providerID = "mintrouter"
+
+// defaultContextLimit and defaultOutputLimit are the limit.context /
+// limit.output written for a model whose provider advertised none: the same
+// flat defaults OpenCode applies to a custom model without a limit
+// (verified against v2.0.11).
+const (
+	defaultContextLimit = 200_000
+	defaultOutputLimit  = 32_000
+)
 
 // providerName is the human-friendly display name for the provider.
 const providerName = "MintSwitch (MintRouter)"
@@ -201,6 +221,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 				"input":  []string{"text", "image", "video"},
 				"output": []string{"text"},
 			},
+			"limit": limitObject(p, m),
 		}
 	}
 	provider[providerID] = map[string]any{
@@ -329,4 +350,20 @@ func (a *Adapter) StripLegacyMarker() error {
 	}
 	delete(root, core.MarkerKey)
 	return core.WriteJSONObjectAtomic(path, root)
+}
+
+// limitObject builds the per-model "limit" object OpenCode's schema requires
+// ({context, output}): the endpoint-advertised context window and max output
+// tokens for model m from the profile, each falling back to OpenCode's own
+// default when the endpoint advertised none.
+func limitObject(p core.Profile, m string) map[string]any {
+	ctx := defaultContextLimit
+	if w := p.ContextWindow(m); w > 0 {
+		ctx = w
+	}
+	out := defaultOutputLimit
+	if n := p.MaxOutputTokens(m); n > 0 {
+		out = n
+	}
+	return map[string]any{"context": ctx, "output": out}
 }

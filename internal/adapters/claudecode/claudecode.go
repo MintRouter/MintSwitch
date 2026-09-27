@@ -47,6 +47,31 @@
 //     versions, so it is written with the same resolved haiku value
 //     (HaikuModel, else SmallFastModel, else the main model).
 //
+// Context and output limits (verified 2026-09-27 against Claude Code
+// v2.1.283's window resolution): Claude Code cannot learn a gateway model's
+// real limits from the endpoint — its gateway discovery reads only
+// runtime.max_input_tokens/context_window, never OpenAI's context_length — so
+// it assumes 200k for every model reached through a non-Anthropic base URL
+// and its own catalog default for output tokens. When the profile knows the
+// main model's advertised context window (Profile.ModelContextWindows) Apply
+// therefore writes:
+//
+//   - CLAUDE_CODE_MAX_CONTEXT_TOKENS=<window>: the window Claude Code believes
+//     for a model whose name it does not recognise (anything not starting
+//     with "claude-"), in both directions (128k models compact before
+//     overflowing; 1M models are no longer compacted at 200k).
+//   - CLAUDE_CODE_AUTO_COMPACT_WINDOW=<window>: the auto-compact ceiling,
+//     applied as min(believed window, value) with a 100k floor and the
+//     compaction threshold 13k below it. It takes precedence over the user's
+//     autoCompactWindow setting and covers recognised claude-* names whose
+//     gateway window is smaller than the 200k Claude Code assumes.
+//
+// and, when the main model's advertised max output tokens are known
+// (Profile.ModelMaxOutputTokens), CLAUDE_CODE_MAX_OUTPUT_TOKENS=<n> so the
+// max_tokens Claude Code sends never exceeds what the endpoint accepts
+// (Claude Code still caps it to the model's own upper limit). Unknown values
+// remove the keys so re-apply reverts cleanly.
+//
 // Schema reference (verified 2026-08-22): https://code.claude.com/docs/en/env-vars
 // and https://code.claude.com/docs/en/model-config.
 package claudecode
@@ -54,6 +79,7 @@ package claudecode
 import (
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"mintswitch/internal/backup"
@@ -92,6 +118,15 @@ const (
 	// model list and add its claude-*/anthropic-* models to the /model picker.
 	// Written as "1" in "All models" mode; removed in single-model mode.
 	envModelDiscovery = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+	// envMaxContextTokens / envAutoCompactWindow carry the main model's
+	// endpoint-advertised context window (see the package comment); written
+	// only when the profile knows it, removed otherwise.
+	envMaxContextTokens  = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+	envAutoCompactWindow = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+	// envMaxOutputTokens carries the main model's endpoint-advertised max
+	// output tokens; written only when the profile knows it, removed
+	// otherwise.
+	envMaxOutputTokens = "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
 )
 
 // managedEnvKeys is every env variable Apply can write; stripManaged removes
@@ -101,6 +136,7 @@ var managedEnvKeys = []string{
 	envDefaultOpus, envDefaultSonnet, envDefaultHaiku, envDefaultFable,
 	envDefaultOpusName, envDefaultSonnetName, envDefaultHaikuName, envDefaultFableName,
 	envSmallFastModel, envSubagentModel, envModelDiscovery,
+	envMaxContextTokens, envAutoCompactWindow, envMaxOutputTokens,
 }
 
 // orphanDetail explains the orphan-remnant state: settings.json still carries
@@ -275,6 +311,11 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		delete(env, envDefaultModel)
 		delete(env, envModelDiscovery)
 	}
+	// Context / output limits of the main model, when the endpoint advertised
+	// them (see the package comment); stale keys are removed otherwise.
+	setLimit(env, envMaxContextTokens, p.ContextWindow(p.Model))
+	setLimit(env, envAutoCompactWindow, p.ContextWindow(p.Model))
+	setLimit(env, envMaxOutputTokens, p.MaxOutputTokens(p.Model))
 	m[envKey] = env
 	delete(m, core.MarkerKey)
 
@@ -428,6 +469,17 @@ func resolveTiers(p core.Profile) (opus, sonnet, haiku, fable string) {
 func setTierName(env map[string]any, p core.Profile, key, model string) {
 	if name := strings.TrimSpace(p.ModelNames[model]); name != "" {
 		env[key] = name
+		return
+	}
+	delete(env, key)
+}
+
+// setLimit writes key as the decimal string of n when n is positive (Claude
+// Code parses these env values as integers) and deletes the key otherwise so
+// a limit no longer known disappears from settings.json on re-apply.
+func setLimit(env map[string]any, key string, n int) {
+	if n > 0 {
+		env[key] = strconv.Itoa(n)
 		return
 	}
 	delete(env, key)

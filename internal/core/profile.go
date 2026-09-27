@@ -79,12 +79,21 @@ type Profile struct {
 	// labelOverride). Missing entries fall back to the ID.
 	ModelNames map[string]string `json:"model_names,omitempty"`
 	// ModelContextWindows optionally maps a member of Models to the context
-	// window (in tokens) the endpoint advertised for it. Only the codex
-	// adapter reads it (for its model catalog); missing entries fall back to
-	// the adapter's default. It is deliberately NOT part of [Fingerprint]:
-	// the hash is shared by every adapter, so folding it in would flip
-	// already-applied tools to ModifiedExternally over data only codex uses.
+	// window (in tokens) the endpoint advertised for it. Adapters write it
+	// into the tool's per-model metadata (Codex's catalog, OpenCode's
+	// limit.context, Pi's contextWindow, Claude Code's auto-compact window)
+	// so the tool compacts before the endpoint's real limit instead of the
+	// limit it guesses from the model name; missing entries fall back to the
+	// tool's own default. It is deliberately NOT part of [Fingerprint]: the
+	// hash is shared by every adapter and predates this metadata, so folding
+	// it in would flip already-applied tools to ModifiedExternally.
 	ModelContextWindows map[string]int `json:"model_context_windows,omitempty"`
+	// ModelMaxOutputTokens optionally maps a member of Models to the maximum
+	// completion (output) tokens the endpoint advertised for it. Adapters
+	// that carry a per-model output limit (OpenCode's limit.output, Pi's
+	// maxTokens) write it; missing entries fall back to the tool's default.
+	// Like ModelContextWindows it is deliberately NOT part of [Fingerprint].
+	ModelMaxOutputTokens map[string]int `json:"model_max_output_tokens,omitempty"`
 	// ModelReasoningLevels optionally maps a member of Models to the ordered
 	// reasoning-effort levels the endpoint advertised for it. Adapters read it
 	// through [Profile.ReasoningLevels]. Like ModelContextWindows it is
@@ -173,6 +182,24 @@ func (p Profile) ApplyModels() []string {
 		out = append(out, m)
 	}
 	return out
+}
+
+// ContextWindow returns the context window (tokens) the endpoint advertised
+// for model m, or 0 when none is known.
+func (p Profile) ContextWindow(m string) int {
+	if w := p.ModelContextWindows[m]; w > 0 {
+		return w
+	}
+	return 0
+}
+
+// MaxOutputTokens returns the maximum completion tokens the endpoint
+// advertised for model m, or 0 when none is known.
+func (p Profile) MaxOutputTokens(m string) int {
+	if n := p.ModelMaxOutputTokens[m]; n > 0 {
+		return n
+	}
+	return 0
 }
 
 // ReasoningLevels returns the ordered reasoning-effort levels the endpoint

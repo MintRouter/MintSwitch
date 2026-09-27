@@ -16,6 +16,7 @@ import (
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/enhance"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
@@ -1830,20 +1831,26 @@ func TestApplyOneBackfillsReasoningLevels(t *testing.T) {
 	}))
 	defer srv.Close()
 	cdx := &fakeAdapter{id: "codex", name: "Codex", installed: true}
-	other := &fakeAdapter{id: "claude-code", name: "Claude Code", installed: true}
+	// claude-desktop writes neither reasoning levels nor model limits, so its
+	// Apply must trigger no backfill request at all.
+	other := &fakeAdapter{id: "claude-desktop", name: "Claude Desktop", installed: true}
 	svc := newTestService(t, cdx, other)
 	svc.modelsClient = srv.Client()
 	p := validProvider()
 	p.BaseURL = srv.URL
 	p.Models = []string{"gpt-test", "kept"}
 	p.ModelReasoningLevels = map[string][]string{"kept": {"medium"}}
+	// Limits are complete, so the limits backfill stays quiet and every
+	// request counted below belongs to the reasoning-level backfill.
+	p.ModelContextWindows = map[string]int{"gpt-test": 1, "kept": 1}
+	p.ModelMaxOutputTokens = map[string]int{"gpt-test": 1, "kept": 1}
 	addProvider(t, svc, p)
 
-	if _, err := svc.ApplyOne("claude-code"); err != nil {
-		t.Fatalf("ApplyOne(claude-code): %v", err)
+	if _, err := svc.ApplyOne("claude-desktop"); err != nil {
+		t.Fatalf("ApplyOne(claude-desktop): %v", err)
 	}
 	if calls != 0 {
-		t.Fatalf("non-codex apply made %d requests, want 0", calls)
+		t.Fatalf("non-backfill tool apply made %d requests, want 0", calls)
 	}
 	if _, err := svc.ApplyOne("codex"); err != nil {
 		t.Fatalf("ApplyOne(codex): %v", err)
@@ -1888,5 +1895,202 @@ func TestApplyOneBackfillFailureIsSilent(t *testing.T) {
 	}
 	if got := cdx.lastApplied.ModelReasoningLevels; got != nil {
 		t.Fatalf("applied levels = %v, want none", got)
+	}
+}
+
+// newEnhanceService builds a test Service whose /enhance manager writes under
+// a temp HOME, over the given fake adapters.
+func newEnhanceService(t *testing.T, adapters ...*fakeAdapter) (*Service, *paths.Resolver) {
+	t.Helper()
+	svc := newTestService(t, adapters...)
+	home := t.TempDir()
+	r := &paths.Resolver{Home: home, DataDir: filepath.Join(home, "data")}
+	svc.setEnhance(enhance.New(r, backup.NewEngine(r.BackupsDir()), filepath.Join(home, "MintSwitch")))
+	return svc, r
+}
+
+func TestListToolsReportsEnhanceSupportAndStatus(t *testing.T) {
+	svc, _ := newEnhanceService(t,
+		&fakeAdapter{id: "codex", name: "Codex", installed: true},
+		&fakeAdapter{id: "claude-desktop", name: "Claude Desktop", installed: true},
+	)
+	tools, err := svc.ListTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]ToolView{}
+	for _, tv := range tools {
+		byID[tv.ID] = tv
+	}
+	if c := byID["codex"]; !c.EnhanceSupported || c.EnhanceStatus != enhance.StatusNotInstalled || c.EnhancePath == "" {
+		t.Errorf("codex view = %+v", c)
+	}
+	if d := byID["claude-desktop"]; d.EnhanceSupported || d.EnhanceStatus != "" || d.EnhancePath != "" {
+		t.Errorf("claude-desktop view = %+v", d)
+	}
+	if _, err := svc.InstallEnhance("codex"); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ = svc.ListTools()
+	for _, tv := range tools {
+		if tv.ID == "codex" && tv.EnhanceStatus != enhance.StatusInstalled {
+			t.Errorf("status after install = %q", tv.EnhanceStatus)
+		}
+	}
+	if _, err := svc.RemoveEnhance("codex"); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ = svc.ListTools()
+	for _, tv := range tools {
+		if tv.ID == "codex" && tv.EnhanceStatus != enhance.StatusNotInstalled {
+			t.Errorf("status after remove = %q", tv.EnhanceStatus)
+		}
+	}
+}
+
+func TestEnhanceRejectsUnknownAndUnsupportedTools(t *testing.T) {
+	svc, _ := newEnhanceService(t, &fakeAdapter{id: "claude-desktop", name: "Claude Desktop", installed: true})
+	if _, err := svc.InstallEnhance("nope"); err == nil {
+		t.Error("unknown tool must fail")
+	}
+	if _, err := svc.InstallEnhance("claude-desktop"); err == nil {
+		t.Error("unsupported tool must fail")
+	}
+	if _, err := svc.RemoveEnhance("claude-desktop"); err == nil {
+		t.Error("unsupported tool must fail")
+	}
+	// Without a manager (plain test service) the feature is reported unsupported.
+	plain := newTestService(t, &fakeAdapter{id: "codex", name: "Codex", installed: true})
+	tools, _ := plain.ListTools()
+	if tools[0].EnhanceSupported {
+		t.Error("no manager must mean unsupported")
+	}
+	if _, err := plain.InstallEnhance("codex"); err == nil {
+		t.Error("no manager must fail install")
+	}
+}
+
+// TestParseModelOptionsMaxOutputTokens pins the max-output extraction: the
+// first positive integer among max_completion_tokens, max_output_tokens and
+// max_tokens wins; absent, non-positive and non-numeric values yield 0.
+func TestParseModelOptionsMaxOutputTokens(t *testing.T) {
+	body := []byte(`{"data":[
+		{"id":"a","max_completion_tokens":32768,"max_output_tokens":1},
+		{"id":"b","max_output_tokens":65536},
+		{"id":"c","max_tokens":4096},
+		{"id":"d","max_completion_tokens":0,"max_tokens":-1},
+		{"id":"e","max_completion_tokens":"lots"},
+		{"id":"f"}
+	]}`)
+	options, ok := parseModelOptions(body)
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	want := map[string]int{"a": 32768, "b": 65536, "c": 4096, "d": 0, "e": 0, "f": 0}
+	for _, o := range options {
+		if o.MaxOutputTokens != want[o.ID] {
+			t.Fatalf("%s: max output = %d, want %d", o.ID, o.MaxOutputTokens, want[o.ID])
+		}
+	}
+}
+
+// TestAddProviderNormalizesModelMaxOutputTokens: only positive values for
+// listed models survive, mirroring ModelContextWindows.
+func TestAddProviderNormalizesModelMaxOutputTokens(t *testing.T) {
+	svc := newTestService(t)
+	p := validProvider()
+	p.Models = []string{"a", "b", "sel"}
+	p.Model = "sel"
+	p.ModelMaxOutputTokens = map[string]int{"a": 32_768, "b": 0, "sel": -5, "ghost": 8_192}
+	addProvider(t, svc, p)
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := views[0].ModelMaxOutputTokens; !reflect.DeepEqual(got, map[string]int{"a": 32_768}) {
+		t.Fatalf("ModelMaxOutputTokens = %v, want map[a:32768]", got)
+	}
+}
+
+// TestApplyOneBackfillsModelLimits proves an Apply for a tool that writes
+// per-model limits fills in missing context windows and max output tokens
+// from the endpoint's plain /models listing (never replacing stored values,
+// never adding models), persists them, and stays quiet once complete; a tool
+// that writes no limits triggers no request.
+func TestApplyOneBackfillsModelLimits(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Write([]byte(`{"data":[
+			{"id":"gpt-test","context_length":200000,"max_completion_tokens":32768},
+			{"id":"kept","context_length":999,"max_completion_tokens":65536},
+			{"id":"unlisted","context_length":128000,"max_completion_tokens":4096}
+		]}`))
+	}))
+	defer srv.Close()
+	oc := &fakeAdapter{id: "opencode", name: "OpenCode", installed: true}
+	other := &fakeAdapter{id: "claude-desktop", name: "Claude Desktop", installed: true}
+	svc := newTestService(t, oc, other)
+	svc.modelsClient = srv.Client()
+	p := validProvider()
+	p.BaseURL = srv.URL
+	p.Models = []string{"gpt-test", "kept"}
+	p.ModelContextWindows = map[string]int{"kept": 1_000_000}
+	addProvider(t, svc, p)
+
+	if _, err := svc.ApplyOne("claude-desktop"); err != nil {
+		t.Fatalf("ApplyOne(claude-desktop): %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("non-limits tool apply made %d requests, want 0", calls)
+	}
+	if _, err := svc.ApplyOne("opencode"); err != nil {
+		t.Fatalf("ApplyOne(opencode): %v", err)
+	}
+	wantWindows := map[string]int{"gpt-test": 200_000, "kept": 1_000_000}
+	wantOutputs := map[string]int{"gpt-test": 32_768, "kept": 65_536}
+	if got := oc.lastApplied.ModelContextWindows; !reflect.DeepEqual(got, wantWindows) {
+		t.Fatalf("applied windows = %v, want %v", got, wantWindows)
+	}
+	if got := oc.lastApplied.ModelMaxOutputTokens; !reflect.DeepEqual(got, wantOutputs) {
+		t.Fatalf("applied outputs = %v, want %v", got, wantOutputs)
+	}
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := views[0].ModelContextWindows; !reflect.DeepEqual(got, wantWindows) {
+		t.Fatalf("persisted windows = %v, want %v", got, wantWindows)
+	}
+	if got := views[0].ModelMaxOutputTokens; !reflect.DeepEqual(got, wantOutputs) {
+		t.Fatalf("persisted outputs = %v, want %v", got, wantOutputs)
+	}
+	calls = 0
+	if _, err := svc.ApplyOne("opencode"); err != nil {
+		t.Fatalf("re-ApplyOne: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("re-apply made %d requests, want 0 when every model has limits", calls)
+	}
+}
+
+// TestApplyOneLimitsBackfillFailureIsSilent proves an endpoint that fails
+// the /models request never fails the Apply or touches settings.
+func TestApplyOneLimitsBackfillFailureIsSilent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	oc := &fakeAdapter{id: "opencode", name: "OpenCode", installed: true}
+	svc := newTestService(t, oc)
+	svc.modelsClient = srv.Client()
+	p := validProvider()
+	p.BaseURL = srv.URL
+	addProvider(t, svc, p)
+	if _, err := svc.ApplyOne("opencode"); err != nil {
+		t.Fatalf("ApplyOne: %v", err)
+	}
+	if oc.lastApplied.ModelContextWindows != nil || oc.lastApplied.ModelMaxOutputTokens != nil {
+		t.Fatalf("applied limits = %v / %v, want none", oc.lastApplied.ModelContextWindows, oc.lastApplied.ModelMaxOutputTokens)
 	}
 }

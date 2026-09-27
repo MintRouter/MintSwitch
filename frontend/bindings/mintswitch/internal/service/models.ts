@@ -32,6 +32,12 @@ export interface ModelOption {
     "context_window"?: number;
 
     /**
+     * MaxOutputTokens is the model's advertised maximum completion (output)
+     * tokens; 0 means the endpoint did not advertise one.
+     */
+    "max_output_tokens"?: number;
+
+    /**
      * ReasoningLevels is the model's advertised ordered reasoning-effort
      * levels (e.g. "low", "medium", "high"); empty means none advertised.
      */
@@ -72,6 +78,12 @@ export interface ProviderView {
      * window in tokens, passed through so the Edit form can re-save it.
      */
     "model_context_windows": { [_ in string]?: number } | null;
+
+    /**
+     * ModelMaxOutputTokens maps a member of Models to its advertised maximum
+     * completion tokens (never secret; may be null).
+     */
+    "model_max_output_tokens": { [_ in string]?: number } | null;
 
     /**
      * ModelReasoningLevels maps a member of Models to its advertised ordered
@@ -187,6 +199,26 @@ export interface ToolView {
      * UI shows Uninstall only when there is a binary the installer can act on.
      */
     "cli_installed": boolean;
+
+    /**
+     * EnhanceSupported is true when MintSwitch can install a /enhance slash
+     * command for this tool (every tool with user-level slash commands; not
+     * Claude Desktop).
+     */
+    "enhance_supported": boolean;
+
+    /**
+     * EnhanceStatus is the /enhance command state: "not_installed",
+     * "installed", "outdated" (rendered by an older/moved MintSwitch —
+     * re-install) or "foreign" (a user-authored enhance command exists; it is
+     * backed up on install and restored on remove). Empty when unsupported.
+     */
+    "enhance_status": string;
+
+    /**
+     * EnhancePath is the command file MintSwitch writes for this tool.
+     */
+    "enhance_path": string;
 }
 
 /**

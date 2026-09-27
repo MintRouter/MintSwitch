@@ -92,6 +92,22 @@ func (st *State) ActiveProvider() (core.Provider, bool) {
 	return st.Provider(st.ActiveProviderID)
 }
 
+// ProviderForTool returns the provider in effect for toolID: the per-tool
+// override when set and still a managed member, otherwise the active
+// provider. overridden reports whether the result came from a valid per-tool
+// override that differs from the active provider; ok=false means no provider
+// could be resolved (none configured). It is the single resolution rule
+// shared by the desktop service and the enhance-prompt CLI mode.
+func (st *State) ProviderForTool(toolID string) (pr core.Provider, overridden bool, ok bool) {
+	if sel := st.ToolProviders[toolID]; sel != "" {
+		if p, found := st.Provider(sel); found {
+			return p, p.ID != st.ActiveProviderID, true
+		}
+	}
+	p, found := st.ActiveProvider()
+	return p, false, found
+}
+
 // migrate converts a legacy (v1 or Wave 2) state into the provider shape, in
 // place, reporting whether anything changed. A Wave 2 multi-key profile
 // becomes one Provider per key entry — all sharing the profile's endpoint and

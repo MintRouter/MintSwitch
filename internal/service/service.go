@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -36,6 +37,7 @@ import (
 	"mintswitch/internal/adapters/pi"
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
+	"mintswitch/internal/enhance"
 	"mintswitch/internal/installer"
 	"mintswitch/internal/markers"
 	"mintswitch/internal/paths"
@@ -48,6 +50,9 @@ type Service struct {
 	reg   *core.Registry
 	store *settings.Store
 	inst  *installer.Installer
+	// enh installs/removes the /enhance slash command per tool. nil (tests
+	// built via NewWithInstaller) means the feature is reported unsupported.
+	enh *enhance.Manager
 	// mu serializes every operation that mutates state — the settings file
 	// (save profile, per-tool models) and the managed tool config files
 	// (apply/restore) — so concurrent UI calls cannot interleave their
@@ -113,6 +118,17 @@ type ToolView struct {
 	// desktop app only, or Claude Code via the editor extension only), so the
 	// UI shows Uninstall only when there is a binary the installer can act on.
 	CliInstalled bool `json:"cli_installed"`
+	// EnhanceSupported is true when MintSwitch can install a /enhance slash
+	// command for this tool (every tool with user-level slash commands; not
+	// Claude Desktop).
+	EnhanceSupported bool `json:"enhance_supported"`
+	// EnhanceStatus is the /enhance command state: "not_installed",
+	// "installed", "outdated" (rendered by an older/moved MintSwitch —
+	// re-install) or "foreign" (a user-authored enhance command exists; it is
+	// backed up on install and restored on remove). Empty when unsupported.
+	EnhanceStatus string `json:"enhance_status"`
+	// EnhancePath is the command file MintSwitch writes for this tool.
+	EnhancePath string `json:"enhance_path"`
 }
 
 // Apply modes selectable per tool (see [Service.SetToolApplyMode]).
@@ -165,6 +181,9 @@ type ProviderView struct {
 	// ModelContextWindows maps a member of Models to its advertised context
 	// window in tokens, passed through so the Edit form can re-save it.
 	ModelContextWindows map[string]int `json:"model_context_windows"`
+	// ModelMaxOutputTokens maps a member of Models to its advertised maximum
+	// completion tokens (never secret; may be null).
+	ModelMaxOutputTokens map[string]int `json:"model_max_output_tokens"`
 	// ModelReasoningLevels maps a member of Models to its advertised ordered
 	// reasoning-effort levels, passed through so the Edit form can re-save it.
 	ModelReasoningLevels map[string][]string `json:"model_reasoning_levels"`
@@ -212,6 +231,7 @@ func providerView(p core.Provider, active bool) ProviderView {
 		Models:               models,
 		ModelNames:           p.ModelNames,
 		ModelContextWindows:  p.ModelContextWindows,
+		ModelMaxOutputTokens: p.ModelMaxOutputTokens,
 		ModelReasoningLevels: p.ModelReasoningLevels,
 		Model:                p.Model,
 		SmallFastModel:       p.SmallFastModel,
@@ -276,9 +296,32 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
 	store := settings.NewStore(r.SettingsPath())
 	s := NewWithInstaller(reg, store, inst)
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("service: executable path unknown, /enhance install disabled: %v", err)
+	} else {
+		s.enh = enhance.New(r, e, exe)
+	}
 	s.SweepLegacyMarkers()
 	return s
 }
+
+// SettingsStore returns the settings store the desktop app uses, with the
+// same keychain-backed secret store, for headless callers (the enhance-prompt
+// CLI mode). It never migrates or writes.
+func SettingsStore() (*settings.Store, error) {
+	r, err := paths.NewResolver()
+	if err != nil {
+		return nil, err
+	}
+	store := settings.NewStore(r.SettingsPath())
+	store.Secrets = secrets.New()
+	return store, nil
+}
+
+// setEnhance injects the /enhance command manager (tests; NewWithDeps wires
+// the real one). It is unexported so the bindings generator never exposes it.
+func (s *Service) setEnhance(m *enhance.Manager) { s.enh = m }
 
 // SweepLegacyMarkers strips the legacy in-file "mintswitchManaged" key from
 // every registered adapter that implements [core.LegacyMarkerStripper]
@@ -390,6 +433,11 @@ func (s *Service) viewFor(a core.ToolAdapter, st *settings.State) ToolView {
 		models = kept
 	}
 	_, installable := installer.Spec(a.ID())
+	var enhSupported bool
+	var enhStatus, enhPath string
+	if s.enh != nil {
+		enhStatus, enhPath, enhSupported = s.enh.Status(a.ID())
+	}
 	return ToolView{
 		ID:                 a.ID(),
 		Name:               a.Name(),
@@ -407,7 +455,44 @@ func (s *Service) viewFor(a core.ToolAdapter, st *settings.State) ToolView {
 		ApplyMode:          applyModeFor(st, a.ID()),
 		Installable:        installable,
 		CliInstalled:       s.inst.CLIInstalled(a.ID()),
+		EnhanceSupported:   enhSupported,
+		EnhanceStatus:      enhStatus,
+		EnhancePath:        enhPath,
 	}
+}
+
+// InstallEnhance installs (or refreshes) the /enhance slash command for
+// toolID. The command calls back into this MintSwitch binary, which posts the
+// user's rough task to the tool's effective provider at /v1/enhance-prompt
+// using the key stored in MintSwitch — nothing secret is written to the tool.
+// A pre-existing command file is backed up first. It returns an error for an
+// unknown or unsupported tool.
+func (s *Service) InstallEnhance(toolID string) (core.ApplyResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.reg.Get(toolID); !ok {
+		return core.ApplyResult{}, fmt.Errorf("service: unknown tool %q", toolID)
+	}
+	if s.enh == nil || !s.enh.Supports(toolID) {
+		return core.ApplyResult{}, fmt.Errorf("service: /enhance is not supported for %q", toolID)
+	}
+	return s.enh.Install(toolID)
+}
+
+// RemoveEnhance removes the /enhance slash command for toolID, restoring
+// whatever file was there before MintSwitch installed it. It is a safe no-op
+// when nothing is installed and returns an error for an unknown or
+// unsupported tool.
+func (s *Service) RemoveEnhance(toolID string) (core.RestoreResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.reg.Get(toolID); !ok {
+		return core.RestoreResult{}, fmt.Errorf("service: unknown tool %q", toolID)
+	}
+	if s.enh == nil || !s.enh.Supports(toolID) {
+		return core.RestoreResult{}, fmt.Errorf("service: /enhance is not supported for %q", toolID)
+	}
+	return s.enh.Remove(toolID)
 }
 
 // ListProviders returns the non-secret views of every managed provider, in
@@ -566,6 +651,7 @@ func normalizeProvider(p *core.Provider) {
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
 	p.ModelContextWindows = normalizeModelContextWindows(p.ModelContextWindows, p.Models)
+	p.ModelMaxOutputTokens = normalizeModelContextWindows(p.ModelMaxOutputTokens, p.Models)
 	p.ModelReasoningLevels = normalizeModelReasoningLevels(p.ModelReasoningLevels, p.Models)
 }
 
@@ -704,7 +790,8 @@ func normalizeModels(models []string, selected string) []string {
 
 // normalizeModelContextWindows keeps only entries whose (trimmed) model ID is
 // a member of models and whose value is a positive token count, so stale or
-// nonsense windows never persist. It returns nil when nothing remains.
+// nonsense windows never persist. It returns nil when nothing remains. The
+// same rule applies to per-model max output tokens, so it normalizes both.
 func normalizeModelContextWindows(windows map[string]int, models []string) map[string]int {
 	if len(windows) == 0 {
 		return nil
@@ -798,13 +885,7 @@ func normalizeModelNames(names map[string]string, models []string) map[string]st
 // override that differs from the active provider; ok=false means no provider
 // could be resolved (none configured).
 func resolveProvider(st *settings.State, toolID string) (pr core.Provider, overridden bool, ok bool) {
-	if sel := st.ToolProviders[toolID]; sel != "" {
-		if p, found := st.Provider(sel); found {
-			return p, p.ID != st.ActiveProviderID, true
-		}
-	}
-	p, found := st.ActiveProvider()
-	return p, false, found
+	return st.ProviderForTool(toolID)
 }
 
 // activeProfile loads the active provider's profile and validates it. It
@@ -884,6 +965,7 @@ func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 		return core.ApplyResult{}, fmt.Errorf("service: unknown tool %q", toolID)
 	}
 	s.backfillReasoningLevels(toolID)
+	s.backfillModelLimits(toolID)
 	p, err := s.effectiveProfileFor(toolID)
 	if err != nil {
 		return core.ApplyResult{}, err
@@ -924,6 +1006,7 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 			continue
 		}
 		s.backfillReasoningLevels(a.ID())
+		s.backfillModelLimits(a.ID())
 		p, perr := s.effectiveProfileFor(a.ID())
 		if perr != nil {
 			out = append(out, ToolOpResult{ID: a.ID(), OK: false, Error: perr.Error()})
