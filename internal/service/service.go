@@ -181,6 +181,9 @@ type ProviderView struct {
 	// ModelContextWindows maps a member of Models to its advertised context
 	// window in tokens, passed through so the Edit form can re-save it.
 	ModelContextWindows map[string]int `json:"model_context_windows"`
+	// ModelMaxOutputTokens maps a member of Models to its advertised maximum
+	// completion tokens (never secret; may be null).
+	ModelMaxOutputTokens map[string]int `json:"model_max_output_tokens"`
 	// ModelReasoningLevels maps a member of Models to its advertised ordered
 	// reasoning-effort levels, passed through so the Edit form can re-save it.
 	ModelReasoningLevels map[string][]string `json:"model_reasoning_levels"`
@@ -228,6 +231,7 @@ func providerView(p core.Provider, active bool) ProviderView {
 		Models:               models,
 		ModelNames:           p.ModelNames,
 		ModelContextWindows:  p.ModelContextWindows,
+		ModelMaxOutputTokens: p.ModelMaxOutputTokens,
 		ModelReasoningLevels: p.ModelReasoningLevels,
 		Model:                p.Model,
 		SmallFastModel:       p.SmallFastModel,
@@ -647,6 +651,7 @@ func normalizeProvider(p *core.Provider) {
 	p.Models = normalizeModels(p.Models, p.Model)
 	p.ModelNames = normalizeModelNames(p.ModelNames, p.Models)
 	p.ModelContextWindows = normalizeModelContextWindows(p.ModelContextWindows, p.Models)
+	p.ModelMaxOutputTokens = normalizeModelContextWindows(p.ModelMaxOutputTokens, p.Models)
 	p.ModelReasoningLevels = normalizeModelReasoningLevels(p.ModelReasoningLevels, p.Models)
 }
 
@@ -785,7 +790,8 @@ func normalizeModels(models []string, selected string) []string {
 
 // normalizeModelContextWindows keeps only entries whose (trimmed) model ID is
 // a member of models and whose value is a positive token count, so stale or
-// nonsense windows never persist. It returns nil when nothing remains.
+// nonsense windows never persist. It returns nil when nothing remains. The
+// same rule applies to per-model max output tokens, so it normalizes both.
 func normalizeModelContextWindows(windows map[string]int, models []string) map[string]int {
 	if len(windows) == 0 {
 		return nil
@@ -959,6 +965,7 @@ func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 		return core.ApplyResult{}, fmt.Errorf("service: unknown tool %q", toolID)
 	}
 	s.backfillReasoningLevels(toolID)
+	s.backfillModelLimits(toolID)
 	p, err := s.effectiveProfileFor(toolID)
 	if err != nil {
 		return core.ApplyResult{}, err
@@ -999,6 +1006,7 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 			continue
 		}
 		s.backfillReasoningLevels(a.ID())
+		s.backfillModelLimits(a.ID())
 		p, perr := s.effectiveProfileFor(a.ID())
 		if perr != nil {
 			out = append(out, ToolOpResult{ID: a.ID(), OK: false, Error: perr.Error()})

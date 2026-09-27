@@ -79,6 +79,14 @@ export interface Provider {
     "model_context_windows"?: { [_ in string]?: number } | null;
 
     /**
+     * ModelMaxOutputTokens optionally maps a member of Models to the maximum
+     * completion (output) tokens the endpoint's /models listing advertised
+     * for it. Adapters fall back to a tool-specific default for missing
+     * entries.
+     */
+    "model_max_output_tokens"?: { [_ in string]?: number } | null;
+
+    /**
      * ModelReasoningLevels optionally maps a member of Models to the ordered
      * reasoning-effort levels the endpoint advertised for it (e.g. "low",
      * "medium", "high"). Missing entries mean no levels are known.

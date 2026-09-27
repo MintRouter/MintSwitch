@@ -32,6 +32,12 @@ export interface ModelOption {
     "context_window"?: number;
 
     /**
+     * MaxOutputTokens is the model's advertised maximum completion (output)
+     * tokens; 0 means the endpoint did not advertise one.
+     */
+    "max_output_tokens"?: number;
+
+    /**
      * ReasoningLevels is the model's advertised ordered reasoning-effort
      * levels (e.g. "low", "medium", "high"); empty means none advertised.
      */
@@ -72,6 +78,12 @@ export interface ProviderView {
      * window in tokens, passed through so the Edit form can re-save it.
      */
     "model_context_windows": { [_ in string]?: number } | null;
+
+    /**
+     * ModelMaxOutputTokens maps a member of Models to its advertised maximum
+     * completion tokens (never secret; may be null).
+     */
+    "model_max_output_tokens": { [_ in string]?: number } | null;
 
     /**
      * ModelReasoningLevels maps a member of Models to its advertised ordered

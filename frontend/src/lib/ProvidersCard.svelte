@@ -142,6 +142,7 @@
   // from the stored provider on open and from fetch results, then passed
   // through on Save so the backend can persist them.
   let fModelContextWindows = $state<Record<string, number>>({});
+  let fModelMaxOutputTokens = $state<Record<string, number>>({});
   // Reasoning-effort levels per selected model. Same lifecycle as
   // fModelContextWindows: never edited by hand, seeded from the stored
   // provider and fetch results, passed through on Save.
@@ -181,7 +182,7 @@
   // dirty on its own). Used to guard Esc/Cancel against losing typed input.
   let formInitial = $state("");
   const formSnapshot = () =>
-    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModelContextWindows, fModelReasoningLevels, fModel]);
+    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModelContextWindows, fModelMaxOutputTokens, fModelReasoningLevels, fModel]);
   const formDirty = $derived(formOpen && (!!formKey || formSnapshot() !== formInitial));
   // Confirmation shown when Esc/Cancel would discard a dirty form.
   let discardOpen = $state(false);
@@ -267,6 +268,11 @@
       if (w && w > 0) seededWindows[id] = w;
     }
     fModelContextWindows = seededWindows;
+    const seededOutputs: Record<string, number> = {};
+    for (const [id, n] of Object.entries(p?.model_max_output_tokens ?? {})) {
+      if (n && n > 0) seededOutputs[id] = n;
+    }
+    fModelMaxOutputTokens = seededOutputs;
     const seededLevels: Record<string, string[]> = {};
     for (const [id, l] of Object.entries(p?.model_reasoning_levels ?? {})) {
       if (l && l.length) seededLevels[id] = [...l];
@@ -281,6 +287,7 @@
     fetchedModels = [];
     fetchedNames = {};
     fetchedWindows = {};
+    fetchedOutputs = {};
     fetchedLevels = {};
     dropdownOpen = false;
     activeIndex = -1;
@@ -339,6 +346,7 @@
   // seeding lifecycle as fetchedNames, except a fresh fetch value always wins
   // over a stored one (there is no user-set value to protect).
   let fetchedWindows = $state<Record<string, number>>({});
+  let fetchedOutputs = $state<Record<string, number>>({});
   // Reasoning-effort levels the endpoint advertised; same lifecycle as
   // fetchedWindows (a fresh fetch value always wins).
   let fetchedLevels = $state<Record<string, string[]>>({});
@@ -369,6 +377,11 @@
         if (o.context_window && o.context_window > 0) windows[o.id] = o.context_window;
       }
       fetchedWindows = windows;
+      const outputs: Record<string, number> = {};
+      for (const o of options) {
+        if (o.max_output_tokens && o.max_output_tokens > 0) outputs[o.id] = o.max_output_tokens;
+      }
+      fetchedOutputs = outputs;
       const levels: Record<string, string[]> = {};
       for (const o of options) {
         if (o.reasoning_levels && o.reasoning_levels.length) levels[o.id] = o.reasoning_levels;
@@ -388,6 +401,7 @@
       const pristine = formSnapshot() === formInitial;
       const merged = { ...fModelNames };
       const mergedWindows = { ...fModelContextWindows };
+      const mergedOutputs = { ...fModelMaxOutputTokens };
       const mergedLevels = { ...fModelReasoningLevels };
       let seededAny = false;
       for (const m of fModels) {
@@ -399,6 +413,11 @@
         const w = windows[m];
         if (w && mergedWindows[m] !== w) {
           mergedWindows[m] = w;
+          seededAny = true;
+        }
+        const mo = outputs[m];
+        if (mo && mergedOutputs[m] !== mo) {
+          mergedOutputs[m] = mo;
           seededAny = true;
         }
         const l = levels[m];
@@ -414,6 +433,7 @@
       if (seededAny) {
         fModelNames = merged;
         fModelContextWindows = mergedWindows;
+        fModelMaxOutputTokens = mergedOutputs;
         fModelReasoningLevels = mergedLevels;
         if (pristine) formInitial = formSnapshot();
       }
@@ -552,6 +572,8 @@
       if (name && !fModelNames[v]) fModelNames = { ...fModelNames, [v]: name };
       const w = fetchedWindows[v];
       if (w && fModelContextWindows[v] !== w) fModelContextWindows = { ...fModelContextWindows, [v]: w };
+      const mo = fetchedOutputs[v];
+      if (mo && fModelMaxOutputTokens[v] !== mo) fModelMaxOutputTokens = { ...fModelMaxOutputTokens, [v]: mo };
       const l = fetchedLevels[v];
       if (l && l.length) fModelReasoningLevels = { ...fModelReasoningLevels, [v]: l };
     }
@@ -599,6 +621,11 @@
       delete next[m];
       fModelContextWindows = next;
     }
+    if (m in fModelMaxOutputTokens) {
+      const next = { ...fModelMaxOutputTokens };
+      delete next[m];
+      fModelMaxOutputTokens = next;
+    }
     if (m in fModelReasoningLevels) {
       const next = { ...fModelReasoningLevels };
       delete next[m];
@@ -627,6 +654,7 @@
       models: fModels,
       model_names: fModelNames,
       model_context_windows: fModelContextWindows,
+      model_max_output_tokens: fModelMaxOutputTokens,
       model_reasoning_levels: fModelReasoningLevels,
       model: fModel,
       small_fast_model: editing?.small_fast_model ?? "",

@@ -992,3 +992,71 @@ func TestPureUserConfigNeverOrphan(t *testing.T) {
 		t.Fatalf("pure user config rewritten: %q", got)
 	}
 }
+
+// TestApplyWritesContextAndOutputLimits proves the main model's advertised
+// context window is written as both CLAUDE_CODE_MAX_CONTEXT_TOKENS (the
+// window Claude Code believes for an unrecognised model) and
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW (the compaction ceiling), and its advertised
+// max output tokens as CLAUDE_CODE_MAX_OUTPUT_TOKENS — all as decimal strings,
+// and only for the main model, not another member of Models.
+func TestApplyWritesContextAndOutputLimits(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	p := sampleProfile()
+	p.Models = []string{p.Model, "other"}
+	p.ModelContextWindows = map[string]int{p.Model: 200_000, "other": 1_000_000}
+	p.ModelMaxOutputTokens = map[string]int{p.Model: 32_768, "other": 8_192}
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	env := envOf(t, readSettings(t, res.ChangedPath))
+	if env[envMaxContextTokens] != "200000" || env[envAutoCompactWindow] != "200000" {
+		t.Fatalf("context env = %v / %v, want 200000 strings: %+v", env[envMaxContextTokens], env[envAutoCompactWindow], env)
+	}
+	if env[envMaxOutputTokens] != "32768" {
+		t.Fatalf("output env = %v, want \"32768\": %+v", env[envMaxOutputTokens], env)
+	}
+	// Limits are metadata only: the fingerprint (and so Status) ignores them.
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("expected AppliedByMintSwitch, got %v", st)
+	}
+	bare := sampleProfile()
+	if st, _, _ := a.Status(bare); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("limits must not affect the fingerprint; got %v", st)
+	}
+}
+
+// TestApplyRemovesStaleLimits proves a re-apply with unknown limits removes
+// the limit keys a previous apply wrote, and that an apply without limits
+// never writes them (Claude Code then keeps its own defaults).
+func TestApplyRemovesStaleLimits(t *testing.T) {
+	a, _ := newAdapter(t)
+	p := sampleProfile()
+	if res, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	} else {
+		env := envOf(t, readSettings(t, res.ChangedPath))
+		for _, k := range []string{envMaxContextTokens, envAutoCompactWindow, envMaxOutputTokens} {
+			if _, present := env[k]; present {
+				t.Fatalf("%s must not be written without a known limit: %+v", k, env)
+			}
+		}
+	}
+	p.ModelContextWindows = map[string]int{p.Model: 128_000}
+	p.ModelMaxOutputTokens = map[string]int{p.Model: 16_384}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply with limits: %v", err)
+	}
+	p.ModelContextWindows, p.ModelMaxOutputTokens = nil, nil
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	env := envOf(t, readSettings(t, res.ChangedPath))
+	for _, k := range []string{envMaxContextTokens, envAutoCompactWindow, envMaxOutputTokens} {
+		if _, present := env[k]; present {
+			t.Fatalf("%s must be removed once the limit is unknown: %+v", k, env)
+		}
+	}
+}

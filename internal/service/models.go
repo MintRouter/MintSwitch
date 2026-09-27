@@ -45,6 +45,9 @@ type ModelOption struct {
 	// ContextWindow is the model's advertised context window in tokens; 0
 	// means the endpoint did not advertise one.
 	ContextWindow int `json:"context_window,omitempty"`
+	// MaxOutputTokens is the model's advertised maximum completion (output)
+	// tokens; 0 means the endpoint did not advertise one.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 	// ReasoningLevels is the model's advertised ordered reasoning-effort
 	// levels (e.g. "low", "medium", "high"); empty means none advertised.
 	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
@@ -307,6 +310,84 @@ func (s *Service) backfillReasoningLevels(toolID string) {
 	}
 }
 
+// limitsBackfillTools are the tools whose Apply writes per-model context
+// windows and/or max output tokens, and so benefit from
+// [Service.backfillModelLimits].
+var limitsBackfillTools = map[string]bool{"claude-code": true, "codex": true, "opencode": true, "pi": true}
+
+// backfillModelLimits best-effort fills in toolID's effective provider's
+// missing ModelContextWindows and ModelMaxOutputTokens from the endpoint's
+// plain /models listing before an Apply, and persists them. Limits are
+// otherwise only captured when the provider form fetches models, so a
+// provider saved before max output tokens existed (or whose models were typed
+// by hand) would apply tool configs with default limits until the user
+// re-opened and re-saved it. Only tools in limitsBackfillTools trigger it,
+// only when at least one listed model lacks a window or an output cap, only
+// models already listed get values, existing values are never replaced, and
+// every failure (no key, transport, non-200, unparseable body) leaves
+// settings untouched. The caller holds s.mu.
+func (s *Service) backfillModelLimits(toolID string) {
+	if !limitsBackfillTools[toolID] {
+		return
+	}
+	st, err := s.store.Load()
+	if err != nil {
+		return
+	}
+	pr, _, ok := resolveProvider(st, toolID)
+	if !ok {
+		return
+	}
+	missing := false
+	for _, m := range pr.Models {
+		if pr.ModelContextWindows[m] <= 0 || pr.ModelMaxOutputTokens[m] <= 0 {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return
+	}
+	base, _ := core.NormalizeBaseURL(pr.BaseURL)
+	if base == "" {
+		return
+	}
+	options, err := s.fetchModels(base, pr.APIKey)
+	if err != nil {
+		return
+	}
+	windows := make(map[string]int, len(pr.Models))
+	for m, w := range pr.ModelContextWindows {
+		windows[m] = w
+	}
+	outputs := make(map[string]int, len(pr.Models))
+	for m, n := range pr.ModelMaxOutputTokens {
+		outputs[m] = n
+	}
+	added := false
+	for _, o := range options {
+		if o.ContextWindow > 0 && windows[o.ID] <= 0 {
+			windows[o.ID] = o.ContextWindow
+			added = true
+		}
+		if o.MaxOutputTokens > 0 && outputs[o.ID] <= 0 {
+			outputs[o.ID] = o.MaxOutputTokens
+			added = true
+		}
+	}
+	if !added {
+		return
+	}
+	for i := range st.Providers {
+		if st.Providers[i].ID == pr.ID {
+			st.Providers[i].ModelContextWindows = normalizeModelContextWindows(windows, pr.Models)
+			st.Providers[i].ModelMaxOutputTokens = normalizeModelContextWindows(outputs, pr.Models)
+			_ = s.store.Save(st)
+			return
+		}
+	}
+}
+
 // httpStatusHint maps common /models failure statuses to a short display-safe
 // hint appended to the error. It never includes the response body.
 func httpStatusHint(code int) string {
@@ -339,6 +420,11 @@ type modelEntry struct {
 	ContextWindow    json.RawMessage `json:"context_window"`
 	ContextLength    json.RawMessage `json:"context_length"`
 	MaxContextLength json.RawMessage `json:"max_context_length"`
+	// The max-output fields (OpenAI-compatible gateways advertise the
+	// completion cap under varying names) are RawMessage for the same reason.
+	MaxCompletionTokens json.RawMessage `json:"max_completion_tokens"`
+	MaxOutputTokens     json.RawMessage `json:"max_output_tokens"`
+	MaxTokens           json.RawMessage `json:"max_tokens"`
 	// SupportedReasoningLevels is the Codex catalog shape's per-model effort
 	// list ([{"effort":"low",...}]); bare strings are accepted too. RawMessage
 	// so an unexpected shape is ignored instead of failing the whole parse.
@@ -401,6 +487,18 @@ func validReasoningLevel(level string) bool {
 // means the entry advertises none.
 func contextWindowOf(e modelEntry) int {
 	for _, raw := range []json.RawMessage{e.ContextWindow, e.ContextLength, e.MaxContextLength} {
+		if n := positiveInt(raw); n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// maxOutputTokensOf returns the entry's advertised maximum completion
+// tokens: the first positive integer among max_completion_tokens,
+// max_output_tokens and max_tokens. 0 means the entry advertises none.
+func maxOutputTokensOf(e modelEntry) int {
+	for _, raw := range []json.RawMessage{e.MaxCompletionTokens, e.MaxOutputTokens, e.MaxTokens} {
 		if n := positiveInt(raw); n > 0 {
 			return n
 		}
@@ -497,6 +595,7 @@ func optionsOf(entries []modelEntry) []ModelOption {
 			ID:              id,
 			DisplayName:     display,
 			ContextWindow:   contextWindowOf(e),
+			MaxOutputTokens: maxOutputTokensOf(e),
 			ReasoningLevels: reasoningLevelsOf(e),
 		})
 	}

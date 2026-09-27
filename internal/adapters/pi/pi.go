@@ -3,7 +3,8 @@
 // MintSwitch-managed OpenAI-compatible provider across Pi's two global config
 // files under ~/.pi/agent: models.json — upserting a custom provider
 // "mintrouter" of the form { baseUrl, api: "openai-completions", apiKey,
-// models: [{id, name}] } under the top-level "providers" map — and
+// models: [{id, name, contextWindow, maxTokens}] } under the top-level
+// "providers" map — and
 // settings.json — setting defaultProvider/defaultModel — while preserving all
 // other existing keys in each file. The managed marker lives in the sidecar
 // marker store, never in Pi's own files.
@@ -13,6 +14,15 @@
 // settings.md): models.json carries { "providers": { <id>: { baseUrl, api,
 // apiKey, models: [{ id, name, ... }] } } }; settings.json carries flat
 // defaultProvider (provider key) and defaultModel (model id).
+//
+// Each model entry carries Pi's optional contextWindow / maxTokens fields
+// (docs/models.md, re-verified 2026-09-27 against v0.84.1: defaults 128000
+// and 16384 when omitted). Pi has no knowledge of a custom provider's
+// models, so without them it assumes 128k for every model: its auto-compaction
+// (contextTokens > contextWindow - reserveTokens) would then fire far too
+// early on 200k–1M models. The values come from the profile's
+// ModelContextWindows / ModelMaxOutputTokens (what the endpoint advertised);
+// a model the endpoint did not describe gets no field, keeping Pi's default.
 package pi
 
 import (
@@ -258,7 +268,14 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		if label := p.ModelNames[m]; label != "" {
 			name = label
 		}
-		modelEntries = append(modelEntries, map[string]any{"id": m, "name": name})
+		entry := map[string]any{"id": m, "name": name}
+		if w := p.ContextWindow(m); w > 0 {
+			entry["contextWindow"] = w
+		}
+		if n := p.MaxOutputTokens(m); n > 0 {
+			entry["maxTokens"] = n
+		}
+		modelEntries = append(modelEntries, entry)
 	}
 	providers[providerID] = map[string]any{
 		"baseUrl": p.BaseURL,

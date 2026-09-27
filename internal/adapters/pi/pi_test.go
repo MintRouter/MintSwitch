@@ -598,3 +598,42 @@ func TestApplyInvalidProfile(t *testing.T) {
 		t.Fatalf("invalid apply must not create models.json, stat err=%v", err)
 	}
 }
+
+// TestApplyWritesContextWindowAndMaxTokens proves a model entry carries Pi's
+// contextWindow / maxTokens when the profile knows the endpoint-advertised
+// values (so Pi does not assume its 128k default and compact too early), and
+// omits the fields — keeping Pi's defaults — when it does not.
+func TestApplyWritesContextWindowAndMaxTokens(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	p := sampleProfile()
+	p.Models = []string{"gpt-mint", "unknown"}
+	p.ApplyAllModels = true
+	p.ModelContextWindows = map[string]int{"gpt-mint": 200_000}
+	p.ModelMaxOutputTokens = map[string]int{"gpt-mint": 32_768}
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	models := readJSON(t, res.ChangedPath)
+	list := models["providers"].(map[string]any)[providerID].(map[string]any)["models"].([]any)
+	if len(list) != 2 {
+		t.Fatalf("models list = %v, want 2 entries", list)
+	}
+	known := list[0].(map[string]any)
+	if known["id"] != "gpt-mint" || known["contextWindow"] != float64(200_000) || known["maxTokens"] != float64(32_768) {
+		t.Fatalf("known entry = %v, want contextWindow 200000 maxTokens 32768", known)
+	}
+	unknown := list[1].(map[string]any)
+	if _, ok := unknown["contextWindow"]; ok {
+		t.Fatalf("contextWindow must be omitted when unknown: %v", unknown)
+	}
+	if _, ok := unknown["maxTokens"]; ok {
+		t.Fatalf("maxTokens must be omitted when unknown: %v", unknown)
+	}
+	// Limits are metadata only: the fingerprint (and so Status) ignores them.
+	p.ModelContextWindows, p.ModelMaxOutputTokens = nil, nil
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("limits must not affect the fingerprint; got %v", st)
+	}
+}
