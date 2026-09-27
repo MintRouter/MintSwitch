@@ -86,6 +86,16 @@ const (
 // uses for its code-review flow; unset, reviews follow the session model.
 const reviewModelKey = "review_model"
 
+// windowKey is the top-level config.toml key overriding the context window
+// Codex assumes for the session model (applied as min(override, the model's
+// max window), so it only ever lowers; auto-compact follows at 90% of the
+// resolved window). Apply writes it in single-model mode when the endpoint
+// advertised a window for the selected model and no catalog is written (see
+// needsCatalog for why the catalog is not used for this) — never alongside a
+// catalog, whose per-model context_window entries a global override would be
+// min'd onto (including the review model's).
+const windowKey = "model_context_window"
+
 // orphanDetail explains the orphan-remnant state: the config files still carry
 // the MintSwitch-injected settings but the managed marker is gone (e.g. a
 // previous restore was interrupted after clearing the marker).
@@ -100,11 +110,13 @@ const orphanDetail = "MintSwitch settings are still present but the managed mark
 const authDriftDetail = "auth.json no longer uses the MintSwitch API key (a ChatGPT sign-in " +
 	"likely replaced it), so Codex bypasses the configured endpoint. Apply the profile again to fix this."
 
-// catalogStaleDetail explains the stale-catalog state: the profile needs
+// catalogStaleDetail explains the stale-metadata state: the profile needs
 // MintSwitch's model catalog (see needsCatalog) but the file is missing,
 // unreferenced, or carries outdated model metadata (e.g. reasoning levels
 // fetched after the last Apply) — or the profile needs none but config.toml
-// still references it.
+// still references it — or, in the single-model override case, the
+// model_context_window key (see windowKey) is missing or differs from the
+// window the endpoint advertised (e.g. fetched after the last Apply).
 const catalogStaleDetail = "Codex's model metadata (reasoning-effort levels, context windows) is out of date. " +
 	"Apply the profile again to update it."
 
@@ -313,8 +325,33 @@ func (a *Adapter) Status(p core.Profile) (core.ToolStatus, string, error) {
 		// Apply removes the catalog reference when the profile needs none,
 		// so a leftover one still feeds Codex outdated model metadata.
 		return core.StatusModifiedExternally, catalogStaleDetail, nil
+	} else if w := p.ContextWindow(p.Model); w > 0 && windowStale(cfg, w) {
+		// The override case (see windowKey): the window is kept out of the
+		// fingerprint, so a missing or changed key is how a window fetched or
+		// refreshed after the last Apply surfaces as "apply again". With no
+		// advertised window nothing is checked — a leftover key cannot be
+		// told apart from a user's own, and the next Apply on a managed
+		// config removes it.
+		return core.StatusModifiedExternally, catalogStaleDetail, nil
 	}
 	return core.StatusAppliedByMintSwitch, core.StatusAppliedByMintSwitch.Detail(), nil
+}
+
+// windowStale reports whether config.toml's model_context_window is not the
+// integer w: missing, a different number, or not a number at all. TOML
+// integers decode as int64 (and a hand-edited value may be a float), so every
+// numeric representation is normalized before comparing.
+func windowStale(cfg map[string]any, w int) bool {
+	switch v := cfg[windowKey].(type) {
+	case int64:
+		return v != int64(w)
+	case int:
+		return v != w
+	case float64:
+		return v != float64(w)
+	default:
+		return true
+	}
 }
 
 // catalogStale reports whether MintSwitch's model catalog does not match what
@@ -371,7 +408,11 @@ func (a *Adapter) authDrifted(p core.Profile) bool {
 // selected model has endpoint-advertised reasoning levels, so Codex has
 // context-window and reasoning-effort metadata (see needsCatalog) — it
 // additionally writes the mintswitch-models.json catalog under the Codex home dir and sets
-// model_catalog_json to it (otherwise it removes both again). The managed
+// model_catalog_json to it (otherwise it removes both again). In single-model
+// mode with no catalog, an endpoint-advertised context window for the
+// selected model is written as the top-level model_context_window override
+// (see windowKey); otherwise that key is removed under the same managed-only
+// rule as review_model. The managed
 // marker is recorded in the sidecar store — never in config.toml — and a
 // leftover legacy in-file marker table is stripped in the same write.
 //
@@ -461,7 +502,8 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	// catalog file left behind by a failed config.toml write routes no traffic
 	// and is overwritten or removed by the next Apply/Restore.
 	catalogPath := a.catalogPath()
-	if needsCatalog(p) {
+	catalog := needsCatalog(p)
+	if catalog {
 		if err := core.WriteJSONObjectAtomic(catalogPath, catalogObject(p)); err != nil {
 			rollbackAuth()
 			return core.ApplyResult{}, err
@@ -485,6 +527,15 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		// Only an already-managed config can carry a MintSwitch-written
 		// review_model, so a user's own pin survives a first Apply.
 		delete(cfg, reviewModelKey)
+	}
+	// The context-window override (see windowKey) is written only when no
+	// catalog carries per-model windows; otherwise it is removed under the
+	// same managed-only rule as review_model, so a user's own override
+	// survives a first Apply.
+	if w := p.ContextWindow(p.Model); !catalog && w > 0 {
+		cfg[windowKey] = w
+	} else if managed {
+		delete(cfg, windowKey)
 	}
 	delete(cfg, core.MarkerKey)
 	if err := a.writeConfig(cfgPath, cfg); err != nil {
@@ -510,9 +561,9 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 // file has no backup but Codex is still MintSwitch-managed (marker in store,
 // or — with the marker lost — the full injection signature still in the
 // files, see orphanRemnant), Restore falls back to stripping the managed keys
-// from it — openai_base_url, model, review_model and MintSwitch's
-// model_catalog_json in config.toml, OPENAI_API_KEY and auth_mode in
-// auth.json — preserving every other key. The mintswitch-models.json catalog file is MintSwitch's own
+// from it — openai_base_url, model, review_model, model_context_window and
+// MintSwitch's model_catalog_json in config.toml, OPENAI_API_KEY and
+// auth_mode in auth.json — preserving every other key. The mintswitch-models.json catalog file is MintSwitch's own
 // creation (never part of any pre-apply backup), so it is simply removed.
 func (a *Adapter) Restore() (core.RestoreResult, error) {
 	cfgPath, authPath := a.configPath(), a.authPath()
@@ -609,8 +660,9 @@ func (a *Adapter) orphanRemnant() bool {
 }
 
 // stripManagedConfig removes the MintSwitch-managed keys (openai_base_url,
-// model, review_model, and model_catalog_json when it points at MintSwitch's
-// own catalog file) from config.toml, preserving every other key. It is the
+// model, review_model, model_context_window, and model_catalog_json when it
+// points at MintSwitch's own catalog file) from config.toml, preserving every
+// other key. It is the
 // Restore fallback when no pristine backup exists. Gated on the managed
 // signal (openai_base_url present) so an unmanaged file is never rewritten;
 // it never creates the file.
@@ -625,6 +677,7 @@ func stripManagedConfig(path string) (bool, error) {
 	delete(cfg, "openai_base_url")
 	delete(cfg, "model")
 	delete(cfg, reviewModelKey)
+	delete(cfg, windowKey)
 	if v, _ := cfg[catalogKey].(string); hasCatalogBase(v) {
 		delete(cfg, catalogKey)
 	}

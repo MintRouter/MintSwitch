@@ -503,6 +503,11 @@ func TestApplyAllModelsWritesCatalog(t *testing.T) {
 	if _, present := cfg[catalogKey]; present {
 		t.Fatalf("%s not removed on single-model re-apply: %+v", catalogKey, cfg)
 	}
+	// With the catalog gone, the selected model's window now travels via the
+	// override key instead.
+	if cfg[windowKey] != int64(1_048_576) {
+		t.Fatalf("%s = %v (%T), want 1048576 on single-model re-apply", windowKey, cfg[windowKey], cfg[windowKey])
+	}
 }
 
 // TestApplyKeepsUserCatalogRef proves a hand-configured model_catalog_json
@@ -1310,6 +1315,40 @@ func TestCatalogReasoningLevels(t *testing.T) {
 	}
 }
 
+// TestCatalogObjectPerModelWindows pins the per-model window plumbing: in
+// "All models" mode every entry carries its own advertised context_window
+// (selected and non-selected models alike), the appended review-model entry
+// gets its own window too, and only a model with no advertised window falls
+// back to defaultContextWindow.
+func TestCatalogObjectPerModelWindows(t *testing.T) {
+	p := sampleProfile()
+	p.Models = []string{"gpt-5.5", "gpt-5.5-mini", "no-window"}
+	p.ApplyAllModels = true
+	p.ReviewModel = "gpt-5.5-review"
+	p.ModelContextWindows = map[string]int{
+		"gpt-5.5":        220_000,
+		"gpt-5.5-mini":   1_048_576,
+		"gpt-5.5-review": 400_000,
+	}
+	entries := catalogObject(p)["models"].([]any)
+	want := map[string]int{
+		"gpt-5.5":        220_000,
+		"gpt-5.5-mini":   1_048_576,
+		"no-window":      defaultContextWindow,
+		"gpt-5.5-review": 400_000,
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("catalog models = %d, want %d", len(entries), len(want))
+	}
+	for _, e := range entries {
+		entry := e.(map[string]any)
+		slug := entry["slug"].(string)
+		if entry["context_window"] != want[slug] {
+			t.Fatalf("%s context_window = %v, want %d", slug, entry["context_window"], want[slug])
+		}
+	}
+}
+
 // TestStatusPreLevelsCatalogStaysApplied proves upgrading keeps an
 // "All models" apply from the previous release Applied: without advertised
 // levels the catalog MintSwitch would write is unchanged (empty levels, no
@@ -1380,6 +1419,368 @@ func TestApplySingleModelWritesCatalogForReasoningLevels(t *testing.T) {
 	}
 	if _, err := os.Stat(catalogPath); !os.IsNotExist(err) {
 		t.Fatalf("catalog not removed without levels: %v", err)
+	}
+}
+
+// TestApplySingleModelWritesWindowOverride proves single-model mode delivers
+// an endpoint-advertised context window for the selected model through the
+// top-level model_context_window override — never through the catalog, which
+// would replace Codex's bundled metadata for a known slug — and that a
+// re-apply without a known window removes the key again.
+func TestApplySingleModelWritesWindowOverride(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	p := sampleProfile()
+	p.ModelContextWindows = map[string]int{p.Model: 220_000}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	catalogPath := filepath.Join(home, ".codex", catalogFileName)
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[windowKey] != int64(220_000) {
+		t.Fatalf("%s = %v (%T), want 220000", windowKey, cfg[windowKey], cfg[windowKey])
+	}
+	if _, present := cfg[catalogKey]; present {
+		t.Fatalf("%s must not be written for a window-only profile: %+v", catalogKey, cfg)
+	}
+	if _, err := os.Stat(catalogPath); !os.IsNotExist(err) {
+		t.Fatalf("catalog must not be written for a window-only profile: %v", err)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied, got %v", st)
+	}
+
+	plain := sampleProfile()
+	if _, err := a.Apply(plain); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg[windowKey]; present {
+		t.Fatalf("%s not removed without window: %+v", windowKey, cfg)
+	}
+	if st, _, _ := a.Status(plain); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied after re-apply without window, got %v", st)
+	}
+}
+
+// TestApplyKeepsUserWindowOverride proves a user's own model_context_window
+// is never deleted by a first Apply over an unmanaged config when the
+// profile knows no window for the selected model (mirroring review_model).
+func TestApplyKeepsUserWindowOverride(t *testing.T) {
+	a, home := newAdapter(t)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTOML(filepath.Join(codexDir, "config.toml"),
+		map[string]any{windowKey: 128_000}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(sampleProfile()); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[windowKey] != int64(128_000) {
+		t.Fatalf("user %s changed: %v", windowKey, cfg[windowKey])
+	}
+}
+
+// TestCatalogModesNeverWriteWindowOverride proves the override key is never
+// written when a catalog is (the catalog carries per-model windows, and a
+// global override would be min'd onto every entry, the review model's
+// included), and that a leftover key on a managed config is removed by such
+// an Apply. Covers "All models" mode and single-model mode with advertised
+// reasoning levels.
+func TestCatalogModesNeverWriteWindowOverride(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*core.Profile)
+	}{
+		{"all models", func(p *core.Profile) {
+			p.Models = []string{p.Model, "gpt-5.5-mini"}
+			p.ApplyAllModels = true
+		}},
+		{"reasoning levels", func(p *core.Profile) {
+			p.ModelReasoningLevels = map[string][]string{p.Model: {"low", "high"}}
+		}},
+		{"review model", func(p *core.Profile) { p.ReviewModel = "gpt-5.5-review" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, home := newAdapter(t)
+			a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+			cfgPath := filepath.Join(home, ".codex", "config.toml")
+			catalogPath := filepath.Join(home, ".codex", catalogFileName)
+
+			// First a single-model Apply that writes the override, so the
+			// config is managed and carries the key.
+			single := sampleProfile()
+			single.ModelContextWindows = map[string]int{single.Model: 220_000}
+			if _, err := a.Apply(single); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := readTOML(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg[windowKey] != int64(220_000) {
+				t.Fatalf("precondition: %s = %v, want 220000", windowKey, cfg[windowKey])
+			}
+
+			p := single
+			tc.mutate(&p)
+			if _, err := a.Apply(p); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err = readTOML(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, present := cfg[windowKey]; present {
+				t.Fatalf("%s must be removed when a catalog is written: %+v", windowKey, cfg)
+			}
+			if cfg[catalogKey] != catalogPath {
+				t.Fatalf("%s = %v, want %q", catalogKey, cfg[catalogKey], catalogPath)
+			}
+			catalog, err := core.ReadJSONObject(catalogPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, _ := catalog["models"].([]any)
+			if len(entries) == 0 {
+				t.Fatal("catalog has no entries")
+			}
+			entry := entries[0].(map[string]any)
+			if entry["slug"] != p.Model {
+				t.Fatalf("entry 0 slug = %v, want %q", entry["slug"], p.Model)
+			}
+			if w, _ := entry["context_window"].(float64); w != 220_000 {
+				t.Fatalf("catalog context_window = %v, want 220000", entry["context_window"])
+			}
+			if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+				t.Fatalf("want Applied, got %v", st)
+			}
+		})
+	}
+}
+
+// TestStatusWindowOverrideStale pins how the context window — kept out of
+// the fingerprint — surfaces as "apply again" in the override case: a plain
+// Apply followed by a window landing afterwards (pre-upgrade install, or a
+// limits backfill), the advertised window changing, and the key being edited
+// by hand are all ModifiedExternally with catalogStaleDetail until re-apply;
+// a hand-edited value that merely changes numeric type stays Applied.
+func TestStatusWindowOverrideStale(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	wantStale := func(t *testing.T, p core.Profile, why string) {
+		t.Helper()
+		st, detail, _ := a.Status(p)
+		if st != core.StatusModifiedExternally || detail != catalogStaleDetail {
+			t.Fatalf("%s: want stale-metadata ModifiedExternally, got %v %q", why, st, detail)
+		}
+	}
+	wantApplied := func(t *testing.T, p core.Profile, why string) {
+		t.Helper()
+		if st, detail, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+			t.Fatalf("%s: want Applied, got %v %q", why, st, detail)
+		}
+	}
+
+	plain := sampleProfile()
+	if _, err := a.Apply(plain); err != nil {
+		t.Fatal(err)
+	}
+	wantApplied(t, plain, "plain apply")
+	withWindow := plain
+	withWindow.ModelContextWindows = map[string]int{plain.Model: 220_000}
+	wantStale(t, withWindow, "window appeared after apply")
+
+	if _, err := a.Apply(withWindow); err != nil {
+		t.Fatal(err)
+	}
+	wantApplied(t, withWindow, "re-apply with window")
+
+	refreshed := withWindow
+	refreshed.ModelContextWindows = map[string]int{plain.Model: 200_000}
+	wantStale(t, refreshed, "advertised window changed")
+	if _, err := a.Apply(refreshed); err != nil {
+		t.Fatal(err)
+	}
+	wantApplied(t, refreshed, "re-apply with changed window")
+
+	setWindow := func(t *testing.T, v any) {
+		t.Helper()
+		cfg, err := readTOML(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v == nil {
+			delete(cfg, windowKey)
+		} else {
+			cfg[windowKey] = v
+		}
+		if err := writeTOML(cfgPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setWindow(t, 123_456)
+	wantStale(t, refreshed, "key edited by hand")
+	setWindow(t, nil)
+	wantStale(t, refreshed, "key deleted by hand")
+	setWindow(t, "200000")
+	wantStale(t, refreshed, "key is not a number")
+	setWindow(t, 200000.0)
+	wantApplied(t, refreshed, "float value equal to the window")
+	if _, err := a.Apply(refreshed); err != nil {
+		t.Fatal(err)
+	}
+	wantApplied(t, refreshed, "re-apply after hand edits")
+
+	// Without an advertised window a leftover key is indistinguishable from
+	// a user's own, so nothing is checked.
+	wantApplied(t, plain, "no window known")
+}
+
+// TestReapplyAddsWindowOverrideRestorePristine covers the no-window → window
+// transition on an already-managed config: the second Apply adds the
+// override key without taking a new snapshot, so Restore still returns
+// config.toml to its pristine pre-MintSwitch bytes with no key left behind.
+func TestReapplyAddsWindowOverrideRestorePristine(t *testing.T) {
+	a, home := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/codex", nil }
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := a.configPath()
+	origCfg := []byte("model = \"original\"\nother = \"keep\"\n")
+	if err := os.WriteFile(cfgPath, origCfg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plain := sampleProfile()
+	if _, err := a.Apply(plain); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg[windowKey]; present {
+		t.Fatalf("plain apply must write no %s: %+v", windowKey, cfg)
+	}
+
+	withWindow := sampleProfile()
+	withWindow.ModelContextWindows = map[string]int{withWindow.Model: 220_000}
+	if _, err := a.Apply(withWindow); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg[windowKey] != int64(220_000) {
+		t.Fatalf("%s = %v, want 220000", windowKey, cfg[windowKey])
+	}
+	if st, _, _ := a.Status(withWindow); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("want Applied, got %v", st)
+	}
+
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	gotCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotCfg) != string(origCfg) {
+		t.Fatalf("config.toml not restored to pristine: %q", gotCfg)
+	}
+}
+
+// TestRestoreNoBackupStripsWindowOverride proves the no-backup Restore
+// fallback strips the MintSwitch-written model_context_window along with the
+// other managed keys while preserving the user's own settings.
+func TestRestoreNoBackupStripsWindowOverride(t *testing.T) {
+	a, home := newAdapter(t)
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("approval_policy = \"never\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := sampleProfile()
+	p.ModelContextWindows = map[string]int{p.Model: 220_000}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(a.r.BackupsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg[windowKey]; present {
+		t.Fatalf("%s must be stripped: %v", windowKey, cfg)
+	}
+	if cfg["approval_policy"] != "never" {
+		t.Fatalf("user config keys must be preserved: %v", cfg)
+	}
+}
+
+// TestNeedsCatalog pins the three catalog triggers — "All models" mode, a
+// pinned review model, and endpoint-advertised reasoning levels — and that
+// an advertised context window never triggers it (it is delivered through
+// the model_context_window override, see windowKey), nor does metadata for
+// a non-selected model alone.
+func TestNeedsCatalog(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*core.Profile)
+		want   bool
+	}{
+		{"plain single-model", func(p *core.Profile) {}, false},
+		{"all models", func(p *core.Profile) { p.ApplyAllModels = true }, true},
+		{"review model", func(p *core.Profile) { p.ReviewModel = "gpt-5.5-mini" }, true},
+		{"reasoning levels", func(p *core.Profile) {
+			p.ModelReasoningLevels = map[string][]string{p.Model: {"low", "high"}}
+		}, true},
+		// A context window never triggers the catalog: it goes through the
+		// model_context_window override (windowKey) instead.
+		{"context window on selected model", func(p *core.Profile) {
+			p.ModelContextWindows = map[string]int{p.Model: 220_000}
+		}, false},
+		{"context window on non-selected model", func(p *core.Profile) {
+			p.ModelContextWindows = map[string]int{"other-model": 220_000}
+		}, false},
+		{"context window above Codex's fallback", func(p *core.Profile) {
+			p.ModelContextWindows = map[string]int{p.Model: 1_048_576}
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := sampleProfile()
+			tc.mutate(&p)
+			if got := needsCatalog(p); got != tc.want {
+				t.Fatalf("needsCatalog = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
