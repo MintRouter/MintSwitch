@@ -313,7 +313,7 @@ func (s *Service) backfillReasoningLevels(toolID string) {
 // limitsBackfillTools are the tools whose Apply writes per-model context
 // windows and/or max output tokens, and so benefit from
 // [Service.backfillModelLimits].
-var limitsBackfillTools = map[string]bool{"claude-code": true, "codex": true, "opencode": true, "pi": true}
+var limitsBackfillTools = map[string]bool{"claude-code": true, "codex": true, "opencode": true, "pi": true, "omp": true}
 
 // backfillModelLimits best-effort fills in toolID's effective provider's
 // missing ModelContextWindows and ModelMaxOutputTokens from the endpoint's

@@ -42,6 +42,8 @@ func TestArgsPerTool(t *testing.T) {
 		{"claude-code", []string{"npm", "install", "-g", "@anthropic-ai/claude-code"}, []string{"npm", "uninstall", "-g", "@anthropic-ai/claude-code"}},
 		{"codex", []string{"npm", "install", "-g", "@openai/codex"}, []string{"npm", "uninstall", "-g", "@openai/codex"}},
 		{"opencode", []string{"npm", "install", "-g", "opencode-ai"}, []string{"npm", "uninstall", "-g", "opencode-ai"}},
+		{"pi", []string{"npm", "install", "-g", "@earendil-works/pi-coding-agent"}, []string{"npm", "uninstall", "-g", "@earendil-works/pi-coding-agent"}},
+		{"omp", []string{"npm", "install", "-g", "@oh-my-pi/pi-coding-agent"}, []string{"npm", "uninstall", "-g", "@oh-my-pi/pi-coding-agent"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.toolID, func(t *testing.T) {
@@ -160,6 +162,44 @@ func TestUninstallNpmPrefix(t *testing.T) {
 	}
 	if len(removed) != 0 {
 		t.Fatalf("npm uninstall must not delete files: %v", removed)
+	}
+}
+
+// TestUninstallBunGlobal: a ~/.bun/bin shim whose symlink target lives under
+// ~/.bun/install/global/node_modules is classified as Bun (not npm, despite the
+// node_modules segment) and removed via `bun remove -g <pkg>`; no file is
+// deleted.
+func TestUninstallBunGlobal(t *testing.T) {
+	home := t.TempDir()
+	bunBin := filepath.Join(home, ".bun", "bin")
+	if err := os.MkdirAll(bunBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(bunBin, "omp")
+	target := filepath.Join(home, ".bun", "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent", "bin", "omp")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{out: "removed @oh-my-pi/pi-coding-agent"}
+	var removed []string
+	inst := NewWithResolver(fr, okLook, resolveTo(link), []string{filepath.Join(home, ".local", "bin")},
+		func(p string) error { removed = append(removed, p); return nil })
+
+	args, out, err := inst.Uninstall(context.Background(), "omp")
+	if err != nil {
+		t.Fatalf("Uninstall error: %v", err)
+	}
+	if !reflect.DeepEqual(args, []string{"bun", "remove", "-g", "@oh-my-pi/pi-coding-agent"}) {
+		t.Fatalf("args = %v", args)
+	}
+	if fr.runs != 1 || fr.name != "/usr/bin/bun" || !reflect.DeepEqual(fr.args, []string{"remove", "-g", "@oh-my-pi/pi-coding-agent"}) {
+		t.Fatalf("runner invoked wrong: runs=%d name=%q args=%v", fr.runs, fr.name, fr.args)
+	}
+	if out == "" {
+		t.Fatal("expected bun output")
+	}
+	if len(removed) != 0 {
+		t.Fatalf("bun remove must not delete files: %v", removed)
 	}
 }
 
@@ -313,10 +353,74 @@ func TestClassifyMethodWindowsPaths(t *testing.T) {
 			`C:\Program Files\Codex\codex.exe`,
 			methodUnknown,
 		},
+		{
+			"bun global shim with backslashes",
+			`C:\Users\alice\.bun\bin\omp.exe`,
+			methodBun,
+		},
+		{
+			"bun global node_modules target with backslashes wins over npm",
+			`C:\Users\alice\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent\bin\omp`,
+			methodBun,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := classifyMethod(tt.resolved, nil); got != tt.want {
+				t.Fatalf("classifyMethod(%q) = %v, want %v", tt.resolved, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClassifyMethodBun pins the Bun-global signal: a path directly under
+// ~/.bun/bin, a symlink whose target is under ~/.bun/install/global/node_modules
+// (classified Bun despite the node_modules segment, so it is never handed to
+// npm), and a plain ~/.local/bin file that stays standalone even though the
+// curl installer can also produce it. The .bun check must still lose to a
+// Cellar target.
+func TestClassifyMethodBun(t *testing.T) {
+	home := t.TempDir()
+	bunBin := filepath.Join(home, ".bun", "bin")
+	localBin := filepath.Join(home, ".local", "bin")
+	for _, d := range []string{bunBin, localBin} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bunTarget := filepath.Join(home, ".bun", "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent", "bin", "omp")
+	bunLink := filepath.Join(bunBin, "omp")
+	if err := os.Symlink(bunTarget, bunLink); err != nil {
+		t.Fatal(err)
+	}
+	localLink := filepath.Join(localBin, "omp-linked")
+	if err := os.Symlink(bunTarget, localLink); err != nil {
+		t.Fatal(err)
+	}
+	standalone := filepath.Join(localBin, "omp")
+	if err := os.WriteFile(standalone, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cellarLink := filepath.Join(bunBin, "brewed")
+	if err := os.Symlink("/opt/homebrew/Cellar/omp/1.0/bin/omp", cellarLink); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		resolved string
+		want     uninstallMethod
+	}{
+		{"lexical ~/.bun/bin path", "/Users/x/.bun/bin/omp", methodBun},
+		{"lexical ~/.bun global node_modules path", "/Users/x/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/bin/omp", methodBun},
+		{"~/.bun/bin symlink to global node_modules", bunLink, methodBun},
+		{"~/.local/bin symlink whose target is under ~/.bun", localLink, methodBun},
+		{"regular file in ~/.local/bin stays standalone", standalone, methodStandalone},
+		{"Cellar target wins over ~/.bun location", cellarLink, methodHomebrew},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyMethod(tt.resolved, []string{localBin}); got != tt.want {
 				t.Fatalf("classifyMethod(%q) = %v, want %v", tt.resolved, got, tt.want)
 			}
 		})
@@ -444,6 +548,16 @@ func TestPlanUninstallMethods(t *testing.T) {
 			name: "brew missing", toolID: "opencode", resolved: brewLink, found: true,
 			look: missLook, wantMethod: UninstallMethodHomebrew, wantAction: UninstallActionRunCommand,
 			wantArgs: []string{"brew", "uninstall", "opencode"}, wantTarget: "opencode", wantWarn: true, wantErr: ErrBrewMissing,
+		},
+		{
+			name: "bun", toolID: "omp", resolved: filepath.Join(root, ".bun", "bin", "omp"), found: true,
+			look: okLook, wantMethod: UninstallMethodBun, wantAction: UninstallActionRunCommand,
+			wantArgs: []string{"bun", "remove", "-g", "@oh-my-pi/pi-coding-agent"}, wantTarget: "@oh-my-pi/pi-coding-agent", wantCan: true,
+		},
+		{
+			name: "bun missing", toolID: "omp", resolved: filepath.Join(root, ".bun", "bin", "omp"), found: true,
+			look: missLook, wantMethod: UninstallMethodBun, wantAction: UninstallActionRunCommand,
+			wantArgs: []string{"bun", "remove", "-g", "@oh-my-pi/pi-coding-agent"}, wantTarget: "@oh-my-pi/pi-coding-agent", wantWarn: true, wantErr: ErrBunMissing,
 		},
 	}
 

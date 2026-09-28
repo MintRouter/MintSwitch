@@ -5,12 +5,14 @@
 // interpolated into a command — only the fixed package names below are ever
 // passed to npm.
 //
-// Uninstall is install-method aware. A tool can be installed via npm, Homebrew,
-// or a standalone (curl) installer, so removing it by always running
-// "npm uninstall -g" silently no-ops for the brew/curl cases. Uninstall resolves
-// the tool's CLI binary path and classifies the install method from it, then
-// runs the matching action: "brew uninstall" for Homebrew, "npm uninstall -g"
-// for npm-global, or deleting the exact binary file for a standalone install.
+// Uninstall is install-method aware. A tool can be installed via npm, Bun,
+// Homebrew, or a standalone (curl) installer, so removing it by always running
+// "npm uninstall -g" silently no-ops for the bun/brew/curl cases. Uninstall
+// resolves the tool's CLI binary path and classifies the install method from
+// it, then runs the matching action: "brew uninstall" for Homebrew,
+// "bun remove -g" for a Bun global install (the binary or its symlink target
+// lives under ~/.bun), "npm uninstall -g" for npm-global, or deleting the exact
+// binary file for a standalone install.
 //
 // External processes run through a [CommandRunner] seam and file deletion runs
 // through an injectable remove func, so tests exercise command construction and
@@ -37,6 +39,11 @@ var ErrNpmMissing = errors.New("installer: npm not found")
 // but the brew executable cannot be found on PATH or in the curated bin dirs.
 var ErrBrewMissing = errors.New("installer: brew not found")
 
+// ErrBunMissing is returned when a Bun-global-installed tool is being
+// uninstalled but the bun executable cannot be found on PATH or in the curated
+// bin dirs.
+var ErrBunMissing = errors.New("installer: bun not found")
+
 // ErrUnknownTool is returned when a toolID has no whitelisted npm package.
 var ErrUnknownTool = errors.New("installer: unknown tool")
 
@@ -56,12 +63,13 @@ type binSpec struct {
 
 // binaries maps each supported tool ID to its CLI binary and brew name. The IDs
 // match the adapter ID() values; the bin names match the adapters' Detect()
-// lookups (claude, codex, opencode).
+// lookups (claude, codex, opencode, pi, omp).
 var binaries = map[string]binSpec{
 	"claude-code": {bin: "claude", brew: "claude"},
 	"codex":       {bin: "codex", brew: "codex"},
 	"opencode":    {bin: "opencode", brew: "opencode"},
 	"pi":          {bin: "pi", brew: "pi"},
+	"omp":         {bin: "omp", brew: "omp"},
 }
 
 // brewPrefixes are the Homebrew install prefixes used as a secondary signal when
@@ -80,12 +88,14 @@ type Package struct {
 
 // packages whitelists each supported tool ID to its npm package. The IDs match
 // the adapter ID() values in internal/adapters. Values verified from official
-// docs (2026).
+// docs (2026). The same package name is passed to "bun remove -g" for a
+// Bun-global install, since Bun installs from the npm registry.
 var packages = map[string]Package{
 	"claude-code": {NpmPackage: "@anthropic-ai/claude-code"},
 	"codex":       {NpmPackage: "@openai/codex"},
 	"opencode":    {NpmPackage: "opencode-ai"},
 	"pi":          {NpmPackage: "@earendil-works/pi-coding-agent"},
+	"omp":         {NpmPackage: "@oh-my-pi/pi-coding-agent"},
 }
 
 // Spec returns the whitelisted package for toolID and whether it is known.
@@ -171,7 +181,7 @@ func envWithDirOnPath(env []string, exe string) []string {
 }
 
 // Installer builds and runs install/uninstall actions for a tool. Install is
-// npm-only; Uninstall is install-method aware (npm / Homebrew / standalone) and
+// npm-only; Uninstall is install-method aware (npm / Bun / Homebrew / standalone) and
 // uses resolve to locate the tool's binary, userBinDirs to bound where a
 // standalone binary may be deleted, and remove to perform the deletion.
 type Installer struct {
@@ -270,6 +280,7 @@ func (i *Installer) executable(name string) (string, error) {
 // Uninstall method values returned by [Installer.PlanUninstall].
 const (
 	UninstallMethodNPM        = "npm"
+	UninstallMethodBun        = "bun"
 	UninstallMethodHomebrew   = "homebrew"
 	UninstallMethodStandalone = "standalone"
 	UninstallMethodUnknown    = "unknown"
@@ -285,7 +296,8 @@ const (
 // UninstallPlan is a read-only description of the action the installer would
 // take for a tool in the environment as it exists now. Args contains only
 // installer-built, whitelisted argv and is never accepted back from callers.
-// Target is the npm package, Homebrew formula/cask, or resolved binary path.
+// Target is the npm package (npm and Bun methods), Homebrew formula/cask, or
+// resolved binary path.
 type UninstallPlan struct {
 	Method     string
 	Action     string
@@ -326,7 +338,7 @@ func (i *Installer) CLIInstalled(toolID string) bool {
 }
 
 // PlanUninstall resolves and classifies toolID without running a command or
-// deleting a file. Missing npm/brew and unknown methods return a populated plan
+// deleting a file. Missing npm/bun/brew and unknown methods return a populated plan
 // plus their sentinel error so callers can render a useful, non-destructive
 // preview. Unknown tool IDs return ErrUnknownTool and an empty plan.
 func (i *Installer) PlanUninstall(toolID string) (UninstallPlan, error) {
@@ -358,6 +370,21 @@ func (i *Installer) PlanUninstall(toolID string) (UninstallPlan, error) {
 			plan.CanExecute = false
 			plan.Warning = "Homebrew (brew) is required to uninstall this tool. Install Homebrew, then retry."
 			return plan, ErrBrewMissing
+		}
+		return plan, nil
+	case methodBun:
+		pkg, _ := Spec(toolID)
+		plan := UninstallPlan{
+			Method:     UninstallMethodBun,
+			Action:     UninstallActionRunCommand,
+			Args:       []string{"bun", "remove", "-g", pkg.NpmPackage},
+			Target:     pkg.NpmPackage,
+			CanExecute: true,
+		}
+		if _, err := i.lookPath("bun"); err != nil {
+			plan.CanExecute = false
+			plan.Warning = "Bun is required to uninstall this tool. Install Bun, then retry."
+			return plan, ErrBunMissing
 		}
 		return plan, nil
 	case methodNpm:
@@ -435,6 +462,7 @@ type uninstallMethod int
 const (
 	methodUnknown uninstallMethod = iota
 	methodHomebrew
+	methodBun
 	methodNpm
 	methodStandalone
 )
@@ -442,17 +470,21 @@ const (
 // classifyMethod determines how the binary at resolved was installed, using
 // first-match-wins ordering over authoritative signals:
 //  1. Homebrew: the path (or its symlink target) lies in a Cellar/Caskroom.
-//  2. npm-global: the path (or target) lies under a node_modules / .npm-global
+//  2. Bun-global: the path (or target) lies under a .bun tree (~/.bun/bin shim
+//     or its ~/.bun/install/global/node_modules target).
+//  3. npm-global: the path (or target) lies under a node_modules / .npm-global
 //     tree, or under Windows' global npm shim dir (%APPDATA%\npm).
-//  3. Homebrew: the path (or target) sits under a brew prefix (/opt/homebrew, /usr/local).
-//  4. standalone: the resolved path is a regular file directly inside a curated
+//  4. Homebrew: the path (or target) sits under a brew prefix (/opt/homebrew, /usr/local).
+//  5. standalone: the resolved path is a regular file directly inside a curated
 //     userBinDir — the only case that authorises deleting the file.
 //
 // Anything else is methodUnknown (a safe no-op). The Cellar/node_modules checks
 // precede the brew-prefix check so an npm-global package installed under a
-// Homebrew node prefix is still classified as npm. Paths are slash-normalised
+// Homebrew node prefix is still classified as npm. The .bun check precedes the
+// node_modules check because a Bun global's symlink target also contains
+// /node_modules/ and must not be handed to npm. Paths are slash-normalised
 // (see normalizeSlashes) before matching so Windows backslash paths classify too,
-// and the npm signals are matched case-insensitively since Windows paths are.
+// and the bun/npm signals are matched case-insensitively since Windows paths are.
 // The curated-dir (deletion) check stays exact.
 func classifyMethod(resolved string, userBinDirs []string) uninstallMethod {
 	candidates := []string{normalizeSlashes(resolved)}
@@ -462,6 +494,11 @@ func classifyMethod(resolved string, userBinDirs []string) uninstallMethod {
 	for _, p := range candidates {
 		if strings.Contains(p, "/Cellar/") || strings.Contains(p, "/Caskroom/") {
 			return methodHomebrew
+		}
+	}
+	for _, p := range candidates {
+		if strings.Contains(strings.ToLower(p), "/.bun/") {
+			return methodBun
 		}
 	}
 	for _, p := range candidates {

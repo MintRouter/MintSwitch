@@ -105,6 +105,7 @@ export const zh: Record<string, string> = {
   "tool.tiersTitle": "固定 Claude Code 的 opus / sonnet / haiku / fable 层级所用的模型",
   "tool.tiersTitle.opencode": "固定 OpenCode 用于轻量（small/fast）任务的模型",
   "tool.tiersTitle.codex": "固定 Codex 用于 /review 的模型",
+  "tool.tiersTitle.omp": "固定 oh-my-pi 用于轻量（smol）任务的模型",
   "tool.uninstall": "卸载",
   "tool.manualInstall": "需手动安装",
   // Model tiers dialog
@@ -115,6 +116,8 @@ export const zh: Record<string, string> = {
   "tiers.hintAfter.opencode": " 上固定 OpenCode 用于轻量后台任务（如标题生成，small/fast）的模型。留空则跟随默认模型。重新应用配置后更改才会生效。",
   "tiers.hintBefore.codex": "在 ",
   "tiers.hintAfter.codex": " 上固定 Codex 在 /review 代码审查时使用的模型。留空则审查跟随会话模型。重新应用配置后更改才会生效。",
+  "tiers.hintBefore.omp": "在 ",
+  "tiers.hintAfter.omp": " 上固定 oh-my-pi 用于 smol 角色（轻量后台任务）的模型。留空则跟随默认模型。重新应用配置后更改才会生效。",
   "tiers.rowSmallFast": "小型/快速（Small/Fast）",
   "tiers.rowReview": "审查（Review）",
   "tiers.useDefault": "使用默认模型",

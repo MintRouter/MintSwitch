@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-hidden="true">
+  <rect width="48" height="48" rx="11" fill="#0f5f5a"/>
+  <!-- oh-my-pi (omp) mark: a bold omega on the shared 48x48 tile, in a deep
+       teal so it stays distinct from the black Pi tile. -->
+  <path fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"
+        d="M14 36h6.5l-3.2-5.4A11 11 0 1 1 30.7 30.6L27.5 36H34"/>
+</svg>

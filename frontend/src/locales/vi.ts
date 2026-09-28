@@ -105,6 +105,7 @@ export const vi: Record<string, string> = {
   "tool.tiersTitle": "Ghim các model dùng cho các bậc opus / sonnet / haiku / fable của Claude Code",
   "tool.tiersTitle.opencode": "Ghim model OpenCode dùng cho tác vụ nhẹ (small/fast)",
   "tool.tiersTitle.codex": "Ghim model Codex dùng cho /review",
+  "tool.tiersTitle.omp": "Ghim model oh-my-pi dùng cho tác vụ nhẹ (smol)",
   "tool.uninstall": "Gỡ cài đặt",
   "tool.manualInstall": "Cài đặt thủ công",
   // Model tiers dialog
@@ -115,6 +116,8 @@ export const vi: Record<string, string> = {
   "tiers.hintAfter.opencode": ". Để trống sẽ theo model mặc định. Áp dụng lại cấu hình để thay đổi có hiệu lực.",
   "tiers.hintBefore.codex": "Ghim model Codex dùng cho luồng /review trên ",
   "tiers.hintAfter.codex": ". Để trống thì review sẽ theo model của phiên. Áp dụng lại cấu hình để thay đổi có hiệu lực.",
+  "tiers.hintBefore.omp": "Ghim model oh-my-pi dùng cho vai trò smol (các tác vụ nền nhẹ) trên ",
+  "tiers.hintAfter.omp": ". Để trống sẽ theo model mặc định. Áp dụng lại cấu hình để thay đổi có hiệu lực.",
   "tiers.rowSmallFast": "Small/Fast",
   "tiers.rowReview": "Review",
   "tiers.useDefault": "Dùng model mặc định",

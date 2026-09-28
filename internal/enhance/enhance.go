@@ -71,7 +71,7 @@ func New(r *paths.Resolver, e *backup.Engine, exe string) *Manager {
 // has no slash commands, so it is excluded.
 func Supported(toolID string) bool {
 	switch toolID {
-	case "claude-code", "codex", "opencode", "pi":
+	case "claude-code", "codex", "opencode", "pi", "omp":
 		return true
 	}
 	return false
@@ -101,6 +101,10 @@ func (m *Manager) path(toolID string) (string, bool) {
 	case "pi":
 		// Pi: ~/.pi/agent/prompts/<name>.md → /<name>. Direct children only.
 		return m.r.Join(".pi", "agent", "prompts", CommandName+".md"), true
+	case "omp":
+		// oh-my-pi: ~/.omp/agent/prompts/<name>.md → /<name>. Same template
+		// format as Pi (frontmatter description / argument-hint, $ARGUMENTS).
+		return m.r.Join(".omp", "agent", "prompts", CommandName+".md"), true
 	}
 	return "", false
 }
@@ -221,7 +225,7 @@ func (m *Manager) Render(toolID string) []byte {
 		b.WriteString("## Enhanced prompt (MintRouter `/v1/enhance-prompt`)\n\n")
 		b.WriteString("!`printf '%s' \"$ARGUMENTS\" | " + cmd + "`\n\n")
 		writeInlineInstructions(&b)
-	case "codex", "pi":
+	case "codex", "pi", "omp":
 		b.WriteString("---\n")
 		b.WriteString("description: Enhance a rough task through MintRouter's /v1/enhance-prompt (via MintSwitch), show the enhanced prompt first, then work from it\n")
 		b.WriteString("argument-hint: <rough task description>\n")

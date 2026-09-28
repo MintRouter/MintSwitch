@@ -33,6 +33,7 @@ import (
 	"mintswitch/internal/adapters/claudecode"
 	"mintswitch/internal/adapters/claudedesktop"
 	"mintswitch/internal/adapters/codex"
+	"mintswitch/internal/adapters/omp"
 	"mintswitch/internal/adapters/opencode"
 	"mintswitch/internal/adapters/pi"
 	"mintswitch/internal/backup"
@@ -293,6 +294,7 @@ func NewWithDeps(r *paths.Resolver, e *backup.Engine) *Service {
 	reg.Register(codex.New(r, e, mk))
 	reg.Register(opencode.New(r, e, mk))
 	reg.Register(pi.New(r, e, mk))
+	reg.Register(omp.New(r, e, mk))
 	inst := installer.NewMethodAware(installer.ExecRunner{}, r)
 	store := settings.NewStore(r.SettingsPath())
 	s := NewWithInstaller(reg, store, inst)
@@ -1044,7 +1046,8 @@ func (s *Service) PlanUninstall(toolID string) (UninstallPlan, error) {
 		return UninstallPlan{}, fmt.Errorf("service: unknown tool %q", toolID)
 	}
 	if err != nil && !errors.Is(err, installer.ErrUnknownMethod) &&
-		!errors.Is(err, installer.ErrNpmMissing) && !errors.Is(err, installer.ErrBrewMissing) {
+		!errors.Is(err, installer.ErrNpmMissing) && !errors.Is(err, installer.ErrBrewMissing) &&
+		!errors.Is(err, installer.ErrBunMissing) {
 		return UninstallPlan{}, err
 	}
 	return UninstallPlan{
@@ -1087,6 +1090,9 @@ func (s *Service) installResult(toolID, action string, args []string, out string
 		return res, nil
 	case errors.Is(err, installer.ErrBrewMissing):
 		res.Error = "Homebrew (brew) is required to uninstall this tool. Install Homebrew, then retry."
+		return res, nil
+	case errors.Is(err, installer.ErrBunMissing):
+		res.Error = "Bun is required to uninstall this tool. Install Bun, then retry."
 		return res, nil
 	case errors.Is(err, installer.ErrUnknownMethod):
 		// The installer puts the clear, user-facing message in out; surface it as
