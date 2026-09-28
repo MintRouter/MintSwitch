@@ -189,8 +189,10 @@ func (r *Resolver) MarkersPath() string {
 
 // UserBinDirs returns the HOME-derived curated bin directories (~/.local/bin,
 // ~/.npm-global/bin, ~/bin). These are the only directories MintSwitch will ever
-// delete a standalone tool binary from. It derives everything from Home and
-// never consults os.UserHomeDir, so tests pointing Home at a temp dir stay
+// delete a standalone tool binary from. ~/.bun/bin is deliberately excluded: a
+// Bun global install is removed via "bun remove -g", never by deleting its
+// shim (see binDirs for the search-only set). It derives everything from Home
+// and never consults os.UserHomeDir, so tests pointing Home at a temp dir stay
 // isolated; an empty Home yields no directories.
 func (r *Resolver) UserBinDirs() []string {
 	if r.Home == "" {
@@ -204,15 +206,21 @@ func (r *Resolver) UserBinDirs() []string {
 }
 
 // binDirs returns the bounded, curated set of directories searched for tool
-// binaries: the HOME-derived user dirs (see UserBinDirs) plus the configured
-// SystemBinDirs. On Windows it additionally includes the Codex standalone CLI
-// installer's bin dir (%LOCALAPPDATA%\Programs\OpenAI\Codex\bin), which the
-// installer does not add to PATH, npm's default global prefix (%APPDATA%\npm)
-// and the Node.js install dir (%ProgramFiles%\nodejs), so a GUI app launched
-// with a stale PATH still finds npm and npm-global CLIs. These are search-only:
-// UserBinDirs (the standalone-deletion bound) deliberately excludes them.
+// binaries: the HOME-derived user dirs (see UserBinDirs), Bun's global bin dir
+// (~/.bun/bin, where "bun install -g" places CLI shims and bun itself lives; a
+// GUI app's stale PATH usually lacks it) and the configured SystemBinDirs. On
+// Windows it additionally includes the Codex standalone CLI installer's bin dir
+// (%LOCALAPPDATA%\Programs\OpenAI\Codex\bin), which the installer does not add
+// to PATH, npm's default global prefix (%APPDATA%\npm) and the Node.js install
+// dir (%ProgramFiles%\nodejs), so a GUI app launched with a stale PATH still
+// finds npm and npm-global CLIs. These are search-only: UserBinDirs (the
+// standalone-deletion bound) deliberately excludes them.
 func (r *Resolver) binDirs(goos string) []string {
-	dirs := append(r.UserBinDirs(), r.SystemBinDirs...)
+	dirs := r.UserBinDirs()
+	if r.Home != "" {
+		dirs = append(dirs, filepath.Join(r.Home, ".bun", "bin"))
+	}
+	dirs = append(dirs, r.SystemBinDirs...)
 	if goos == "windows" {
 		dirs = append(dirs,
 			filepath.Join(r.LocalAppDataDir(), "Programs", "OpenAI", "Codex", "bin"),
@@ -235,8 +243,9 @@ func (r *Resolver) BinaryResolvable(lookPath func(string) (string, error), binNa
 // [Resolver.BinaryResolvable] would find. It first consults lookPath (the
 // process PATH; exec.LookPath in production) and then a bounded, curated set of
 // common global-bin directories (see binDirs), so a Finder-launched app with a
-// narrow PATH still resolves CLIs installed via "npm install -g" or a curl
-// installer. It performs only filesystem stats and never spawns a subprocess, so
+// narrow PATH still resolves CLIs installed via "npm install -g",
+// "bun install -g" or a curl installer. It performs only filesystem stats and
+// never spawns a subprocess, so
 // it is safe to call on every Detect/ListTools. A nil lookPath defaults to
 // exec.LookPath. ok is false (and path empty) when binName cannot be resolved.
 func (r *Resolver) ResolveBinary(lookPath func(string) (string, error), binName string) (string, bool) {

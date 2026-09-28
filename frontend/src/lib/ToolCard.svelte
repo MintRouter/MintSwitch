@@ -146,15 +146,17 @@
   // ---- Model tiers dialog (per tool) ----
   // Pins tier models on the tool's EFFECTIVE provider: Claude Code edits its
   // opus/sonnet/haiku/fable aliases plus background (small/fast) tasks,
-  // OpenCode edits only Small/Fast (lightweight tasks like title generation)
-  // and Codex edits only Review (/review). Save persists through the existing
+  // OpenCode and oh-my-pi edit only Small/Fast (lightweight tasks like title
+  // generation / the smol role) and Codex edits only Review (/review). Save
+  // persists through the existing
   // UpdateProvider path (api_key stays empty = keep the stored key) and only
   // overrides the fields this tool's dialog shows — the other tools' pins on
   // the same provider pass through untouched. Nothing persists on Cancel.
   const effectiveProvider = $derived(
     providers.find((p) => p.id === tool.selected_provider_id) ?? null,
   );
-  const tierToolIds = ["claude-code", "opencode", "codex"];
+  const tierToolIds = ["claude-code", "opencode", "codex", "omp"];
+  const smallFastOnly = $derived(tool.id === "opencode" || tool.id === "omp");
   const showTiers = $derived(tierToolIds.includes(tool.id) && tool.installed && !!effectiveProvider);
   const tierModels = $derived(effectiveProvider?.models ?? []);
   const tierNames = $derived(effectiveProvider?.model_names ?? {});
@@ -172,7 +174,7 @@
   let tiersReturnFocus: HTMLElement | null = null;
 
   const tierRows = $derived.by(() => {
-    if (tool.id === "opencode") {
+    if (smallFastOnly) {
       return [
         { id: "smallfast", label: t("tiers.rowSmallFast"), get: () => tSmallFast, set: (v: string) => (tSmallFast = v) },
       ];
@@ -195,15 +197,18 @@
   // provider name (before/after halves keep <strong> markup out of i18n).
   const tiersButtonTitle = $derived(
     tool.id === "opencode" ? t("tool.tiersTitle.opencode")
+    : tool.id === "omp" ? t("tool.tiersTitle.omp")
     : tool.id === "codex" ? t("tool.tiersTitle.codex")
     : t("tool.tiersTitle"),
   );
   const tiersHint = $derived(
     tool.id === "opencode"
       ? { before: t("tiers.hintBefore.opencode"), after: t("tiers.hintAfter.opencode") }
-      : tool.id === "codex"
-        ? { before: t("tiers.hintBefore.codex"), after: t("tiers.hintAfter.codex") }
-        : { before: t("tiers.hintBefore"), after: t("tiers.hintAfter") },
+      : tool.id === "omp"
+        ? { before: t("tiers.hintBefore.omp"), after: t("tiers.hintAfter.omp") }
+        : tool.id === "codex"
+          ? { before: t("tiers.hintBefore.codex"), after: t("tiers.hintAfter.codex") }
+          : { before: t("tiers.hintBefore"), after: t("tiers.hintAfter") },
   );
 
   function tierName(m: string): string {
@@ -240,8 +245,8 @@
     tiersError = "";
     // Full provider payload passing every stored field through unchanged
     // (the backend replaces the whole provider on update), then override ONLY
-    // the tier pins this tool's dialog edits — saving from OpenCode/Codex
-    // must never wipe Claude Code's opus/sonnet/haiku/fable pins on the same
+    // the tier pins this tool's dialog edits — saving from OpenCode/oh-my-pi/
+    // Codex must never wipe Claude Code's opus/sonnet/haiku/fable pins on the same
     // provider, and vice versa. An empty api_key means "keep the stored one".
     const payload: Provider = {
       id: p.id,
@@ -261,7 +266,7 @@
       fable_model: p.fable_model ?? "",
       review_model: p.review_model ?? "",
     };
-    if (tool.id === "opencode") {
+    if (smallFastOnly) {
       payload.small_fast_model = tSmallFast;
     } else if (tool.id === "codex") {
       payload.review_model = tReview;

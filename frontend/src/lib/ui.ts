@@ -81,6 +81,7 @@ const npmPackages: Record<string, { pkg: string; installFlags?: string[] }> = {
   codex: { pkg: "@openai/codex" },
   opencode: { pkg: "opencode-ai" },
   pi: { pkg: "@earendil-works/pi-coding-agent" },
+  omp: { pkg: "@oh-my-pi/pi-coding-agent" },
 };
 
 /**
@@ -105,6 +106,7 @@ export const builtinLogoIds = new Set<string>([
   "codex",
   "opencode",
   "pi",
+  "omp",
 ]);
 
 /**

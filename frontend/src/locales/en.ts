@@ -106,6 +106,7 @@ export const en: Record<string, string> = {
   "tool.tiersTitle": "Pin the models used for Claude Code's opus / sonnet / haiku / fable tiers",
   "tool.tiersTitle.opencode": "Pin the model OpenCode uses for lightweight (small/fast) tasks",
   "tool.tiersTitle.codex": "Pin the model Codex uses for /review",
+  "tool.tiersTitle.omp": "Pin the model oh-my-pi uses for lightweight (smol) tasks",
   "tool.uninstall": "Uninstall",
   "tool.manualInstall": "Manual installation",
   // Model tiers dialog
@@ -116,6 +117,8 @@ export const en: Record<string, string> = {
   "tiers.hintAfter.opencode": ". Leave empty to follow the default model. Re-apply the configuration for changes to take effect.",
   "tiers.hintBefore.codex": "Pin the model Codex uses for its /review flow on ",
   "tiers.hintAfter.codex": ". Leave empty to have reviews follow the session model. Re-apply the configuration for changes to take effect.",
+  "tiers.hintBefore.omp": "Pin the model oh-my-pi uses for its smol role (lightweight background tasks) on ",
+  "tiers.hintAfter.omp": ". Leave empty to follow the default model. Re-apply the configuration for changes to take effect.",
   "tiers.rowSmallFast": "Small/Fast",
   "tiers.rowReview": "Review",
   "tiers.useDefault": "Use default model",

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -285,6 +286,58 @@ func TestResolveBinaryWindowsNodeDirs(t *testing.T) {
 		if dir == npmPrefix || dir == nodeDir {
 			t.Fatalf("UserBinDirs must not include search-only dir %q", dir)
 		}
+	}
+}
+
+// TestResolveBinaryBunGlobalDir pins Bun's global bin dir (~/.bun/bin) as a
+// search-only dir on every OS: "bun install -g" places CLI shims there and a GUI
+// app's stale PATH usually lacks it. UserBinDirs (the standalone-deletion
+// bound) must never include it — a Bun global is removed via "bun remove -g",
+// not by deleting its shim — and must stay exactly the three curated dirs.
+func TestResolveBinaryBunGlobalDir(t *testing.T) {
+	home := t.TempDir()
+	r := &Resolver{Home: home}
+	miss := func(string) (string, error) { return "", errors.New("not found") }
+
+	bunBin := filepath.Join(home, ".bun", "bin")
+	if err := os.MkdirAll(bunBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unixShim := filepath.Join(bunBin, "omp")
+	if err := os.WriteFile(unixShim, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	winShim := filepath.Join(bunBin, "omp.exe")
+	if err := os.WriteFile(winShim, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for goos, want := range map[string]string{"darwin": unixShim, "linux": unixShim, "windows": winShim} {
+		got, ok := r.resolveBinary(miss, "omp", goos)
+		if !ok || got != want {
+			t.Fatalf("resolveBinary(omp, %s) = %q, %v; want %q, true", goos, got, ok, want)
+		}
+		found := false
+		for _, dir := range r.binDirs(goos) {
+			if dir == bunBin {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("binDirs(%s) must include %q", goos, bunBin)
+		}
+	}
+
+	wantUser := []string{
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".npm-global", "bin"),
+		filepath.Join(home, "bin"),
+	}
+	if got := r.UserBinDirs(); !reflect.DeepEqual(got, wantUser) {
+		t.Fatalf("UserBinDirs = %v, want %v", got, wantUser)
+	}
+	if got := (&Resolver{}).binDirs("linux"); len(got) != 0 {
+		t.Fatalf("binDirs with empty Home = %v, want none", got)
 	}
 }
 

@@ -32,6 +32,7 @@ func TestPathsPerTool(t *testing.T) {
 		"codex":       filepath.Join(r.Home, ".codex", "prompts", "enhance.md"),
 		"opencode":    filepath.Join(r.Home, ".config", "opencode", "commands", "enhance.md"),
 		"pi":          filepath.Join(r.Home, ".pi", "agent", "prompts", "enhance.md"),
+		"omp":         filepath.Join(r.Home, ".omp", "agent", "prompts", "enhance.md"),
 	}
 	for id, p := range want {
 		got, ok := m.Path(id)
@@ -49,7 +50,7 @@ func TestPathsPerTool(t *testing.T) {
 
 func TestRenderEmbedsQuotedBinaryAndTool(t *testing.T) {
 	m, _ := newManager(t)
-	for _, id := range []string{"claude-code", "codex", "opencode", "pi"} {
+	for _, id := range []string{"claude-code", "codex", "opencode", "pi", "omp"} {
 		out := string(m.Render(id))
 		if !strings.HasPrefix(out, "---\n") {
 			t.Errorf("%s: missing frontmatter", id)
