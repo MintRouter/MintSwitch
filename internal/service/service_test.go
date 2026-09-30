@@ -2013,18 +2013,19 @@ func TestAddProviderNormalizesModelMaxOutputTokens(t *testing.T) {
 }
 
 // TestApplyOneBackfillsModelLimits proves an Apply for a tool that writes
-// per-model limits fills in missing context windows and max output tokens
-// from the endpoint's plain /models listing (never replacing stored values,
-// never adding models), persists them, and stays quiet once complete; a tool
-// that writes no limits triggers no request.
+// per-model limits fills in missing context windows, max output tokens and
+// (for a tool that writes them) input modalities from the endpoint's plain
+// /models listing (never replacing stored values, never adding models),
+// persists them, and stays quiet once complete; a tool that writes no limits
+// triggers no request.
 func TestApplyOneBackfillsModelLimits(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Write([]byte(`{"data":[
-			{"id":"gpt-test","context_length":200000,"max_completion_tokens":32768},
-			{"id":"kept","context_length":999,"max_completion_tokens":65536},
-			{"id":"unlisted","context_length":128000,"max_completion_tokens":4096}
+			{"id":"gpt-test","context_length":200000,"max_completion_tokens":32768,"architecture":{"input_modalities":["text","image"]}},
+			{"id":"kept","context_length":999,"max_completion_tokens":65536,"architecture":{"input_modalities":["text","image"]}},
+			{"id":"unlisted","context_length":128000,"max_completion_tokens":4096,"architecture":{"input_modalities":["text"]}}
 		]}`))
 	}))
 	defer srv.Close()
@@ -2036,6 +2037,7 @@ func TestApplyOneBackfillsModelLimits(t *testing.T) {
 	p.BaseURL = srv.URL
 	p.Models = []string{"gpt-test", "kept"}
 	p.ModelContextWindows = map[string]int{"kept": 1_000_000}
+	p.ModelInputModalities = map[string][]string{"kept": {"text"}}
 	addProvider(t, svc, p)
 
 	if _, err := svc.ApplyOne("claude-desktop"); err != nil {
@@ -2049,11 +2051,15 @@ func TestApplyOneBackfillsModelLimits(t *testing.T) {
 	}
 	wantWindows := map[string]int{"gpt-test": 200_000, "kept": 1_000_000}
 	wantOutputs := map[string]int{"gpt-test": 32_768, "kept": 65_536}
+	wantModalities := map[string][]string{"gpt-test": {"text", "image"}, "kept": {"text"}}
 	if got := oc.lastApplied.ModelContextWindows; !reflect.DeepEqual(got, wantWindows) {
 		t.Fatalf("applied windows = %v, want %v", got, wantWindows)
 	}
 	if got := oc.lastApplied.ModelMaxOutputTokens; !reflect.DeepEqual(got, wantOutputs) {
 		t.Fatalf("applied outputs = %v, want %v", got, wantOutputs)
+	}
+	if got := oc.lastApplied.ModelInputModalities; !reflect.DeepEqual(got, wantModalities) {
+		t.Fatalf("applied modalities = %v, want %v", got, wantModalities)
 	}
 	views, err := svc.ListProviders()
 	if err != nil {
@@ -2064,6 +2070,9 @@ func TestApplyOneBackfillsModelLimits(t *testing.T) {
 	}
 	if got := views[0].ModelMaxOutputTokens; !reflect.DeepEqual(got, wantOutputs) {
 		t.Fatalf("persisted outputs = %v, want %v", got, wantOutputs)
+	}
+	if got := views[0].ModelInputModalities; !reflect.DeepEqual(got, wantModalities) {
+		t.Fatalf("persisted modalities = %v, want %v", got, wantModalities)
 	}
 	calls = 0
 	if _, err := svc.ApplyOne("opencode"); err != nil {
@@ -2090,7 +2099,164 @@ func TestApplyOneLimitsBackfillFailureIsSilent(t *testing.T) {
 	if _, err := svc.ApplyOne("opencode"); err != nil {
 		t.Fatalf("ApplyOne: %v", err)
 	}
-	if oc.lastApplied.ModelContextWindows != nil || oc.lastApplied.ModelMaxOutputTokens != nil {
-		t.Fatalf("applied limits = %v / %v, want none", oc.lastApplied.ModelContextWindows, oc.lastApplied.ModelMaxOutputTokens)
+	if oc.lastApplied.ModelContextWindows != nil || oc.lastApplied.ModelMaxOutputTokens != nil || oc.lastApplied.ModelInputModalities != nil {
+		t.Fatalf("applied metadata = %v / %v / %v, want none", oc.lastApplied.ModelContextWindows, oc.lastApplied.ModelMaxOutputTokens, oc.lastApplied.ModelInputModalities)
+	}
+}
+
+// TestParseModelOptionsInputModalities pins the input-modality extraction:
+// the plain listing's architecture.input_modalities and the Codex shape's
+// top-level input_modalities (preferred when both yield values) are trimmed,
+// lower-cased, de-duplicated and limited to text/image/audio/video/pdf;
+// non-string elements are skipped and unusable shapes yield none.
+func TestParseModelOptionsInputModalities(t *testing.T) {
+	body := []byte(`{"data":[
+		{"id":"a","architecture":{"input_modalities":[" Text ","image","text","hologram",7]}},
+		{"id":"b","input_modalities":["text","pdf"],"architecture":{"input_modalities":["video"]}},
+		{"id":"c","input_modalities":"text"},
+		{"id":"d","architecture":"vision"},
+		{"id":"e","architecture":{"input_modalities":["smell"]}},
+		{"id":"f"}
+	]}`)
+	options, ok := parseModelOptions(body)
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	want := map[string][]string{"a": {"text", "image"}, "b": {"text", "pdf"}, "c": nil, "d": nil, "e": nil, "f": nil}
+	for _, o := range options {
+		if !reflect.DeepEqual(o.InputModalities, want[o.ID]) {
+			t.Fatalf("%s: input modalities = %v, want %v", o.ID, o.InputModalities, want[o.ID])
+		}
+	}
+}
+
+// TestFetchEndpointModelsInputModalitiesFromCodexListing proves a plain
+// listing without modalities is enriched from the Codex-shaped
+// ?client_version= response's top-level input_modalities, without replacing
+// modalities the plain listing already carried and without adding models.
+func TestFetchEndpointModelsInputModalitiesFromCodexListing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("client_version") == "" {
+			w.Write([]byte(`{"data":[{"id":"gpt-x"},{"id":"plain","architecture":{"input_modalities":["text"]}}]}`))
+			return
+		}
+		w.Write([]byte(`{"models":[
+			{"slug":"gpt-x","input_modalities":["text","image"],"supported_reasoning_levels":[{"effort":"low"}]},
+			{"slug":"plain","input_modalities":["text","image"]},
+			{"slug":"extra","input_modalities":["text"]}
+		]}`))
+	}))
+	defer srv.Close()
+	svc, id := newModelsService(t, srv)
+	options, err := svc.FetchEndpointModels(srv.URL, "", id)
+	if err != nil {
+		t.Fatalf("FetchEndpointModels: %v", err)
+	}
+	want := []ModelOption{
+		{ID: "gpt-x", ReasoningLevels: []string{"low"}, InputModalities: []string{"text", "image"}},
+		{ID: "plain", InputModalities: []string{"text"}},
+	}
+	if !reflect.DeepEqual(options, want) {
+		t.Fatalf("options = %+v, want %+v", options, want)
+	}
+}
+
+// TestAddProviderNormalizesModelInputModalities: only member models keep
+// modalities, each list trimmed, lower-cased, de-duplicated and limited to
+// the known values; empty lists are dropped.
+func TestAddProviderNormalizesModelInputModalities(t *testing.T) {
+	svc := newTestService(t)
+	p := validProvider()
+	p.Model = "sel"
+	p.Models = []string{"a", "b"}
+	p.ModelInputModalities = map[string][]string{
+		"a":     {" Text ", "IMAGE", "text", "hologram"},
+		"b":     {"smell"},
+		"ghost": {"text"},
+	}
+	addProvider(t, svc, p)
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	got := views[0].ModelInputModalities
+	if !reflect.DeepEqual(got, map[string][]string{"a": {"text", "image"}}) {
+		t.Fatalf("ModelInputModalities = %v, want map[a:[text image]]", got)
+	}
+}
+
+// TestApplyOneBackfillsCodexMetadataForPi proves ApplyOne("pi") fills in a
+// saved provider's missing reasoning levels and input modalities from the
+// Codex-shaped listing, persists and applies them without replacing stored
+// values, and stays quiet once complete; the codex Apply on the same
+// provider persists levels only.
+func TestApplyOneBackfillsCodexMetadataForPi(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Query().Get("client_version") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"models":[
+			{"slug":"gpt-test","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"input_modalities":["text","image"]},
+			{"slug":"kept","supported_reasoning_levels":[{"effort":"max"}],"input_modalities":["text","image"]},
+			{"slug":"unlisted","supported_reasoning_levels":[{"effort":"low"}],"input_modalities":["text"]}
+		]}`))
+	}))
+	defer srv.Close()
+	pi := &fakeAdapter{id: "pi", name: "Pi", installed: true}
+	cdx := &fakeAdapter{id: "codex", name: "Codex", installed: true}
+	svc := newTestService(t, pi, cdx)
+	svc.modelsClient = srv.Client()
+	p := validProvider()
+	p.BaseURL = srv.URL
+	p.Models = []string{"gpt-test", "kept"}
+	p.ModelReasoningLevels = map[string][]string{"kept": {"medium"}}
+	p.ModelInputModalities = map[string][]string{"kept": {"text"}}
+	p.ModelContextWindows = map[string]int{"gpt-test": 1, "kept": 1}
+	p.ModelMaxOutputTokens = map[string]int{"gpt-test": 1, "kept": 1}
+	addProvider(t, svc, p)
+
+	if _, err := svc.ApplyOne("codex"); err != nil {
+		t.Fatalf("ApplyOne(codex): %v", err)
+	}
+	wantLevels := map[string][]string{"gpt-test": {"low", "high"}, "kept": {"medium"}}
+	if got := cdx.lastApplied.ModelReasoningLevels; !reflect.DeepEqual(got, wantLevels) {
+		t.Fatalf("codex applied levels = %v, want %v", got, wantLevels)
+	}
+	views, err := svc.ListProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := views[0].ModelInputModalities; !reflect.DeepEqual(got, map[string][]string{"kept": {"text"}}) {
+		t.Fatalf("codex apply persisted modalities = %v, want stored value only", got)
+	}
+
+	if _, err := svc.ApplyOne("pi"); err != nil {
+		t.Fatalf("ApplyOne(pi): %v", err)
+	}
+	wantModalities := map[string][]string{"gpt-test": {"text", "image"}, "kept": {"text"}}
+	if got := pi.lastApplied.ModelReasoningLevels; !reflect.DeepEqual(got, wantLevels) {
+		t.Fatalf("pi applied levels = %v, want %v", got, wantLevels)
+	}
+	if got := pi.lastApplied.ModelInputModalities; !reflect.DeepEqual(got, wantModalities) {
+		t.Fatalf("pi applied modalities = %v, want %v", got, wantModalities)
+	}
+	views, err = svc.ListProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := views[0].ModelInputModalities; !reflect.DeepEqual(got, wantModalities) {
+		t.Fatalf("persisted modalities = %v, want %v", got, wantModalities)
+	}
+
+	calls = 0
+	if _, err := svc.ApplyOne("pi"); err != nil {
+		t.Fatalf("re-ApplyOne(pi): %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("re-apply made %d requests, want 0 when every model has levels and modalities", calls)
 	}
 }

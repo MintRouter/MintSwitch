@@ -266,6 +266,43 @@ func TestProviderProfileCarriesReasoningLevels(t *testing.T) {
 	}
 }
 
+// TestInputModalities pins that only endpoint-advertised modalities are used:
+// no name-based guessing, so an unlisted model gets nil.
+func TestInputModalities(t *testing.T) {
+	p := Profile{ModelInputModalities: map[string][]string{"gpt-5.5": {"text", "image"}}}
+	if got := p.InputModalities("gpt-5.5"); strings.Join(got, ",") != "text,image" {
+		t.Errorf("InputModalities(gpt-5.5) = %v, want [text image]", got)
+	}
+	if got := p.InputModalities("glm-5.2"); got != nil {
+		t.Errorf("InputModalities(glm-5.2) = %v, want nil", got)
+	}
+}
+
+// TestProviderProfileCarriesInputModalities proves Provider.Profile passes
+// ModelInputModalities through to adapters.
+func TestProviderProfileCarriesInputModalities(t *testing.T) {
+	pr := Provider{ModelInputModalities: map[string][]string{"m": {"text"}}}
+	if got := pr.Profile().ModelInputModalities["m"]; strings.Join(got, ",") != "text" {
+		t.Fatalf("Profile().ModelInputModalities = %v, want [text]", got)
+	}
+}
+
+// TestFingerprintIgnoresModelMetadata pins that the per-model metadata maps
+// (context windows, max output tokens, reasoning levels, input modalities)
+// never alter the fingerprint, so already-applied tools do not flip to
+// ModifiedExternally when the metadata is backfilled.
+func TestFingerprintIgnoresModelMetadata(t *testing.T) {
+	base := Profile{APIKey: "k", BaseURL: "https://h", Model: "m"}
+	rich := base
+	rich.ModelContextWindows = map[string]int{"m": 200_000}
+	rich.ModelMaxOutputTokens = map[string]int{"m": 32_768}
+	rich.ModelReasoningLevels = map[string][]string{"m": {"low", "high"}}
+	rich.ModelInputModalities = map[string][]string{"m": {"text", "image"}}
+	if Fingerprint(rich) != Fingerprint(base) {
+		t.Fatal("per-model metadata altered the fingerprint")
+	}
+}
+
 // TestDefaultReasoningLevel: medium when offered, else the middle level.
 func TestDefaultReasoningLevel(t *testing.T) {
 	cases := []struct {

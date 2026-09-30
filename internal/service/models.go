@@ -51,16 +51,21 @@ type ModelOption struct {
 	// ReasoningLevels is the model's advertised ordered reasoning-effort
 	// levels (e.g. "low", "medium", "high"); empty means none advertised.
 	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
+	// InputModalities is the model's advertised input modalities, canonical
+	// lower-case values among "text", "image", "audio", "video" and "pdf";
+	// empty means none advertised.
+	InputModalities []string `json:"input_modalities,omitempty"`
 }
 
-// codexClientVersion is sent as the ?client_version= query of the
-// reasoning-level enrichment request (see [Service.enrichReasoningLevels]).
-// Gateways that serve Codex clients (e.g. MintRouter) answer that query with
-// Codex's catalog shape, which carries per-model supported_reasoning_levels;
-// a version >= 0.144.0 unlocks the extended levels ("max", "ultra").
+// codexClientVersion is sent as the ?client_version= query of the Codex
+// metadata enrichment request (see [Service.enrichCodexMetadata]). Gateways
+// that serve Codex clients (e.g. MintRouter) answer that query with Codex's
+// catalog shape, which carries per-model supported_reasoning_levels and
+// input_modalities; a version >= 0.144.0 unlocks the extended levels ("max",
+// "ultra").
 const codexClientVersion = "0.157.0"
 
-// reasoningFetchTimeout bounds the optional reasoning-level enrichment
+// reasoningFetchTimeout bounds the optional Codex metadata enrichment
 // request, shorter than modelsFetchTimeout so an endpoint that stalls on the
 // unfamiliar query adds little to the fetch the user is waiting on.
 const reasoningFetchTimeout = 4 * time.Second
@@ -100,9 +105,10 @@ func (s *Service) FetchProviderModels(providerID string) ([]string, error) {
 // FetchEndpointModels queries {baseURL}/models like [Service.FetchProviderModels]
 // but for endpoint values that may not be saved yet, so the Add/Edit dialog
 // can list models before the provider is persisted. It returns each model's
-// ID plus the display name, context window and reasoning-effort levels the
-// endpoint advertises (when any, see [Service.enrichReasoningLevels]), so the
-// dialog can seed them. The API key is transient: it is used only for this
+// ID plus the display name, context window, reasoning-effort levels and input
+// modalities the endpoint advertises (when any, see
+// [Service.enrichCodexMetadata]), so the dialog can seed them. The API key is
+// transient: it is used only for this
 // one request and is never stored, logged, or included in errors. When apiKey
 // is blank and providerID names a stored provider, that provider's stored key
 // is used instead (the Edit flow, where the key never round-trips to the
@@ -137,7 +143,7 @@ func (s *Service) FetchEndpointModels(baseURL, apiKey, providerID string) ([]Mod
 	if err != nil {
 		return nil, err
 	}
-	s.enrichReasoningLevels(base, key, options)
+	s.enrichCodexMetadata(base, key, options)
 	return options, nil
 }
 
@@ -188,20 +194,21 @@ func (s *Service) fetchModels(base, key string) ([]ModelOption, error) {
 	return models, nil
 }
 
-// enrichReasoningLevels best-effort fills ReasoningLevels for models the
-// plain listing advertised none for, from a second GET
+// enrichCodexMetadata best-effort fills ReasoningLevels and InputModalities
+// for models the plain listing advertised none for, from a second GET
 // {base}/models?client_version=... request. Plain OpenAI /models entries
 // carry no reasoning metadata, but gateways that serve Codex clients answer
 // that query with Codex's catalog shape ({"models":[{"slug":...,
-// "supported_reasoning_levels":[{"effort":...}]}]}); endpoints that ignore
-// the query simply return the same plain listing. Any failure (transport,
-// non-200, unparseable body) is silently ignored — the plain listing already
-// succeeded and the levels are optional metadata. Only IDs present in the
-// plain listing are enriched, so the query can never add models.
-func (s *Service) enrichReasoningLevels(base, key string, models []ModelOption) {
+// "supported_reasoning_levels":[{"effort":...}],"input_modalities":[...]}]});
+// endpoints that ignore the query simply return the same plain listing. Any
+// failure (transport, non-200, unparseable body) is silently ignored — the
+// plain listing already succeeded and both fields are optional metadata.
+// Existing values are never replaced and only IDs present in the plain
+// listing are enriched, so the query can never add models.
+func (s *Service) enrichCodexMetadata(base, key string, models []ModelOption) {
 	missing := false
 	for _, m := range models {
-		if len(m.ReasoningLevels) == 0 {
+		if len(m.ReasoningLevels) == 0 || len(m.InputModalities) == 0 {
 			missing = true
 			break
 		}
@@ -240,94 +247,52 @@ func (s *Service) enrichReasoningLevels(base, key string, models []ModelOption) 
 		return
 	}
 	levels := make(map[string][]string, len(extra))
+	modalities := make(map[string][]string, len(extra))
 	for _, o := range extra {
 		if len(o.ReasoningLevels) > 0 {
 			levels[o.ID] = o.ReasoningLevels
+		}
+		if len(o.InputModalities) > 0 {
+			modalities[o.ID] = o.InputModalities
 		}
 	}
 	for i := range models {
 		if len(models[i].ReasoningLevels) == 0 {
 			models[i].ReasoningLevels = levels[models[i].ID]
 		}
+		if len(models[i].InputModalities) == 0 {
+			models[i].InputModalities = modalities[models[i].ID]
+		}
 	}
 }
 
 // reasoningBackfillTools are the tools whose Apply writes per-model
-// reasoning-effort levels (Codex's model catalog), and so benefit from
-// [Service.backfillReasoningLevels].
-var reasoningBackfillTools = map[string]bool{"codex": true}
+// reasoning-effort levels (Codex's model catalog) or a per-model reasoning
+// flag derived from them (Pi's and omp's model entries), and so benefit from
+// [Service.backfillCodexMetadata].
+var reasoningBackfillTools = map[string]bool{"codex": true, "pi": true, "omp": true}
 
-// backfillReasoningLevels best-effort fills in toolID's effective provider's
-// missing ModelReasoningLevels from the endpoint before an Apply, and
-// persists them. Levels are otherwise only captured when the provider form
-// fetches models, so a provider saved before levels existed (or never
-// re-fetched) would apply a catalog with empty effort pickers until the user
-// re-opened and re-saved it. Only tools in reasoningBackfillTools trigger
-// it, only models already listed get levels, existing levels are never
-// replaced, and every failure (no key, transport, non-Codex endpoint) leaves
-// settings untouched. The caller holds s.mu.
-func (s *Service) backfillReasoningLevels(toolID string) {
-	if !reasoningBackfillTools[toolID] {
-		return
-	}
-	st, err := s.store.Load()
-	if err != nil {
-		return
-	}
-	pr, _, ok := resolveProvider(st, toolID)
-	if !ok {
-		return
-	}
-	base, _ := core.NormalizeBaseURL(pr.BaseURL)
-	if base == "" {
-		return
-	}
-	options := make([]ModelOption, 0, len(pr.Models))
-	for _, m := range pr.Models {
-		options = append(options, ModelOption{ID: m, ReasoningLevels: pr.ModelReasoningLevels[m]})
-	}
-	s.enrichReasoningLevels(base, pr.APIKey, options)
-	levels := make(map[string][]string, len(options))
-	for m, l := range pr.ModelReasoningLevels {
-		levels[m] = l
-	}
-	added := false
-	for _, o := range options {
-		if len(o.ReasoningLevels) > 0 && len(levels[o.ID]) == 0 {
-			levels[o.ID] = o.ReasoningLevels
-			added = true
-		}
-	}
-	if !added {
-		return
-	}
-	for i := range st.Providers {
-		if st.Providers[i].ID == pr.ID {
-			st.Providers[i].ModelReasoningLevels = normalizeModelReasoningLevels(levels, pr.Models)
-			_ = s.store.Save(st)
-			return
-		}
-	}
-}
-
-// limitsBackfillTools are the tools whose Apply writes per-model context
-// windows and/or max output tokens, and so benefit from
+// modalitiesBackfillTools are the tools whose Apply writes per-model input
+// modalities (Pi's and omp's input list, OpenCode's modalities.input), and so
+// benefit from [Service.backfillCodexMetadata] and
 // [Service.backfillModelLimits].
-var limitsBackfillTools = map[string]bool{"claude-code": true, "codex": true, "opencode": true, "pi": true, "omp": true}
+var modalitiesBackfillTools = map[string]bool{"pi": true, "omp": true, "opencode": true}
 
-// backfillModelLimits best-effort fills in toolID's effective provider's
-// missing ModelContextWindows and ModelMaxOutputTokens from the endpoint's
-// plain /models listing before an Apply, and persists them. Limits are
-// otherwise only captured when the provider form fetches models, so a
-// provider saved before max output tokens existed (or whose models were typed
-// by hand) would apply tool configs with default limits until the user
-// re-opened and re-saved it. Only tools in limitsBackfillTools trigger it,
-// only when at least one listed model lacks a window or an output cap, only
+// backfillCodexMetadata best-effort fills in toolID's effective provider's
+// missing ModelReasoningLevels (tools in reasoningBackfillTools) and
+// ModelInputModalities (tools in modalitiesBackfillTools) from the endpoint's
+// Codex-shaped listing before an Apply, and persists them. Both are otherwise
+// only captured when the provider form fetches models, so a provider saved
+// before they existed (or never re-fetched) would apply a catalog with empty
+// effort pickers, or a model entry that drops images, until the user
+// re-opened and re-saved it. Only tools in one of the two sets trigger it,
+// only when at least one listed model lacks a value the tool writes, only
 // models already listed get values, existing values are never replaced, and
-// every failure (no key, transport, non-200, unparseable body) leaves
-// settings untouched. The caller holds s.mu.
-func (s *Service) backfillModelLimits(toolID string) {
-	if !limitsBackfillTools[toolID] {
+// every failure (no key, transport, non-Codex endpoint) leaves settings
+// untouched. The caller holds s.mu.
+func (s *Service) backfillCodexMetadata(toolID string) {
+	wantLevels, wantModalities := reasoningBackfillTools[toolID], modalitiesBackfillTools[toolID]
+	if !wantLevels && !wantModalities {
 		return
 	}
 	st, err := s.store.Load()
@@ -340,7 +305,92 @@ func (s *Service) backfillModelLimits(toolID string) {
 	}
 	missing := false
 	for _, m := range pr.Models {
-		if pr.ModelContextWindows[m] <= 0 || pr.ModelMaxOutputTokens[m] <= 0 {
+		if wantLevels && len(pr.ModelReasoningLevels[m]) == 0 || wantModalities && len(pr.ModelInputModalities[m]) == 0 {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return
+	}
+	base, _ := core.NormalizeBaseURL(pr.BaseURL)
+	if base == "" {
+		return
+	}
+	options := make([]ModelOption, 0, len(pr.Models))
+	for _, m := range pr.Models {
+		options = append(options, ModelOption{
+			ID:              m,
+			ReasoningLevels: pr.ModelReasoningLevels[m],
+			InputModalities: pr.ModelInputModalities[m],
+		})
+	}
+	s.enrichCodexMetadata(base, pr.APIKey, options)
+	levels := make(map[string][]string, len(options))
+	for m, l := range pr.ModelReasoningLevels {
+		levels[m] = l
+	}
+	modalities := make(map[string][]string, len(options))
+	for m, l := range pr.ModelInputModalities {
+		modalities[m] = l
+	}
+	added := false
+	for _, o := range options {
+		if wantLevels && len(o.ReasoningLevels) > 0 && len(levels[o.ID]) == 0 {
+			levels[o.ID] = o.ReasoningLevels
+			added = true
+		}
+		if wantModalities && len(o.InputModalities) > 0 && len(modalities[o.ID]) == 0 {
+			modalities[o.ID] = o.InputModalities
+			added = true
+		}
+	}
+	if !added {
+		return
+	}
+	for i := range st.Providers {
+		if st.Providers[i].ID == pr.ID {
+			st.Providers[i].ModelReasoningLevels = normalizeModelReasoningLevels(levels, pr.Models)
+			st.Providers[i].ModelInputModalities = normalizeModelInputModalities(modalities, pr.Models)
+			_ = s.store.Save(st)
+			return
+		}
+	}
+}
+
+// limitsBackfillTools are the tools whose Apply writes per-model context
+// windows and/or max output tokens, and so benefit from
+// [Service.backfillModelLimits].
+var limitsBackfillTools = map[string]bool{"claude-code": true, "codex": true, "opencode": true, "pi": true, "omp": true}
+
+// backfillModelLimits best-effort fills in toolID's effective provider's
+// missing ModelContextWindows and ModelMaxOutputTokens — and, for tools in
+// modalitiesBackfillTools, ModelInputModalities — from the endpoint's plain
+// /models listing before an Apply, and persists them. Limits are otherwise
+// only captured when the provider form fetches models, so a provider saved
+// before max output tokens existed (or whose models were typed by hand) would
+// apply tool configs with default limits until the user re-opened and
+// re-saved it. Only tools in limitsBackfillTools trigger it, only when at
+// least one listed model lacks a window, an output cap or (when the tool
+// writes them) modalities, only models already listed get values, existing
+// values are never replaced, and every failure (no key, transport, non-200,
+// unparseable body) leaves settings untouched. The caller holds s.mu.
+func (s *Service) backfillModelLimits(toolID string) {
+	if !limitsBackfillTools[toolID] {
+		return
+	}
+	wantModalities := modalitiesBackfillTools[toolID]
+	st, err := s.store.Load()
+	if err != nil {
+		return
+	}
+	pr, _, ok := resolveProvider(st, toolID)
+	if !ok {
+		return
+	}
+	missing := false
+	for _, m := range pr.Models {
+		if pr.ModelContextWindows[m] <= 0 || pr.ModelMaxOutputTokens[m] <= 0 || wantModalities && len(pr.ModelInputModalities[m]) == 0 {
 			missing = true
 			break
 		}
@@ -364,6 +414,10 @@ func (s *Service) backfillModelLimits(toolID string) {
 	for m, n := range pr.ModelMaxOutputTokens {
 		outputs[m] = n
 	}
+	modalities := make(map[string][]string, len(pr.Models))
+	for m, l := range pr.ModelInputModalities {
+		modalities[m] = l
+	}
 	added := false
 	for _, o := range options {
 		if o.ContextWindow > 0 && windows[o.ID] <= 0 {
@@ -374,6 +428,10 @@ func (s *Service) backfillModelLimits(toolID string) {
 			outputs[o.ID] = o.MaxOutputTokens
 			added = true
 		}
+		if wantModalities && len(o.InputModalities) > 0 && len(modalities[o.ID]) == 0 {
+			modalities[o.ID] = o.InputModalities
+			added = true
+		}
 	}
 	if !added {
 		return
@@ -382,6 +440,7 @@ func (s *Service) backfillModelLimits(toolID string) {
 		if st.Providers[i].ID == pr.ID {
 			st.Providers[i].ModelContextWindows = normalizeModelContextWindows(windows, pr.Models)
 			st.Providers[i].ModelMaxOutputTokens = normalizeModelContextWindows(outputs, pr.Models)
+			st.Providers[i].ModelInputModalities = normalizeModelInputModalities(modalities, pr.Models)
 			_ = s.store.Save(st)
 			return
 		}
@@ -429,6 +488,78 @@ type modelEntry struct {
 	// list ([{"effort":"low",...}]); bare strings are accepted too. RawMessage
 	// so an unexpected shape is ignored instead of failing the whole parse.
 	SupportedReasoningLevels json.RawMessage `json:"supported_reasoning_levels"`
+	// InputModalities is the Codex catalog shape's top-level per-model input
+	// list (["text","image"]); Architecture is the plain listing's nested
+	// object carrying the same list under "input_modalities". Both are
+	// RawMessage so an unexpected shape is ignored instead of failing the
+	// whole parse.
+	InputModalities json.RawMessage `json:"input_modalities"`
+	Architecture    json.RawMessage `json:"architecture"`
+}
+
+// inputModalityValues is the closed set of per-model input modalities
+// MintSwitch persists and adapters may write: OpenCode's modalities.input
+// vocabulary, of which Pi and omp accept the text/image subset.
+var inputModalityValues = map[string]bool{"text": true, "image": true, "audio": true, "video": true, "pdf": true}
+
+// canonicalInputModalities returns list trimmed, lower-cased, de-duplicated
+// and limited to inputModalityValues, in the advertised order. nil means
+// nothing usable remained.
+func canonicalInputModalities(list []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range list {
+		m = strings.ToLower(strings.TrimSpace(m))
+		if !inputModalityValues[m] || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
+}
+
+// inputModalitiesOf returns the entry's advertised input modalities,
+// canonicalized (see canonicalInputModalities): the top-level
+// "input_modalities" list (Codex catalog shape) when it yields anything,
+// otherwise the plain listing's "architecture"."input_modalities". nil means
+// none advertised or an unusable shape.
+func inputModalitiesOf(e modelEntry) []string {
+	if out := decodeInputModalities(e.InputModalities); len(out) > 0 {
+		return out
+	}
+	if len(e.Architecture) == 0 {
+		return nil
+	}
+	var arch struct {
+		InputModalities json.RawMessage `json:"input_modalities"`
+	}
+	if err := json.Unmarshal(e.Architecture, &arch); err != nil {
+		return nil
+	}
+	return decodeInputModalities(arch.InputModalities)
+}
+
+// decodeInputModalities decodes raw as a JSON array of strings, skipping
+// non-string elements, and canonicalizes the result. nil for absent,
+// non-array or unusable values.
+func decodeInputModalities(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	list := make([]string, 0, len(items))
+	for _, r := range items {
+		var s string
+		if err := json.Unmarshal(r, &s); err != nil {
+			continue
+		}
+		list = append(list, s)
+	}
+	return canonicalInputModalities(list)
 }
 
 // reasoningLevelsOf returns the entry's advertised reasoning-effort levels in
@@ -562,8 +693,9 @@ func parseModelOptions(body []byte) (options []ModelOption, ok bool) {
 // optionsOf collects the non-empty identifier of each entry (ID, else Slug,
 // else Model, else Name), trimmed and de-duplicated, plus its optional
 // display name ("display_name", else "name" when Name wasn't consumed as the
-// ID), advertised context window and reasoning-effort levels. Display names equal to the ID are dropped as
-// noise. Nothing secret is preserved.
+// ID), advertised context window, reasoning-effort levels and input
+// modalities. Display names equal to the ID are dropped as noise. Nothing
+// secret is preserved.
 func optionsOf(entries []modelEntry) []ModelOption {
 	options := make([]ModelOption, 0, len(entries))
 	seen := make(map[string]bool, len(entries))
@@ -597,6 +729,7 @@ func optionsOf(entries []modelEntry) []ModelOption {
 			ContextWindow:   contextWindowOf(e),
 			MaxOutputTokens: maxOutputTokensOf(e),
 			ReasoningLevels: reasoningLevelsOf(e),
+			InputModalities: inputModalitiesOf(e),
 		})
 	}
 	return options

@@ -43,6 +43,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		ActiveProviderID: "p2",
 	}
 	in.Providers[0].Note = "team key"
+	in.Providers[0].ModelInputModalities = map[string][]string{"m": {"text", "image"}, "m2": {"text"}}
 
 	if err := s.Save(in); err != nil {
 		t.Fatalf("Save: %v", err)

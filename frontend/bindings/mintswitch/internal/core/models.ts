@@ -94,6 +94,13 @@ export interface Provider {
     "model_reasoning_levels"?: { [_ in string]?: string[] | null } | null;
 
     /**
+     * ModelInputModalities optionally maps a member of Models to the input
+     * modalities the endpoint advertised for it ("text", "image", "audio",
+     * "video", "pdf"). Missing entries mean none are known.
+     */
+    "model_input_modalities"?: { [_ in string]?: string[] | null } | null;
+
+    /**
      * Model is the provider's default model identifier. Required.
      */
     "model": string;

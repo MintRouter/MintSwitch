@@ -42,6 +42,13 @@ export interface ModelOption {
      * levels (e.g. "low", "medium", "high"); empty means none advertised.
      */
     "reasoning_levels"?: string[] | null;
+
+    /**
+     * InputModalities is the model's advertised input modalities, canonical
+     * lower-case values among "text", "image", "audio", "video" and "pdf";
+     * empty means none advertised.
+     */
+    "input_modalities"?: string[] | null;
 }
 
 /**
@@ -90,6 +97,12 @@ export interface ProviderView {
      * reasoning-effort levels, passed through so the Edit form can re-save it.
      */
     "model_reasoning_levels": { [_ in string]?: string[] | null } | null;
+
+    /**
+     * ModelInputModalities maps a member of Models to its advertised input
+     * modalities, passed through so the Edit form can re-save it.
+     */
+    "model_input_modalities": { [_ in string]?: string[] | null } | null;
     "model": string;
     "small_fast_model": string;
 

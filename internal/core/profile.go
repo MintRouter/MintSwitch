@@ -99,6 +99,14 @@ type Profile struct {
 	// through [Profile.ReasoningLevels]. Like ModelContextWindows it is
 	// deliberately NOT part of [Fingerprint].
 	ModelReasoningLevels map[string][]string `json:"model_reasoning_levels,omitempty"`
+	// ModelInputModalities optionally maps a member of Models to the input
+	// modalities the endpoint advertised for it, canonical lower-case values
+	// among "text", "image", "audio", "video" and "pdf". Adapters read it
+	// through [Profile.InputModalities] and write it into the tool's per-model
+	// metadata (Pi's/omp's input list, OpenCode's modalities.input) so image
+	// input is neither silently dropped nor offered to a text-only model. Like
+	// ModelContextWindows it is deliberately NOT part of [Fingerprint].
+	ModelInputModalities map[string][]string `json:"model_input_modalities,omitempty"`
 	// Model is the currently selected model identifier and the default value
 	// adapters write to tool configs. Required.
 	Model string `json:"model"`
@@ -209,6 +217,14 @@ func (p Profile) MaxOutputTokens(m string) int {
 // would turn a working request into a 400.
 func (p Profile) ReasoningLevels(m string) []string {
 	return p.ModelReasoningLevels[m]
+}
+
+// InputModalities returns the input modalities the endpoint advertised for
+// model m (ModelInputModalities). nil means none are known, so adapters must
+// fall back to their own conservative default instead of guessing from the
+// model name.
+func (p Profile) InputModalities(m string) []string {
+	return p.ModelInputModalities[m]
 }
 
 // DefaultReasoningLevel picks the default effort from an ordered level list:

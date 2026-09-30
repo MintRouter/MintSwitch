@@ -50,6 +50,10 @@ type Provider struct {
 	// reasoning-effort levels the endpoint advertised for it (e.g. "low",
 	// "medium", "high"). Missing entries mean no levels are known.
 	ModelReasoningLevels map[string][]string `json:"model_reasoning_levels,omitempty"`
+	// ModelInputModalities optionally maps a member of Models to the input
+	// modalities the endpoint advertised for it ("text", "image", "audio",
+	// "video", "pdf"). Missing entries mean none are known.
+	ModelInputModalities map[string][]string `json:"model_input_modalities,omitempty"`
 	// Model is the provider's default model identifier. Required.
 	Model string `json:"model"`
 	// SmallFastModel is an optional secondary model used by some tools for
@@ -81,6 +85,7 @@ func (pr Provider) Profile() Profile {
 		ModelContextWindows:  pr.ModelContextWindows,
 		ModelMaxOutputTokens: pr.ModelMaxOutputTokens,
 		ModelReasoningLevels: pr.ModelReasoningLevels,
+		ModelInputModalities: pr.ModelInputModalities,
 		Model:                pr.Model,
 		SmallFastModel:       pr.SmallFastModel,
 		OpusModel:            pr.OpusModel,

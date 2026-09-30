@@ -188,6 +188,9 @@ type ProviderView struct {
 	// ModelReasoningLevels maps a member of Models to its advertised ordered
 	// reasoning-effort levels, passed through so the Edit form can re-save it.
 	ModelReasoningLevels map[string][]string `json:"model_reasoning_levels"`
+	// ModelInputModalities maps a member of Models to its advertised input
+	// modalities, passed through so the Edit form can re-save it.
+	ModelInputModalities map[string][]string `json:"model_input_modalities"`
 	Model                string              `json:"model"`
 	SmallFastModel       string              `json:"small_fast_model"`
 	// OpusModel, SonnetModel, HaikuModel and FableModel are the provider's
@@ -234,6 +237,7 @@ func providerView(p core.Provider, active bool) ProviderView {
 		ModelContextWindows:  p.ModelContextWindows,
 		ModelMaxOutputTokens: p.ModelMaxOutputTokens,
 		ModelReasoningLevels: p.ModelReasoningLevels,
+		ModelInputModalities: p.ModelInputModalities,
 		Model:                p.Model,
 		SmallFastModel:       p.SmallFastModel,
 		OpusModel:            p.OpusModel,
@@ -655,6 +659,7 @@ func normalizeProvider(p *core.Provider) {
 	p.ModelContextWindows = normalizeModelContextWindows(p.ModelContextWindows, p.Models)
 	p.ModelMaxOutputTokens = normalizeModelContextWindows(p.ModelMaxOutputTokens, p.Models)
 	p.ModelReasoningLevels = normalizeModelReasoningLevels(p.ModelReasoningLevels, p.Models)
+	p.ModelInputModalities = normalizeModelInputModalities(p.ModelInputModalities, p.Models)
 }
 
 // newProviderID returns a fresh provider ID not present in taken.
@@ -855,6 +860,35 @@ func normalizeModelReasoningLevels(levels map[string][]string, models []string) 
 	return out
 }
 
+// normalizeModelInputModalities keeps only entries whose (trimmed) model ID is
+// a member of models, with each modality list canonicalized (see
+// canonicalInputModalities: trimmed, lower-cased, de-duplicated, limited to
+// the known modality values), so stale or malformed modalities never persist
+// or reach a tool config. It returns nil when nothing remains.
+func normalizeModelInputModalities(modalities map[string][]string, models []string) map[string][]string {
+	if len(modalities) == 0 {
+		return nil
+	}
+	member := make(map[string]bool, len(models))
+	for _, m := range models {
+		member[m] = true
+	}
+	out := make(map[string][]string, len(modalities))
+	for id, list := range modalities {
+		id = strings.TrimSpace(id)
+		if !member[id] {
+			continue
+		}
+		if clean := canonicalInputModalities(list); len(clean) > 0 {
+			out[id] = clean
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // normalizeModelNames trims display names and keeps only entries whose (trimmed)
 // model ID is a member of models and whose name is non-empty, so stale or blank
 // aliases never persist. It returns nil when nothing remains.
@@ -966,7 +1000,7 @@ func (s *Service) ApplyOne(toolID string) (core.ApplyResult, error) {
 	if !ok {
 		return core.ApplyResult{}, fmt.Errorf("service: unknown tool %q", toolID)
 	}
-	s.backfillReasoningLevels(toolID)
+	s.backfillCodexMetadata(toolID)
 	s.backfillModelLimits(toolID)
 	p, err := s.effectiveProfileFor(toolID)
 	if err != nil {
@@ -1007,7 +1041,7 @@ func (s *Service) ApplyAll() ([]ToolOpResult, error) {
 		if installed, _ := a.Detect(); !installed {
 			continue
 		}
-		s.backfillReasoningLevels(a.ID())
+		s.backfillCodexMetadata(a.ID())
 		s.backfillModelLimits(a.ID())
 		p, perr := s.effectiveProfileFor(a.ID())
 		if perr != nil {
