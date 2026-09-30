@@ -5,8 +5,8 @@
 // and restores a MintSwitch-managed OpenAI-compatible provider across omp's
 // two global config files under ~/.omp/agent: models.yml — upserting a custom
 // provider "mintrouter" of the form { baseUrl, api: "openai-completions",
-// apiKey, models: [{id, name, contextWindow, maxTokens}] } under the
-// top-level "providers" map — and config.yml — setting modelRoles.default to
+// apiKey, models: [{id, name, input, reasoning, contextWindow, maxTokens}] }
+// under the top-level "providers" map — and config.yml — setting modelRoles.default to
 // the "mintrouter/<model>" selector (plus modelRoles.smol when the profile
 // pins a small/fast model). Both files are edited as yaml.v3 node trees so
 // the user's comments, key order and every other key survive each rewrite.
@@ -15,8 +15,11 @@
 // Schema reference (verified 2026-09-28 against github.com/can1357/oh-my-pi
 // main: packages/coding-agent settings.ts / model-selector.ts / docs):
 // models.yml carries { providers: { <id>: { baseUrl, api, apiKey, models:
-// [{ id, name, contextWindow?, maxTokens? }] } } } — the same provider shape
-// as Pi's models.json; config.yml carries modelRoles: { default:
+// [{ id, name, input?, reasoning?, contextWindow?, maxTokens? }] } } } — the
+// same provider shape as Pi's models.json (docs/models.md, re-verified
+// 2026-09-30: input defaults to [text] so images are silently dropped,
+// reasoning defaults to false so the /thinking selector stays hidden — hence
+// both are always written per model); config.yml carries modelRoles: { default:
 // "<provider>/<modelId>[:<thinking>]", smol, slow, ... } in place of Pi's
 // flat defaultProvider/defaultModel. omp prefers the .yml spelling and falls
 // back to .yaml for both files; a legacy models.json / settings.json is

@@ -258,6 +258,7 @@
       model_names: p.model_names ?? {},
       model_context_windows: p.model_context_windows ?? {},
       model_reasoning_levels: p.model_reasoning_levels ?? {},
+      model_input_modalities: p.model_input_modalities ?? {},
       model: p.model,
       small_fast_model: p.small_fast_model ?? "",
       opus_model: p.opus_model ?? "",

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -205,6 +206,12 @@ func TestApplyNewFilesAndStatus(t *testing.T) {
 	if _, ok := entry["maxTokens"]; ok {
 		t.Fatalf("maxTokens must be omitted when unknown: %v", entry)
 	}
+	if got := inputOf(t, entry); !slices.Equal(got, []string{"text", "image"}) {
+		t.Fatalf("input = %v, want [text image] fallback when unknown", got)
+	}
+	if entry["reasoning"] != false {
+		t.Fatalf("reasoning = %v, want explicit false when no levels are known", entry["reasoning"])
+	}
 	cfg := readYAML(t, a.configPath())
 	if got := roleOf(cfg, roleDefault); got != selectorPrefix+p.Model {
 		t.Fatalf("modelRoles.default = %v, want %q", got, selectorPrefix+p.Model)
@@ -251,6 +258,115 @@ func TestApplyWritesContextWindowAndMaxTokens(t *testing.T) {
 	p.ModelContextWindows, p.ModelMaxOutputTokens = nil, nil
 	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
 		t.Fatalf("limits must not affect the fingerprint; got %v", st)
+	}
+}
+
+// inputOf returns a parsed models[] entry's input list as strings.
+func inputOf(t *testing.T, entry map[string]any) []string {
+	t.Helper()
+	raw, ok := entry["input"].([]any)
+	if !ok {
+		t.Fatalf("input missing or not a list: %v", entry)
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		out = append(out, v.(string))
+	}
+	return out
+}
+
+// TestApplyWritesInputAndReasoning proves every models[] entry carries
+// omp's per-model `input` (endpoint-advertised modalities filtered to
+// text/image, fallback [text, image] when unknown) and an explicit
+// `reasoning` boolean (true only when the endpoint advertised reasoning
+// levels), and that neither affects the fingerprint.
+func TestApplyWritesInputAndReasoning(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	p := sampleProfile()
+	p.Models = []string{"gpt-mint", "glm-mint", "kimi-mint", "unknown", "odd-mint"}
+	p.ApplyAllModels = true
+	p.ModelInputModalities = map[string][]string{
+		"gpt-mint":  {"text", "image"},
+		"glm-mint":  {"text"},
+		"kimi-mint": {"image", "text", "audio", "pdf"},
+		"odd-mint":  {"audio"},
+	}
+	p.ModelReasoningLevels = map[string][]string{
+		"gpt-mint": {"low", "medium", "high"},
+		"unknown":  {"medium"},
+	}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	models := readYAML(t, a.modelsPath())
+	cases := []struct {
+		id        string
+		input     []string
+		reasoning bool
+	}{
+		{"gpt-mint", []string{"text", "image"}, true},
+		{"glm-mint", []string{"text"}, false},
+		{"kimi-mint", []string{"text", "image"}, false},
+		{"unknown", []string{"text", "image"}, true},
+		{"odd-mint", []string{"text", "image"}, false},
+	}
+	for _, tc := range cases {
+		entry := modelEntryOf(t, models, tc.id)
+		if got := inputOf(t, entry); !slices.Equal(got, tc.input) {
+			t.Fatalf("%s input = %v, want %v", tc.id, got, tc.input)
+		}
+		got, ok := entry["reasoning"].(bool)
+		if !ok {
+			t.Fatalf("%s reasoning missing or not a bool: %v", tc.id, entry)
+		}
+		if got != tc.reasoning {
+			t.Fatalf("%s reasoning = %v, want %v", tc.id, got, tc.reasoning)
+		}
+	}
+	p.ModelInputModalities, p.ModelReasoningLevels = nil, nil
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("modalities/levels must not affect the fingerprint; got %v", st)
+	}
+
+	// Re-Apply after the levels disappeared must turn reasoning back off:
+	// the key is always written, never left over from the previous Apply.
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	if got := modelEntryOf(t, readYAML(t, a.modelsPath()), "gpt-mint")["reasoning"]; got != false {
+		t.Fatalf("reasoning after levels vanished = %v, want false", got)
+	}
+}
+
+// TestApplyModelEntryYAMLShape pins the rendered text of one models[] entry:
+// input in flow style ([text, image]) and reasoning as a plain boolean, with
+// omp's two-space indentation and the other keys untouched.
+func TestApplyModelEntryYAMLShape(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	p := sampleProfile()
+	p.ModelInputModalities = map[string][]string{"gpt-mint": {"text", "image"}}
+	p.ModelReasoningLevels = map[string][]string{"gpt-mint": {"low", "high"}}
+	p.ModelContextWindows = map[string]int{"gpt-mint": 200_000}
+	p.ModelMaxOutputTokens = map[string]int{"gpt-mint": 32_768}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	want := "providers:\n" +
+		"  mintrouter:\n" +
+		"    baseUrl: https://router.example.com/v1\n" +
+		"    api: openai-completions\n" +
+		"    apiKey: sk-test-123\n" +
+		"    models:\n" +
+		"      - id: gpt-mint\n" +
+		"        name: gpt-mint\n" +
+		"        input: [text, image]\n" +
+		"        reasoning: true\n" +
+		"        contextWindow: 200000\n" +
+		"        maxTokens: 32768\n"
+	if got := readText(t, a.modelsPath()); got != want {
+		t.Fatalf("models.yml =\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -925,24 +1041,36 @@ func TestApplyUsesYamlSpelling(t *testing.T) {
 func TestApplySeedsFromLegacyJSON(t *testing.T) {
 	a, _ := newAdapter(t)
 	installed(a)
-	legacyModels := `{"providers":{"spark":{"baseUrl":"https://spark.example.com","api":"openai-completions","apiKey":"k","models":[{"id":"m","contextWindow":200000}]}}}`
+	legacyModels := `{"providers":{"spark":{"baseUrl":"https://spark.example.com","api":"openai-completions","apiKey":"k","models":[{"id":"m","contextWindow":200000,"reasoning":true,"input":["text"]}]}}}`
 	legacySettings := `{"theme":"dark"}`
 	writeFile(t, a.legacyModelsPath(), legacyModels)
 	writeFile(t, a.legacySettingsPath(), legacySettings)
-	if _, err := a.Apply(sampleProfile()); err != nil {
+	p := sampleProfile()
+	p.ModelInputModalities = map[string][]string{"gpt-mint": {"text", "image"}}
+	p.ModelReasoningLevels = map[string][]string{"gpt-mint": {"high"}}
+	if _, err := a.Apply(p); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	modelsText := readText(t, a.modelsPath())
 	if strings.Contains(modelsText, "2e+05") || !strings.Contains(modelsText, "contextWindow: 200000") {
 		t.Fatalf("legacy contextWindow not rendered as integer:\n%s", modelsText)
 	}
-	providers := readYAML(t, a.modelsPath())["providers"].(map[string]any)
+	models := readYAML(t, a.modelsPath())
+	providers := models["providers"].(map[string]any)
 	spark, ok := providers["spark"].(map[string]any)
 	if !ok || spark["baseUrl"] != "https://spark.example.com" {
 		t.Fatalf("legacy provider not seeded: %v", providers)
 	}
+	sparkModel := spark["models"].([]any)[0].(map[string]any)
+	if sparkModel["reasoning"] != true || !slices.Equal(inputOf(t, sparkModel), []string{"text"}) {
+		t.Fatalf("legacy model input/reasoning not seeded verbatim: %v", sparkModel)
+	}
 	if _, ok := providers[providerID]; !ok {
 		t.Fatalf("mintrouter provider missing: %v", providers)
+	}
+	mint := modelEntryOf(t, models, "gpt-mint")
+	if mint["reasoning"] != true || !slices.Equal(inputOf(t, mint), []string{"text", "image"}) {
+		t.Fatalf("mintrouter entry input/reasoning wrong on legacy-seeded file: %v", mint)
 	}
 	cfgText := readText(t, a.configPath())
 	if !strings.Contains(cfgText, "theme: dark") {
