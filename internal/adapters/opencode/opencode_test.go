@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"mintswitch/internal/backup"
@@ -110,10 +111,37 @@ func TestApplyNewFileAndStatus(t *testing.T) {
 	}
 }
 
+// inputModalitiesOf reads the modalities.input list written for model id
+// from an applied opencode.json.
+func inputModalitiesOf(t *testing.T, path, id string) []string {
+	t.Helper()
+	root := readJSON(t, path)
+	models := root["provider"].(map[string]any)[providerID].(map[string]any)["models"].(map[string]any)
+	entry, ok := models[id].(map[string]any)
+	if !ok {
+		t.Fatalf("model entry %q missing: %v", id, models)
+	}
+	mod, ok := entry["modalities"].(map[string]any)
+	if !ok {
+		t.Fatalf("modalities missing from %q: %v", id, entry)
+	}
+	input, ok := mod["input"].([]any)
+	if !ok {
+		t.Fatalf("modalities.input of %q not a list: %v", id, mod)
+	}
+	out := make([]string, 0, len(input))
+	for _, v := range input {
+		out = append(out, v.(string))
+	}
+	return out
+}
+
 // TestApplyWritesModalities pins the vision fix: every model entry MintSwitch
-// writes must declare modalities so OpenCode enables image/video input.
-// Without it, OpenCode's transform strips image parts (capabilities.input.image
-// = false for custom providers with no models.dev fallback).
+// writes must declare modalities so OpenCode enables image input. Without it,
+// OpenCode's transform strips image parts (capabilities.input.image = false
+// for custom providers with no models.dev fallback). A model the endpoint did
+// not describe gets the conservative text+image fallback — and no longer the
+// unconditional "video" of earlier releases.
 func TestApplyWritesModalities(t *testing.T) {
 	a, _ := newAdapter(t)
 	p := sampleProfile()
@@ -121,33 +149,76 @@ func TestApplyWritesModalities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
+	if got := inputModalitiesOf(t, res.ChangedPath, p.Model); !slices.Equal(got, []string{"text", "image"}) {
+		t.Fatalf("modalities.input for unknown model = %v, want [text image]", got)
+	}
 	root := readJSON(t, res.ChangedPath)
-	prov := root["provider"].(map[string]any)[providerID].(map[string]any)
-	models := prov["models"].(map[string]any)
-	entry, ok := models[p.Model].(map[string]any)
-	if !ok {
-		t.Fatalf("model entry missing: %v", models)
+	entry := root["provider"].(map[string]any)[providerID].(map[string]any)["models"].(map[string]any)[p.Model].(map[string]any)
+	output, ok := entry["modalities"].(map[string]any)["output"].([]any)
+	if !ok || len(output) != 1 || output[0].(string) != "text" {
+		t.Fatalf("modalities.output must be [\"text\"]: %v", output)
 	}
-	mod, ok := entry["modalities"].(map[string]any)
-	if !ok {
-		t.Fatalf("modalities missing from model entry: %v", entry)
+}
+
+// TestApplyWritesPerModelInputModalities proves modalities.input follows what
+// the endpoint advertised for each model (Profile.InputModalities): a
+// text-only model gets ["text"], a multimodal one every value OpenCode
+// accepts in canonical order regardless of the advertised order, values
+// outside OpenCode's vocabulary are dropped, a list with nothing usable falls
+// back like an unknown model, the folded-in small_model entry is treated the
+// same, and the modalities never touch the fingerprint.
+func TestApplyWritesPerModelInputModalities(t *testing.T) {
+	a, _ := newAdapter(t)
+	a.lookPath = func(string) (string, error) { return "/usr/local/bin/opencode", nil }
+	p := sampleProfile()
+	p.Models = []string{"gpt-mint", "glm-text", "bunny", "odd", "junk", "unknown"}
+	p.ApplyAllModels = true
+	p.SmallFastModel = "mint-mini"
+	p.ModelInputModalities = map[string][]string{
+		"gpt-mint":  {"text", "image"},
+		"glm-text":  {"text"},
+		"bunny":     {"pdf", "video", "image", "audio", "text"},
+		"odd":       {"image", "3d", "Text", "text"},
+		"junk":      {"3d", "braille"},
+		"mint-mini": {"image", "text"},
 	}
-	input, ok := mod["input"].([]any)
-	if !ok {
-		t.Fatalf("modalities.input not a list: %v", mod)
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
 	}
-	got := map[string]bool{}
-	for _, v := range input {
-		got[v.(string)] = true
+	want := map[string][]string{
+		"gpt-mint":  {"text", "image"},
+		"glm-text":  {"text"},
+		"bunny":     {"text", "image", "audio", "video", "pdf"},
+		"odd":       {"text", "image"},
+		"junk":      {"text", "image"},
+		"unknown":   {"text", "image"},
+		"mint-mini": {"text", "image"},
 	}
-	for _, want := range []string{"text", "image", "video"} {
-		if !got[want] {
-			t.Fatalf("modalities.input missing %q: %v", want, mod["input"])
+	for id, w := range want {
+		if got := inputModalitiesOf(t, res.ChangedPath, id); !slices.Equal(got, w) {
+			t.Fatalf("modalities.input for %q = %v, want %v", id, got, w)
 		}
 	}
-	output, ok := mod["output"].([]any)
-	if !ok || len(output) != 1 || output[0].(string) != "text" {
-		t.Fatalf("modalities.output must be [\"text\"]: %v", mod["output"])
+	// Modalities are metadata only: the fingerprint (and so Status) ignores them.
+	p.ModelInputModalities = nil
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("modalities must not affect the fingerprint; got %v", st)
+	}
+}
+
+// TestInputModalitiesReturnsFreshSlice guards the fallback against aliasing:
+// mutating one model's list must not leak into another entry or into the
+// package default.
+func TestInputModalitiesReturnsFreshSlice(t *testing.T) {
+	p := sampleProfile()
+	first := inputModalities(p, "a")
+	first[0] = "mutated"
+	if got := inputModalities(p, "b"); !slices.Equal(got, []string{"text", "image"}) {
+		t.Fatalf("fallback slice shared between calls: %v", got)
+	}
+	if !slices.Equal(defaultInputModalities, []string{"text", "image"}) {
+		t.Fatalf("package default mutated: %v", defaultInputModalities)
 	}
 }
 

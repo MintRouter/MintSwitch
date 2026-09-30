@@ -29,6 +29,13 @@
 // profile's ModelContextWindows / ModelMaxOutputTokens (what the endpoint's
 // /models listing advertised), falling back to OpenCode's own defaults for
 // models the endpoint did not describe.
+//
+// Likewise each entry carries "modalities" ({input, output}): a custom
+// provider has no models.dev entry, so without modalities.input OpenCode
+// treats every model as text-only and strips image parts. The input list is
+// the endpoint-advertised one from the profile's ModelInputModalities,
+// filtered to OpenCode's vocabulary (see inputModalities); a model the
+// endpoint did not describe falls back to text+image.
 package opencode
 
 import (
@@ -56,6 +63,17 @@ const (
 	defaultContextLimit = 200_000
 	defaultOutputLimit  = 32_000
 )
+
+// inputModalityOrder is OpenCode's modalities.input vocabulary (the enum of
+// the schema at https://opencode.ai/config.json) in the canonical order
+// MintSwitch writes it.
+var inputModalityOrder = []string{"text", "image", "audio", "video", "pdf"}
+
+// defaultInputModalities is the modalities.input written for a model whose
+// endpoint advertised no input modalities: text+image, the same conservative
+// assumption Codex makes for an uncatalogued model, so image input keeps
+// working on a generic endpoint that does not describe its models.
+var defaultInputModalities = []string{"text", "image"}
 
 // providerName is the human-friendly display name for the provider.
 const providerName = "MintSwitch (MintRouter)"
@@ -200,11 +218,12 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	// model, or every provider model in "All models" mode). The entry key stays
 	// the canonical model ID; "name" is display-only, so it takes the profile's
 	// ModelNames display name when one exists (falling back to the ID), same as
-	// the claudedesktop adapter's labelOverride. Lưu ý: modalities là hằng theo
-	// spec MintRouter (OpenAI-compatible multimodal); thiếu modalities thì
-	// OpenCode strip image input (custom provider không có models.dev fallback).
-	// A pinned SmallFastModel is folded into the catalog too: OpenCode silently
-	// ignores a small_model that is not in the provider's models map.
+	// the claudedesktop adapter's labelOverride. modalities.input is the
+	// model's endpoint-advertised list (see inputModalities) — OpenCode strips
+	// image input from a custom-provider model without it, since there is no
+	// models.dev fallback — and modalities.output is always text. A pinned
+	// SmallFastModel is folded into the catalog too: OpenCode silently ignores
+	// a small_model that is not in the provider's models map.
 	applyModels := p.ApplyModels()
 	if p.SmallFastModel != "" && !slices.Contains(applyModels, p.SmallFastModel) {
 		applyModels = append(applyModels, p.SmallFastModel)
@@ -218,7 +237,7 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 		modelEntries[m] = map[string]any{
 			"name": name,
 			"modalities": map[string]any{
-				"input":  []string{"text", "image", "video"},
+				"input":  inputModalities(p, m),
 				"output": []string{"text"},
 			},
 			"limit": limitObject(p, m),
@@ -366,4 +385,23 @@ func limitObject(p core.Profile, m string) map[string]any {
 		out = n
 	}
 	return map[string]any{"context": ctx, "output": out}
+}
+
+// inputModalities builds the per-model modalities.input list for model m: the
+// input modalities the endpoint advertised for it (Profile.InputModalities),
+// restricted to OpenCode's vocabulary and emitted in inputModalityOrder.
+// When the endpoint advertised none — or nothing OpenCode accepts — it falls
+// back to defaultInputModalities. The result is always a fresh slice.
+func inputModalities(p core.Profile, m string) []string {
+	advertised := p.InputModalities(m)
+	var out []string
+	for _, v := range inputModalityOrder {
+		if slices.Contains(advertised, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return slices.Clone(defaultInputModalities)
+	}
+	return out
 }
