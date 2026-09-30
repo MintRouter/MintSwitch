@@ -33,7 +33,7 @@ Unicode true
 ####
 !define INFO_COMPANYNAME    "MintRouter.AI"
 !define INFO_PRODUCTNAME    "MintSwitch"
-!define INFO_PRODUCTVERSION "1.8.0"
+!define INFO_PRODUCTVERSION "1.8.1"
 !define INFO_COPYRIGHT      "© 2026 MintRouter.AI"
 ####
 ## Include the wails tools
