@@ -3,8 +3,8 @@
 // MintSwitch-managed OpenAI-compatible provider across Pi's two global config
 // files under ~/.pi/agent: models.json — upserting a custom provider
 // "mintrouter" of the form { baseUrl, api: "openai-completions", apiKey,
-// models: [{id, name, contextWindow, maxTokens}] } under the top-level
-// "providers" map — and
+// models: [{id, name, input, reasoning, contextWindow, maxTokens}] } under the
+// top-level "providers" map — and
 // settings.json — setting defaultProvider/defaultModel — while preserving all
 // other existing keys in each file. The managed marker lives in the sidecar
 // marker store, never in Pi's own files.
@@ -23,6 +23,17 @@
 // early on 200k–1M models. The values come from the profile's
 // ModelContextWindows / ModelMaxOutputTokens (what the endpoint advertised);
 // a model the endpoint did not describe gets no field, keeping Pi's default.
+//
+// Each entry also always carries Pi's input and reasoning fields (schema
+// verified 2026-09-30 from packages/coding-agent/src/core/model-config.ts and
+// provider-composer.ts): input is the model's accepted input modalities,
+// restricted by Pi's schema to "text" and "image" — any other value fails
+// validation of the whole models.json — and defaults to ["text"] when omitted,
+// so images attached to a vision model would be silently dropped; reasoning
+// tells Pi the model accepts a reasoning effort and defaults to false, hiding
+// the /thinking selector. Both come from the profile (see inputModalities and
+// [core.Profile.ReasoningLevels]) and are written explicitly for every model
+// so a re-Apply after the endpoint stops advertising them turns them off.
 package pi
 
 import (
@@ -31,6 +42,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"slices"
 
 	"mintswitch/internal/backup"
 	"mintswitch/internal/core"
@@ -47,6 +59,33 @@ const providerID = "mintrouter"
 
 // apiType is Pi's API type for OpenAI-compatible Chat Completions endpoints.
 const apiType = "openai-completions"
+
+// acceptedInputs are the models[].input values Pi's schema accepts, in the
+// order they are written; defaultInputs is written when the endpoint
+// advertised nothing usable for a model — conservative like Codex's default,
+// so images are never silently dropped for a vision-capable model.
+var (
+	acceptedInputs = []string{"text", "image"}
+	defaultInputs  = []string{"text", "image"}
+)
+
+// inputModalities returns the models[].input list for model m: the
+// endpoint-advertised modalities ([core.Profile.InputModalities]) filtered to
+// what Pi accepts, or defaultInputs when none are known or none survive the
+// filter.
+func inputModalities(p core.Profile, m string) []string {
+	known := p.InputModalities(m)
+	out := make([]string, 0, len(acceptedInputs))
+	for _, v := range acceptedInputs {
+		if slices.Contains(known, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return slices.Clone(defaultInputs)
+	}
+	return out
+}
 
 // orphanDetail explains the orphan-remnant state: models.json still carries
 // the MintSwitch provider but the managed marker is gone (e.g. a previous
@@ -261,14 +300,21 @@ func (a *Adapter) Apply(p core.Profile) (core.ApplyResult, error) {
 	// selected model, or every provider model in "All models" mode). "id" stays
 	// the canonical model ID; "name" is display-only, so it takes the profile's
 	// ModelNames display name when one exists (falling back to the ID), same as
-	// the claudedesktop adapter's labelOverride.
+	// the claudedesktop adapter's labelOverride. "input" and "reasoning" are
+	// always written (see the package doc); contextWindow / maxTokens only when
+	// known.
 	modelEntries := make([]any, 0)
 	for _, m := range p.ApplyModels() {
 		name := m
 		if label := p.ModelNames[m]; label != "" {
 			name = label
 		}
-		entry := map[string]any{"id": m, "name": name}
+		entry := map[string]any{
+			"id":        m,
+			"name":      name,
+			"input":     inputModalities(p, m),
+			"reasoning": len(p.ReasoningLevels(m)) > 0,
+		}
 		if w := p.ContextWindow(m); w > 0 {
 			entry["contextWindow"] = w
 		}
