@@ -112,6 +112,21 @@ func normalizeJSON(v any) any {
 	return v
 }
 
+// flowList is a string list that encodes in YAML flow style — "[text, image]",
+// the spelling omp's docs use for models[].input; omp parses block style just
+// as well. Each item is a plain string scalar, so the encoder quotes it only
+// when YAML would otherwise misread the value.
+type flowList []string
+
+// MarshalYAML implements yaml.Marshaler.
+func (l flowList) MarshalYAML() (any, error) {
+	n := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle}
+	for _, v := range l {
+		n.Content = append(n.Content, strNode(v))
+	}
+	return n, nil
+}
+
 // marshal renders the document with omp's two-space indentation.
 func (d *document) marshal() ([]byte, error) {
 	var buf bytes.Buffer

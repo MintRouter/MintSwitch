@@ -14,15 +14,49 @@ import (
 	"mintswitch/internal/core"
 )
 
-// modelEntry is one models[] item of an omp provider block. contextWindow /
-// maxTokens are omp's optional per-model limits (defaults 128000 / 16384
-// when omitted, as in Pi); they come from what the endpoint advertised so
-// omp's auto-compaction does not fire far too early on 200k–1M models.
+// modelEntry is one models[] item of an omp provider block. input lists the
+// model's accepted input modalities (omp defaults to [text] when omitted and
+// then silently drops attached images) and reasoning tells omp the model
+// accepts a reasoning effort (default false hides the /thinking selector and
+// skips reasoning-content parsing); both always written, see inputModalities
+// and [core.Profile.ReasoningLevels]. contextWindow / maxTokens are omp's
+// optional per-model limits (defaults 128000 / 16384 when omitted, as in Pi);
+// they come from what the endpoint advertised so omp's auto-compaction does
+// not fire far too early on 200k–1M models.
 type modelEntry struct {
-	ID            string `yaml:"id"`
-	Name          string `yaml:"name"`
-	ContextWindow int    `yaml:"contextWindow,omitempty"`
-	MaxTokens     int    `yaml:"maxTokens,omitempty"`
+	ID            string   `yaml:"id"`
+	Name          string   `yaml:"name"`
+	Input         flowList `yaml:"input"`
+	Reasoning     bool     `yaml:"reasoning"`
+	ContextWindow int      `yaml:"contextWindow,omitempty"`
+	MaxTokens     int      `yaml:"maxTokens,omitempty"`
+}
+
+// acceptedInputs are the models[].input values omp's schema accepts, in the
+// order they are written; defaultInputs is written when the endpoint
+// advertised nothing usable for a model — conservative like Codex's default,
+// so images are never silently dropped for a vision-capable model.
+var (
+	acceptedInputs = []string{"text", "image"}
+	defaultInputs  = []string{"text", "image"}
+)
+
+// inputModalities returns the models[].input list for model m: the
+// endpoint-advertised modalities ([core.Profile.InputModalities]) filtered to
+// what omp accepts, or defaultInputs when none are known or none survive the
+// filter.
+func inputModalities(p core.Profile, m string) flowList {
+	known := p.InputModalities(m)
+	out := make(flowList, 0, len(acceptedInputs))
+	for _, v := range acceptedInputs {
+		if slices.Contains(known, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return slices.Clone(defaultInputs)
+	}
+	return out
 }
 
 // providerBlock is the providers.<id> entry MintSwitch writes to models.yml.
@@ -51,7 +85,12 @@ func providerNode(p core.Profile) (*yaml.Node, error) {
 		if label := p.ModelNames[m]; label != "" {
 			name = label
 		}
-		entry := modelEntry{ID: m, Name: name}
+		entry := modelEntry{
+			ID:        m,
+			Name:      name,
+			Input:     inputModalities(p, m),
+			Reasoning: len(p.ReasoningLevels(m)) > 0,
+		}
 		if w := p.ContextWindow(m); w > 0 {
 			entry.ContextWindow = w
 		}
