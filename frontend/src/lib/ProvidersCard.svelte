@@ -147,6 +147,9 @@
   // fModelContextWindows: never edited by hand, seeded from the stored
   // provider and fetch results, passed through on Save.
   let fModelReasoningLevels = $state<Record<string, string[]>>({});
+  // Input modalities per selected model; same lifecycle as
+  // fModelReasoningLevels.
+  let fModelInputModalities = $state<Record<string, string[]>>({});
   let fModel = $state("");
   let modelInput = $state("");
   let modelInputEl = $state<HTMLInputElement | null>(null);
@@ -182,7 +185,7 @@
   // dirty on its own). Used to guard Esc/Cancel against losing typed input.
   let formInitial = $state("");
   const formSnapshot = () =>
-    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModelContextWindows, fModelMaxOutputTokens, fModelReasoningLevels, fModel]);
+    JSON.stringify([formName, formNote, formBaseUrl, fModels, fModelNames, fModelContextWindows, fModelMaxOutputTokens, fModelReasoningLevels, fModelInputModalities, fModel]);
   const formDirty = $derived(formOpen && (!!formKey || formSnapshot() !== formInitial));
   // Confirmation shown when Esc/Cancel would discard a dirty form.
   let discardOpen = $state(false);
@@ -278,6 +281,11 @@
       if (l && l.length) seededLevels[id] = [...l];
     }
     fModelReasoningLevels = seededLevels;
+    const seededModalities: Record<string, string[]> = {};
+    for (const [id, l] of Object.entries(p?.model_input_modalities ?? {})) {
+      if (l && l.length) seededModalities[id] = [...l];
+    }
+    fModelInputModalities = seededModalities;
     fModel = p?.model ?? "";
     modelInput = "";
     formError = "";
@@ -289,6 +297,7 @@
     fetchedWindows = {};
     fetchedOutputs = {};
     fetchedLevels = {};
+    fetchedModalities = {};
     dropdownOpen = false;
     activeIndex = -1;
     discardOpen = false;
@@ -350,6 +359,8 @@
   // Reasoning-effort levels the endpoint advertised; same lifecycle as
   // fetchedWindows (a fresh fetch value always wins).
   let fetchedLevels = $state<Record<string, string[]>>({});
+  // Input modalities the endpoint advertised; same lifecycle as fetchedLevels.
+  let fetchedModalities = $state<Record<string, string[]>>({});
   // Monotonic token so a stale (slow) response can never clobber the state of
   // a newer fetch or a reopened form.
   let fetchSeq = 0;
@@ -387,6 +398,11 @@
         if (o.reasoning_levels && o.reasoning_levels.length) levels[o.id] = o.reasoning_levels;
       }
       fetchedLevels = levels;
+      const modalities: Record<string, string[]> = {};
+      for (const o of options) {
+        if (o.input_modalities && o.input_modalities.length) modalities[o.id] = o.input_modalities;
+      }
+      fetchedModalities = modalities;
       // Seed advertised names and context windows for models already selected
       // (chips added before this fetch, or stored on the provider being
       // edited). A user-set name always wins; a fetched context window always
@@ -395,14 +411,17 @@
       // Levels are only trusted as authoritative when the endpoint returned
       // some for at least one model (the backend's enrichment request is
       // best-effort, so "none anywhere" may just mean it failed); then a
-      // listed model without levels has its stored ones cleared.
+      // listed model without levels has its stored ones cleared. Input
+      // modalities follow the same rule.
       const levelsAuthoritative = Object.keys(levels).length > 0;
+      const modalitiesAuthoritative = Object.keys(modalities).length > 0;
       const listed = new Set(options.map((o) => o.id));
       const pristine = formSnapshot() === formInitial;
       const merged = { ...fModelNames };
       const mergedWindows = { ...fModelContextWindows };
       const mergedOutputs = { ...fModelMaxOutputTokens };
       const mergedLevels = { ...fModelReasoningLevels };
+      const mergedModalities = { ...fModelInputModalities };
       let seededAny = false;
       for (const m of fModels) {
         const n = names[m];
@@ -429,12 +448,22 @@
           delete mergedLevels[m];
           seededAny = true;
         }
+        const im = modalities[m];
+        if (im && (mergedModalities[m] ?? []).join(",") !== im.join(",")) {
+          mergedModalities[m] = im;
+          seededAny = true;
+        }
+        if (!im && modalitiesAuthoritative && listed.has(m) && m in mergedModalities) {
+          delete mergedModalities[m];
+          seededAny = true;
+        }
       }
       if (seededAny) {
         fModelNames = merged;
         fModelContextWindows = mergedWindows;
         fModelMaxOutputTokens = mergedOutputs;
         fModelReasoningLevels = mergedLevels;
+        fModelInputModalities = mergedModalities;
         if (pristine) formInitial = formSnapshot();
       }
       fetchAttempted = true;
@@ -576,6 +605,8 @@
       if (mo && fModelMaxOutputTokens[v] !== mo) fModelMaxOutputTokens = { ...fModelMaxOutputTokens, [v]: mo };
       const l = fetchedLevels[v];
       if (l && l.length) fModelReasoningLevels = { ...fModelReasoningLevels, [v]: l };
+      const im = fetchedModalities[v];
+      if (im && im.length) fModelInputModalities = { ...fModelInputModalities, [v]: im };
     }
   }
 
@@ -631,6 +662,11 @@
       delete next[m];
       fModelReasoningLevels = next;
     }
+    if (m in fModelInputModalities) {
+      const next = { ...fModelInputModalities };
+      delete next[m];
+      fModelInputModalities = next;
+    }
     if (fModel === m) fModel = fModels[0] ?? "";
   }
 
@@ -656,6 +692,7 @@
       model_context_windows: fModelContextWindows,
       model_max_output_tokens: fModelMaxOutputTokens,
       model_reasoning_levels: fModelReasoningLevels,
+      model_input_modalities: fModelInputModalities,
       model: fModel,
       small_fast_model: editing?.small_fast_model ?? "",
       opus_model: editing?.opus_model ?? "",
