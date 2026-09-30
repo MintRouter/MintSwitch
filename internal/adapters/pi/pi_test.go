@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"mintswitch/internal/backup"
@@ -133,6 +134,12 @@ func TestApplyAllModels(t *testing.T) {
 		entry := list[i].(map[string]any)
 		if entry["id"] != id || entry["name"] != id {
 			t.Fatalf("entry %d = %v, want id/name %q", i, entry, id)
+		}
+		if _, ok := entry["input"]; !ok {
+			t.Fatalf("entry %d = %v, want input on every entry", i, entry)
+		}
+		if _, ok := entry["reasoning"]; !ok {
+			t.Fatalf("entry %d = %v, want reasoning on every entry", i, entry)
 		}
 	}
 	settings := readJSON(t, a.settingsPath())
@@ -635,5 +642,208 @@ func TestApplyWritesContextWindowAndMaxTokens(t *testing.T) {
 	p.ModelContextWindows, p.ModelMaxOutputTokens = nil, nil
 	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
 		t.Fatalf("limits must not affect the fingerprint; got %v", st)
+	}
+}
+
+// modelEntryByID returns the models[] entry with the given id from the
+// MintSwitch provider block in models.json at path.
+func modelEntryByID(t *testing.T, path, id string) map[string]any {
+	t.Helper()
+	models := readJSON(t, path)
+	prov := models["providers"].(map[string]any)[providerID].(map[string]any)
+	for _, e := range prov["models"].([]any) {
+		entry := e.(map[string]any)
+		if entry["id"] == id {
+			return entry
+		}
+	}
+	t.Fatalf("model entry %q missing", id)
+	return nil
+}
+
+// inputOf returns an entry's "input" list as strings, failing when the field
+// is absent or not a string array.
+func inputOf(t *testing.T, entry map[string]any) []string {
+	t.Helper()
+	raw, ok := entry["input"].([]any)
+	if !ok {
+		t.Fatalf("entry %v: input missing or not an array", entry)
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("entry %v: input value %v is not a string", entry, v)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// TestApplyWritesInputAndReasoning pins Pi's per-model input / reasoning
+// fields: input is the endpoint-advertised modalities filtered to Pi's
+// accepted {text, image} (Pi's schema rejects any other value), falling back
+// to ["text","image"] when nothing is known or nothing survives the filter;
+// reasoning is true iff the endpoint advertised reasoning levels and is
+// written explicitly as false otherwise (Pi defaults to false, and an
+// explicit false lets a re-Apply turn it off). Both fields are metadata only:
+// the fingerprint (and so Status) ignores them.
+func TestApplyWritesInputAndReasoning(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	p := sampleProfile()
+	p.Models = []string{"gpt-mint", "text-only", "unknown", "audio-only", "reasoner"}
+	p.ApplyAllModels = true
+	p.ModelInputModalities = map[string][]string{
+		"gpt-mint":   {"text", "image", "video"},
+		"text-only":  {"text"},
+		"audio-only": {"audio"},
+		"reasoner":   {"image", "text"},
+	}
+	p.ModelReasoningLevels = map[string][]string{
+		"reasoner": {"low", "medium", "high"},
+		"gpt-mint": {},
+	}
+	res, err := a.Apply(p)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	cases := []struct {
+		id        string
+		input     []string
+		reasoning bool
+	}{
+		{"gpt-mint", []string{"text", "image"}, false},
+		{"text-only", []string{"text"}, false},
+		{"unknown", []string{"text", "image"}, false},
+		{"audio-only", []string{"text", "image"}, false},
+		{"reasoner", []string{"text", "image"}, true},
+	}
+	for _, tc := range cases {
+		entry := modelEntryByID(t, res.ChangedPath, tc.id)
+		if got := inputOf(t, entry); !slices.Equal(got, tc.input) {
+			t.Errorf("%s input = %v, want %v", tc.id, got, tc.input)
+		}
+		got, ok := entry["reasoning"].(bool)
+		if !ok {
+			t.Errorf("%s reasoning = %v, want explicit bool", tc.id, entry["reasoning"])
+		} else if got != tc.reasoning {
+			t.Errorf("%s reasoning = %v, want %v", tc.id, got, tc.reasoning)
+		}
+	}
+	// Modalities and levels are metadata only: the fingerprint (and so
+	// Status) ignores them.
+	p.ModelInputModalities, p.ModelReasoningLevels = nil, nil
+	if st, _, _ := a.Status(p); st != core.StatusAppliedByMintSwitch {
+		t.Fatalf("modalities/levels must not affect the fingerprint; got %v", st)
+	}
+}
+
+// TestApplySingleModelInputAndReasoning is the single-model variant: the one
+// entry carries both fields, and a profile that knows neither modalities nor
+// levels (a generic endpoint) gets the conservative input default and
+// reasoning false.
+func TestApplySingleModelInputAndReasoning(t *testing.T) {
+	t.Run("known", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		p := sampleProfile()
+		p.ModelInputModalities = map[string][]string{"gpt-mint": {"text"}}
+		p.ModelReasoningLevels = map[string][]string{"gpt-mint": {"high"}}
+		res, err := a.Apply(p)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		entry := modelEntryByID(t, res.ChangedPath, "gpt-mint")
+		if got := inputOf(t, entry); !slices.Equal(got, []string{"text"}) {
+			t.Errorf("input = %v, want [text]", got)
+		}
+		if entry["reasoning"] != true {
+			t.Errorf("reasoning = %v, want true", entry["reasoning"])
+		}
+	})
+	t.Run("generic endpoint", func(t *testing.T) {
+		a, _ := newAdapter(t)
+		res, err := a.Apply(sampleProfile())
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		entry := modelEntryByID(t, res.ChangedPath, "gpt-mint")
+		if got := inputOf(t, entry); !slices.Equal(got, []string{"text", "image"}) {
+			t.Errorf("input = %v, want fallback [text image]", got)
+		}
+		if entry["reasoning"] != false {
+			t.Errorf("reasoning = %v, want explicit false", entry["reasoning"])
+		}
+	})
+}
+
+// TestReApplyTurnsReasoningOff proves the explicit-false contract: once the
+// endpoint stops advertising levels, a re-Apply flips reasoning back to false
+// and narrows input to what is now advertised.
+func TestReApplyTurnsReasoningOff(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	p := sampleProfile()
+	p.ModelInputModalities = map[string][]string{"gpt-mint": {"text", "image"}}
+	p.ModelReasoningLevels = map[string][]string{"gpt-mint": {"low", "high"}}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply1: %v", err)
+	}
+	if entry := modelEntryByID(t, a.modelsPath(), "gpt-mint"); entry["reasoning"] != true {
+		t.Fatalf("reasoning after apply1 = %v, want true", entry["reasoning"])
+	}
+	p.ModelInputModalities = map[string][]string{"gpt-mint": {"text"}}
+	p.ModelReasoningLevels = nil
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply2: %v", err)
+	}
+	entry := modelEntryByID(t, a.modelsPath(), "gpt-mint")
+	if entry["reasoning"] != false {
+		t.Fatalf("reasoning after apply2 = %v, want false", entry["reasoning"])
+	}
+	if got := inputOf(t, entry); !slices.Equal(got, []string{"text"}) {
+		t.Fatalf("input after apply2 = %v, want [text]", got)
+	}
+}
+
+// TestRestoreAfterInputAndReasoningApply proves the new fields do not change
+// the Restore contract: an Apply that wrote input/reasoning is still reverted
+// to the pristine pre-MintSwitch bytes of both files.
+func TestRestoreAfterInputAndReasoningApply(t *testing.T) {
+	a, _ := newAdapter(t)
+	installed(a)
+	if err := os.MkdirAll(filepath.Dir(a.modelsPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	origModels := []byte(`{"providers":{"own":{"baseUrl":"https://x","api":"openai-completions","apiKey":"k","models":[{"id":"m","input":["text"]}]}}}` + "\n")
+	origSettings := []byte(`{"theme":"dark"}` + "\n")
+	if err := os.WriteFile(a.modelsPath(), origModels, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.settingsPath(), origSettings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := sampleProfile()
+	p.ModelInputModalities = map[string][]string{"gpt-mint": {"text", "image"}}
+	p.ModelReasoningLevels = map[string][]string{"gpt-mint": {"medium"}}
+	if _, err := a.Apply(p); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if entry := modelEntryByID(t, a.modelsPath(), "gpt-mint"); entry["reasoning"] != true {
+		t.Fatalf("reasoning = %v, want true before restore", entry["reasoning"])
+	}
+	if _, err := a.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	gotModels, _ := os.ReadFile(a.modelsPath())
+	if string(gotModels) != string(origModels) {
+		t.Fatalf("models.json not byte-for-byte restored: %q", gotModels)
+	}
+	gotSettings, _ := os.ReadFile(a.settingsPath())
+	if string(gotSettings) != string(origSettings) {
+		t.Fatalf("settings.json not byte-for-byte restored: %q", gotSettings)
+	}
+	if st, _, _ := a.Status(p); st != core.StatusDefault {
+		t.Fatalf("status after restore = %v, want Default", st)
 	}
 }
