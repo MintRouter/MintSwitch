@@ -257,6 +257,7 @@
       models: p.models ?? [],
       model_names: p.model_names ?? {},
       model_context_windows: p.model_context_windows ?? {},
+      model_max_output_tokens: p.model_max_output_tokens ?? {},
       model_reasoning_levels: p.model_reasoning_levels ?? {},
       model_input_modalities: p.model_input_modalities ?? {},
       model: p.model,
