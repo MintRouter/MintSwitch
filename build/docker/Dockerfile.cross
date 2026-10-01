@@ -6,6 +6,8 @@
 #
 # Usage:
 #   docker build -t wails-cross -f Dockerfile.cross .
+#   (Linux targets use the image's native GCC, so build the image with
+#    --platform linux/<arch> matching the Linux arch you want to produce.)
 #   docker run --rm -v $(pwd):/app wails-cross darwin arm64
 #   docker run --rm -v $(pwd):/app wails-cross darwin amd64
 #   docker run --rm -v $(pwd):/app wails-cross linux amd64
@@ -13,17 +15,42 @@
 #   docker run --rm -v $(pwd):/app wails-cross windows amd64
 #   docker run --rm -v $(pwd):/app wails-cross windows arm64
 
-FROM golang:1.26-bookworm
+# Ubuntu 24.04 ships GTK 4.14 / webkitgtk-6.0 (same as the ubuntu-24.04 runner in
+# .github/workflows/release.yml). golang:*-bookworm only has GTK 4.8, which is too
+# old for Wails v3 beta.12 (GtkFileDialog needs GTK >= 4.10). Go is installed
+# explicitly below, pinned to the release.yml GO_VERSION.
+FROM ubuntu:24.04
 
 ARG TARGETARCH
 ARG GARBLE_VERSION=v0.16.0
+ARG DEBIAN_FRONTEND=noninteractive
 
 # Install base tools, GCC, and GTK/WebKit dev packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl xz-utils python3 nodejs npm pkg-config gcc libc6-dev \
+    ca-certificates curl xz-utils python3 nodejs npm pkg-config gcc libc6-dev \
     libgtk-3-dev libwebkit2gtk-4.1-dev \
     libgtk-4-dev libwebkitgtk-6.0-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Go - pinned to the same version as release.yml, sha256 from
+# https://go.dev/dl/?mode=json&include=all, verified before extraction.
+ARG GO_VERSION=1.26.6
+ARG GO_SHA256_AMD64=708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89
+ARG GO_SHA256_ARM64=d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e
+RUN GO_ARCH="${TARGETARCH:-amd64}" && \
+    GO_SHA256=$(case "${GO_ARCH}" in arm64) echo "${GO_SHA256_ARM64}" ;; *) echo "${GO_SHA256_AMD64}" ;; esac) && \
+    GO_FILE="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" && \
+    curl -fSL "https://go.dev/dl/${GO_FILE}" -o "/tmp/${GO_FILE}" && \
+    echo "${GO_SHA256}  /tmp/${GO_FILE}" | sha256sum -c - && \
+    tar -C /usr/local -xzf "/tmp/${GO_FILE}" && \
+    rm "/tmp/${GO_FILE}" && \
+    mkdir -p /go/bin /go/pkg/mod && chmod -R 777 /go
+
+# Same layout as the golang image: GOPATH=/go so the Taskfile's /go/pkg/mod mount
+# is used; GOTOOLCHAIN=local so go.mod can never swap in a different toolchain.
+ENV GOPATH=/go \
+    GOTOOLCHAIN=local \
+    PATH=/usr/local/go/bin:/go/bin:$PATH
 
 RUN go install mvdan.cc/garble@${GARBLE_VERSION}
 
